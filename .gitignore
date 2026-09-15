@@ -4,3 +4,9 @@ dist/
 storage/
 *.log
 .playwright-mcp/
+.claude/worktrees/
+.claude/settings.local.json
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
