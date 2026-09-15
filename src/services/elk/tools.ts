@@ -65,6 +65,22 @@ export function registerElkTools(server: McpServer): void {
   );
 
   server.registerTool(
+    "elk_list_requests",
+    {
+      title: "История заявок в ЕЛК",
+      description:
+        "Список всех поданных пользователем заявок в ЕЛК (lk.hse.ru/claim): номер, содержание, " +
+        "сервис, статус (например «Выполнено», «На проверке»), даты создания/обновления, " +
+        "исполнитель и ссылка на форму заявки (если есть). Полезно проверить статус ранее " +
+        "поданных обращений (справки, стипендии, воинский учёт и т.п.) без захода в веб-интерфейс.",
+      inputSchema: {
+        limit: z.number().int().min(1).max(500).default(500).describe("Максимум заявок"),
+      },
+    },
+    async ({ limit }) => runTool(() => elk.listRequests(limit))
+  );
+
+  server.registerTool(
     "elk_get_profile",
     {
       title: "Профиль в ЕЛК",

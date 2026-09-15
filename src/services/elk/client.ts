@@ -1,5 +1,6 @@
 import type { Page } from "playwright";
 import { openAuthenticatedPage } from "../../auth/browser-session.js";
+import { config } from "../../config.js";
 import { dumpPage, type PageDump } from "../../dom-utils.js";
 
 const BASE_URL = "https://lk.hse.ru";
@@ -132,6 +133,67 @@ export function searchServices(query: string, limit = 10): Promise<ElkSearchServ
       desc: item.data.desc,
       url: item.data.url,
       score: item.score,
+    })),
+  }));
+}
+
+export interface ElkClaim {
+  num: string;
+  text: string;
+  service: string;
+  executorFio: string;
+  createdByEmail: string;
+  createdByFio: string;
+  stateName: string;
+  active: boolean;
+  created: string;
+  updated: string;
+  url: string | null;
+}
+
+interface RawClaim {
+  num: string;
+  text: string;
+  service: string;
+  executor_fio: string;
+  created_by_email: string;
+  created_by_fio: string;
+  state_name: string;
+  active: string;
+  created: string;
+  updated: string;
+  url: string;
+}
+
+// API отдаёт url заявки с "хвостом" вида `...RequestGUID=...</link><display>Форма</display>
+// </hyperlink>` — похоже на нестрипнутый rich-text/hyperlink формат источника (Camunda/BPM).
+// Обрезаем по первому "<", валидный URL этот символ содержать не может.
+function cleanClaimUrl(raw: string): string | null {
+  const url = raw.slice(0, raw.indexOf("<") === -1 ? raw.length : raw.indexOf("<")).trim();
+  return url || null;
+}
+
+/**
+ * История заявок пользователя (lk.hse.ru/claim) — разведано вживую 2026-09-15. В отличие от
+ * большинства elk_* эндпоинтов требует username (email) явным query-параметром, а не берёт его
+ * из токена.
+ */
+export function listRequests(limit = 500): Promise<{ count: number; requests: ElkClaim[] }> {
+  const path = `/api/claims?username=${encodeURIComponent(config.hseEmail)}&limit=${limit}&sort_by=created&order_by=desc`;
+  return fetchElkApi<{ data: RawClaim[]; count: number }>(path).then((raw) => ({
+    count: raw.count,
+    requests: raw.data.map((c) => ({
+      num: c.num,
+      text: c.text,
+      service: c.service,
+      executorFio: c.executor_fio,
+      createdByEmail: c.created_by_email,
+      createdByFio: c.created_by_fio,
+      stateName: c.state_name.trim(),
+      active: c.active === "1",
+      created: c.created,
+      updated: c.updated,
+      url: cleanClaimUrl(c.url),
     })),
   }));
 }
