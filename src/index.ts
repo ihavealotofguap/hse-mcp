@@ -1,0 +1,35 @@
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { registerRuzTools } from "./services/ruz/tools.js";
+import { registerLmsTools } from "./services/lms/tools.js";
+import { registerElkTools } from "./services/elk/tools.js";
+import { registerMailTools } from "./services/mail/tools.js";
+import { closeBrowserSession } from "./auth/browser-session.js";
+
+const server = new McpServer({
+  name: "hsemcp",
+  version: "0.1.0",
+});
+
+registerRuzTools(server);
+registerLmsTools(server);
+registerElkTools(server);
+registerMailTools(server);
+
+async function main(): Promise<void> {
+  const transport = new StdioServerTransport();
+  await server.connect(transport);
+}
+
+async function shutdown(): Promise<void> {
+  await closeBrowserSession();
+  process.exit(0);
+}
+
+process.on("SIGINT", shutdown);
+process.on("SIGTERM", shutdown);
+
+main().catch((err) => {
+  console.error("hsemcp fatal error:", err);
+  process.exit(1);
+});

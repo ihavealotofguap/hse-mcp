@@ -1,0 +1,31 @@
+{
+  "name": "hsemcp",
+  "version": "0.1.0",
+  "description": "MCP server for HSE (NIU VShE) student infrastructure: RUZ schedule, SmartLMS, ELK, mail",
+  "type": "module",
+  "private": true,
+  "main": "dist/index.js",
+  "bin": {
+    "hsemcp": "dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/index.js",
+    "dev": "tsc -p tsconfig.json --watch"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.12.0",
+    "dotenv": "^16.4.5",
+    "imapflow": "^1.0.171",
+    "mailparser": "^3.7.1",
+    "nodemailer": "^10.0.10",
+    "playwright": "^1.47.0",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/mailparser": "^3.4.4",
+    "@types/node": "^20.14.10",
+    "@types/nodemailer": "^7.0.2",
+    "typescript": "^5.5.4"
+  }
+}
