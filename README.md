@@ -1,7 +1,8 @@
 # hsemcp
 
 Локальный MCP-сервер (stdio) для инфраструктуры НИУ ВШЭ: расписание RUZ, SmartLMS (edu.hse.ru),
-Единый личный кабинет (lk.hse.ru), корпоративная почта (Яндекс 360).
+Единый личный кабинет (lk.hse.ru), детальная зачётка istudy.hse.ru, корпоративная почта
+(Яндекс 360).
 
 ## Установка
 
@@ -36,7 +37,11 @@ claude mcp add hsemcp -- node C:/Users/alexk/hsemcp/dist/index.js
 | ЕЛК | `elk_get_schedule` | Расписание через API ЕЛК — работает из любой сети |
 | ЕЛК | `elk_get_user_info` | Структурированные данные аккаунта (ФИО, email, роли) |
 | ЕЛК | `elk_get_profile` | Профиль студента + академическая карточка (рейтинг, группа) |
+| ЕЛК | `elk_search_services` | Поиск по каталогу из 254+ сервисов ЕЛК (справки, заявки и т.п.) |
+| ЕЛК | `elk_list_requests` | История поданных заявок (`/claim`) со статусами |
 | ЕЛК | `elk_open_page` | Открыть произвольную страницу lk.hse.ru |
+| istudy | `istudy_get_report` | Детальная академическая карточка (рейтинг, GPA, кредиты) |
+| istudy | `istudy_get_exams` | Список дисциплин с оценками за текущий период |
 | Почта | `mail_list_recent` | Последние письма |
 | Почта | `mail_search` | Поиск писем |
 | Почта | `mail_read_message` | Текст письма по uid |
@@ -47,7 +52,13 @@ claude mcp add hsemcp -- node C:/Users/alexk/hsemcp/dist/index.js
 - **RUZ** — прямые HTTP-запросы к `ruz.hse.ru/api`, без авторизации.
 - **SmartLMS и ЕЛК** — общий Playwright-браузер (`src/auth/browser-session.ts`), который проходит
   единый SSO ВШЭ (Keycloak, `saml.hse.ru`, realm `hse`) и переиспользует сессию между вызовами
-  (сохраняется в `storage/hse-session.json`).
+  (сохраняется в `storage/hse-session.json`). ЕЛК даёт и JSON API с `Authorization: Bearer
+  <access_token>` из localStorage (`elk_get_schedule`, `elk_get_user_info`, `elk_search_services`,
+  `elk_list_requests`).
+- **istudy.hse.ru** — отдельная от ЕЛК система зачётки/рейтинга. Доступ — через SSO-переход по
+  ссылке со страницы `lk.hse.ru/profile`; у SPA нет прямого fetch-доступа по токену/cookie
+  (собственный запрос получает 401), поэтому клиент слушает `page.on("response")` и забирает уже
+  готовые ответы, которые SPA сама шлёт при заходе.
 - **Почта** — напрямую по IMAP/SMTP (`imap.yandex.ru`, `smtp.yandex.ru`), так как студенческая
   почта ВШЭ с 2022/2023 уч. года работает на Яндекс 360, а не на Exchange.
 
@@ -58,11 +69,13 @@ claude mcp add hsemcp -- node C:/Users/alexk/hsemcp/dist/index.js
   ВШЭ» вне Wi-Fi `HSE.Student` / VPN. `ruz_*`-тулы будут работать только пока машина с hsemcp
   подключена к сети ВШЭ. Вне кампуса используйте `elk_get_schedule` — расписание через
   API ЕЛК (`lk.hse.ru/api/get-myschedule`), работает из любой сети.
-- **ЕЛК частично разведан вживую (2026-09-15)**: известны разделы `/task`, `/claim`, `/service`,
-  `/schedule`, `/student-services`, `/faq`, а `/student-services?section=documents` содержит
-  каталог заказа справок (зачётка, подтверждение обучения и т.п.) — но сама форма отправки
-  заявки не раскрыта. `elk_open_page` возвращает сырой текст + ссылки для остальных случаев.
-  Подробности и следующие шаги разведки — в `ROADMAP.md`.
+- **ЕЛК частично разведан вживую (2026-09-15)**: известны разделы `/task`, `/claim` (теперь
+  структурированно доступен через `elk_list_requests`), `/service` (поиск — `elk_search_services`),
+  `/schedule`, `/student-services`, `/faq`. `/student-services?section=documents` содержит каталог
+  заказа справок (зачётка, подтверждение обучения и т.п.) — форма разведана (Formily-конструктор,
+  submit предположительно в Jira Service Desk), но сам submit-запрос сознательно не раскрыт, чтобы
+  не создать настоящую заявку в системе ВШЭ. `elk_open_page` возвращает сырой текст + ссылки для
+  остальных случаев. Подробности и следующие шаги разведки — в `ROADMAP.md`.
 - **Если у почтового аккаунта включена двухфакторная аутентификация или Яндекс требует отдельный
   пароль приложения** — сгенерируйте его в настройках безопасности Яндекс ID и укажите в
   `HSE_MAIL_APP_PASSWORD`.
