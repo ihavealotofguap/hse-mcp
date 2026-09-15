@@ -51,6 +51,52 @@
 - [x] `dom-utils.ts` — `extractTable` и `dumpPage` для порталов без документированной вёрстки
 - [x] `.env` читается по пути относительно `config.ts`, а не `process.cwd()`
 
+## Исправления надёжности и безопасности (2026-09-15)
+
+Отдельная сессия аудита: три независимых ревью (два Explore-агента + скилл code-review) прошлись
+по всей кодовой базе и нашли ~30 багов, все исправлены (`npm run build` чистый; критичное
+дополнительно проверено изолированными локальными тестами — без реального `.env`/сети ВШЭ, см.
+ограничение ниже).
+
+- **Критично** (`src/auth/browser-session.ts`): битая сессия (`storage/hse-session.json`) или
+  сбой запуска Chromium больше не блокируют сервер навсегда — rejected promise сбрасывается
+  вместо вечного кэширования; `Page` больше не утекает при неудачном логине/навигации; параллельные
+  SSO-логины сериализованы через lock (иначе гонка за cookies общего браузерного контекста);
+  сессия на диске не перезаписывается сомнительным состоянием, если статус логина не удалось
+  однозначно определить за 3 попытки; двойной `closeBrowserSession()` (напр. двойной `SIGINT`)
+  идемпотентен.
+- **Критично, безопасность** — SSRF-подобная уязвимость: `lms_open_page`/`elk_open_page`
+  принимали произвольный абсолютный URL и открывали его в браузере с активной SSO-сессией ВШЭ.
+  Добавлен `src/url-utils.ts#resolveScopedUrl` — allowlist по хосту (`edu.hse.ru` для LMS;
+  `lk.hse.ru` + явно `pmo.hse.ru`-хелпдеск для ЕЛК), плюс нормализация ведущего слэша в
+  относительных путях.
+- **Критично, данные**: `src/dom-utils.ts#extractTable` — совпадающие заголовки колонок молча
+  затирали значения друг друга (влияло на `lms_get_grades`/`lms_list_assignments`); таблицы без
+  `<thead>` теперь тоже парсятся с сохранением семантики заголовков.
+- `elk_get_schedule`: расчёт "сегодня" был на UTC (`toISOString()`), а `ruz_get_my_schedule` — на
+  локальном времени; ночью по МСК (00:00–02:59) ЕЛК отдавал расписание на день назад. Унифицировано
+  через `src/date-utils.ts#formatLocalDate`.
+- Почта: `HSE_MAIL_APP_PASSWORD` стал обязательным для `mail_*`-тулов — fallback на `HSE_PASSWORD`
+  убран (иначе пароль единого SSO ВШЭ уходил по IMAP/SMTP на серверы Яндекса). **Breaking change**
+  для уже настроенных `.env` без этой переменной. Плюс: явные таймауты соединения (15-30с вместо
+  библиотечных минут), метаданные вложений в `mail_read_message`, фолбэк текста для HTML-only
+  писем, сортировка UID перед выборкой последних N писем.
+- RUZ: понятная ошибка вместо `SyntaxError` при обращении вне сети ВШЭ (детект не-JSON ответа);
+  `ruz_get_my_schedule` с несуществующим email больше не тащит `undefined` дальше в URL расписания.
+- Мельче: `.positive()` на id-параметрах тулов, дедуп `addDays()`, ссылки-иконки без текста
+  подхватывают `aria-label` в `dumpPage`, идемпотентный `shutdown()` в `src/index.ts` с таймаутом
+  на случай зависшего браузера.
+
+Не в скоупе (оставлено как техдолг): полная zod-валидация внешних ответов RUZ/ELK; выбор "той"
+таблицы в `extractTable`, если по селектору совпало несколько (см. «Известный технический долг»).
+
+**Ограничение верификации**: критичная логика (`date-utils`, `url-utils`, `dom-utils`,
+идемпотентность `closeBrowserSession`, сброс битой сессии, отсутствие утечки `Page` при неудачной
+навигации, обязательность `HSE_MAIL_APP_PASSWORD`) проверена изолированными локальными скриптами
+через собранный `dist/`. Сценарии, требующие реального `.env`/сети ВШЭ (живой SSO-логин, RUZ из
+кампуса, реальная почта, а также истуди/каталог ЕЛК, добавленные параллельно в этих же коммитах),
+живьём не прогонялись — учётных данных в окружении не было.
+
 ## В процессе / разведано, но не реализовано
 
 - [ ] **`elk_get_academic_data`** — эндпоинт `GET /api/get-academic-data` реверс-инжинирен
@@ -71,6 +117,10 @@
 ## Последние коммиты
 
 ```
+f06a060 Merge origin/master (istudy service, ELK catalog/requests tools, docs) into bugfix branch
+afda2ca Fix ~30 reliability/security bugs found across full audit
+a29cde4 Ignore local worktree checkouts, editor/OS noise
+a917c17 Add PROGRESS.md/REQUIREMENTS.md, sync README with current tool set
 5e249c0 Add istudy service for detailed gradebook/rating data
 4c98389 Document ELK certificate order form recon findings
 1ec722d Add elk_list_requests tool for ELK claim/request history
