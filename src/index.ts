@@ -3,6 +3,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { registerRuzTools } from "./services/ruz/tools.js";
 import { registerLmsTools } from "./services/lms/tools.js";
 import { registerElkTools } from "./services/elk/tools.js";
+import { registerIstudyTools } from "./services/istudy/tools.js";
 import { registerMailTools } from "./services/mail/tools.js";
 import { closeBrowserSession } from "./auth/browser-session.js";
 
@@ -14,6 +15,7 @@ const server = new McpServer({
 registerRuzTools(server);
 registerLmsTools(server);
 registerElkTools(server);
+registerIstudyTools(server);
 registerMailTools(server);
 
 async function main(): Promise<void> {
