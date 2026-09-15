@@ -1,5 +1,6 @@
 import { openAuthenticatedPage } from "../../auth/browser-session.js";
 import { dumpPage, extractTable, type PageDump } from "../../dom-utils.js";
+import { resolveScopedUrl } from "../../url-utils.js";
 
 const BASE_URL = "https://edu.hse.ru";
 
@@ -31,7 +32,7 @@ export async function listCourses(): Promise<CourseLink[]> {
       const byId = new Map<string, string>();
       for (const a of anchors) {
         const href = (a as HTMLAnchorElement).href;
-        const match = href.match(/[?&]id=(\d+)/);
+        const match = href.match(/course\/view\.php\?id=(\d+)/);
         const text = a.textContent?.trim().replace(/\s+/g, " ");
         if (match && text) byId.set(match[1], text);
       }
@@ -88,7 +89,7 @@ export async function getGrades(courseId: number): Promise<Array<Record<string, 
 
 /** Открыть произвольную страницу edu.hse.ru (относительный путь) — для случаев вне готовых тулов. */
 export async function openPage(relativePath: string): Promise<PageDump> {
-  const url = relativePath.startsWith("http") ? relativePath : `${BASE_URL}${relativePath}`;
+  const url = resolveScopedUrl(BASE_URL, relativePath);
   const page = await openAuthenticatedPage(url);
   try {
     return await dumpPage(page);

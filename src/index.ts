@@ -21,8 +21,16 @@ async function main(): Promise<void> {
   await server.connect(transport);
 }
 
+let shuttingDown = false;
+
 async function shutdown(): Promise<void> {
-  await closeBrowserSession();
+  if (shuttingDown) return;
+  shuttingDown = true;
+  // closeBrowserSession() сам теперь идемпотентен, но таймаут здесь — второй рубеж защиты: если
+  // браузер зависнет при закрытии, процесс всё равно должен выйти по сигналу, а не висеть вечно.
+  await Promise.race([closeBrowserSession(), new Promise<void>((resolve) => setTimeout(resolve, 5_000))]).catch(
+    () => {}
+  );
   process.exit(0);
 }
 

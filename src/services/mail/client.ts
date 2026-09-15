@@ -17,6 +17,11 @@ function createImapClient(): ImapFlow {
     secure: true,
     auth: { user: config.hseEmail, pass: config.mailAppPassword },
     logger: false,
+    // Библиотечные дефолты (минуты) слишком долгие для интерактивного MCP-тула — при сетевых
+    // проблемах лучше явная ошибка через 10-30с, чем зависание запроса на несколько минут.
+    connectionTimeout: 15_000,
+    greetingTimeout: 10_000,
+    socketTimeout: 30_000,
   });
 }
 
@@ -30,7 +35,14 @@ export interface MailSummary {
 
 async function withMailbox<T>(mailbox: string, fn: (client: ImapFlow) => Promise<T>): Promise<T> {
   const client = createImapClient();
-  await client.connect();
+  try {
+    await client.connect();
+  } catch (err) {
+    // LOGOUT небезопасен для не до конца установленного соединения — закрываем сокет напрямую,
+    // чтобы не оставлять его висеть при падении на этапе AUTH после успешного TLS-хендшейка.
+    client.close();
+    throw err;
+  }
   try {
     const lock = await client.getMailboxLock(mailbox);
     try {
@@ -78,7 +90,10 @@ export async function searchMail(query: string, limit = 20, mailbox = "INBOX"): 
       { uid: true }
     );
     if (!uids || uids.length === 0) return [];
-    const limited = uids.slice(-limit);
+    // RFC 3501 не гарантирует порядок результатов SEARCH — сортируем явно перед тем, как
+    // брать "последние" limit как самые новые.
+    const sorted = [...uids].sort((a, b) => a - b);
+    const limited = sorted.slice(-limit);
     const messages: MailSummary[] = [];
     for await (const message of client.fetch(limited, { envelope: true, flags: true }, { uid: true })) {
       messages.push(toSummary(message));
@@ -94,6 +109,7 @@ export interface MailContent {
   to: string;
   date: string;
   text: string;
+  attachments: Array<{ filename: string; contentType: string; size: number }>;
 }
 
 export async function readMessage(uid: number, mailbox = "INBOX"): Promise<MailContent> {
@@ -109,7 +125,14 @@ export async function readMessage(uid: number, mailbox = "INBOX"): Promise<MailC
       from: parsed.from?.text ?? "",
       to: parsed.to ? (Array.isArray(parsed.to) ? parsed.to.map((t) => t.text).join(", ") : parsed.to.text) : "",
       date: parsed.date?.toISOString() ?? "",
-      text: (parsed.text ?? "").trim(),
+      // Фолбэк на textAsHtml для чисто-HTML писем (mailparser обычно уже генерирует text сам,
+      // но не гарантированно во всех случаях).
+      text: (parsed.text ?? parsed.textAsHtml ?? "").trim(),
+      attachments: parsed.attachments.map((a) => ({
+        filename: a.filename ?? "(без имени)",
+        contentType: a.contentType,
+        size: a.size,
+      })),
     };
   });
 }
@@ -126,6 +149,9 @@ export async function sendMail(input: SendMailInput): Promise<{ messageId: strin
     port: SMTP_PORT,
     secure: true,
     auth: { user: config.hseEmail, pass: config.mailAppPassword },
+    connectionTimeout: 15_000,
+    greetingTimeout: 10_000,
+    socketTimeout: 30_000,
   });
   const info = await transporter.sendMail({
     from: config.hseEmail,

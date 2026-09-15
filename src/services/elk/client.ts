@@ -1,6 +1,8 @@
 import type { Page } from "playwright";
 import { openAuthenticatedPage } from "../../auth/browser-session.js";
 import { dumpPage, type PageDump } from "../../dom-utils.js";
+import { formatLocalDate } from "../../date-utils.js";
+import { resolveScopedUrl } from "../../url-utils.js";
 
 const BASE_URL = "https://lk.hse.ru";
 
@@ -63,14 +65,10 @@ export interface ElkScheduleDay {
   lessons: ElkLesson[];
 }
 
-function toIsoDate(d: Date): string {
-  return d.toISOString().slice(0, 10);
-}
-
 /** Расписание студента через ЕЛК — работает из любой сети (в отличие от ruz_*). */
 export function getSchedule(from: Date, to: Date): Promise<ElkScheduleDay[]> {
   return fetchElkApi<ElkScheduleDay[]>(
-    `/api/get-myschedule?begin_date=${toIsoDate(from)}&end_date=${toIsoDate(to)}`
+    `/api/get-myschedule?begin_date=${formatLocalDate(from, "-")}&end_date=${formatLocalDate(to, "-")}`
   );
 }
 
@@ -104,7 +102,9 @@ export function getProfile(): Promise<PageDump> {
   return dumpAuthenticatedPage(`${BASE_URL}/profile`);
 }
 
+// pmo.hse.ru — домен хелпдеска (создание тикетов), на который ведут документированные ссылки
+// со страниц профиля/student-services, поэтому явно разрешён в дополнение к baseUrl.
 export function openPage(relativePath: string): Promise<PageDump> {
-  const url = relativePath.startsWith("http") ? relativePath : `${BASE_URL}${relativePath}`;
+  const url = resolveScopedUrl(BASE_URL, relativePath, ["pmo.hse.ru"]);
   return dumpAuthenticatedPage(url);
 }

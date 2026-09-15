@@ -24,7 +24,7 @@ export function registerLmsTools(server: McpServer): void {
         "Список элементов курса SmartLMS (файлы, задания, тесты, форумы и т.п.) по id курса " +
         "(см. lms_list_courses). Возвращает тип, название и ссылку каждого элемента.",
       inputSchema: {
-        courseId: z.number().int().describe("id курса на edu.hse.ru (course/view.php?id=...)"),
+        courseId: z.number().int().positive().describe("id курса на edu.hse.ru (course/view.php?id=...)"),
       },
     },
     async ({ courseId }) => runTool(() => lms.getCourseMaterials(courseId))
@@ -36,7 +36,7 @@ export function registerLmsTools(server: McpServer): void {
       title: "Задания курса",
       description: "Список заданий (mod/assign) курса SmartLMS со сроками сдачи и статусами.",
       inputSchema: {
-        courseId: z.number().int().describe("id курса на edu.hse.ru"),
+        courseId: z.number().int().positive().describe("id курса на edu.hse.ru"),
       },
     },
     async ({ courseId }) => runTool(() => lms.listAssignments(courseId))
@@ -48,7 +48,7 @@ export function registerLmsTools(server: McpServer): void {
       title: "Оценки по курсу",
       description: "Таблица оценок студента по курсу SmartLMS (отчёт по пользователю).",
       inputSchema: {
-        courseId: z.number().int().describe("id курса на edu.hse.ru"),
+        courseId: z.number().int().positive().describe("id курса на edu.hse.ru"),
       },
     },
     async ({ courseId }) => runTool(() => lms.getGrades(courseId))

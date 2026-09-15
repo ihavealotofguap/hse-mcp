@@ -1,13 +1,8 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { runTool } from "../../mcp-utils.js";
+import { addDays } from "../../date-utils.js";
 import * as ruz from "./client.js";
-
-function addDays(date: Date, days: number): Date {
-  const result = new Date(date);
-  result.setDate(result.getDate() + days);
-  return result;
-}
 
 export function registerRuzTools(server: McpServer): void {
   server.registerTool(
@@ -67,7 +62,7 @@ export function registerRuzTools(server: McpServer): void {
         "Расписание занятий учебной группы ВШЭ по её RUZ id (узнать id — ruz_find_person с type=group) " +
         "на заданный период.",
       inputSchema: {
-        groupId: z.number().int().describe("RUZ id группы"),
+        groupId: z.number().int().positive().describe("RUZ id группы"),
         daysAhead: z.number().int().min(1).max(60).default(7),
       },
     },

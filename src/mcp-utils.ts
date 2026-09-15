@@ -5,7 +5,10 @@ export interface ToolTextResult {
 }
 
 function toText(data: unknown): string {
-  return typeof data === "string" ? data : JSON.stringify(data, null, 2);
+  if (typeof data === "string") return data;
+  // JSON.stringify(undefined, ...) возвращает undefined, а не строку — нарушало бы контракт
+  // ToolTextResult.content[0].text: string, если какой-то тул когда-нибудь ничего не вернёт.
+  return JSON.stringify(data === undefined ? null : data, null, 2);
 }
 
 /** Оборачивает тело тула: успешный результат сериализуется в JSON-текст, ошибка — в isError-ответ вместо исключения. */

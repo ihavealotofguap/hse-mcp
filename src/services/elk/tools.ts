@@ -1,13 +1,8 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { runTool } from "../../mcp-utils.js";
+import { addDays } from "../../date-utils.js";
 import * as elk from "./client.js";
-
-function addDays(date: Date, days: number): Date {
-  const result = new Date(date);
-  result.setDate(result.getDate() + days);
-  return result;
-}
 
 export function registerElkTools(server: McpServer): void {
   server.registerTool(
