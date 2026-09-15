@@ -90,6 +90,52 @@ export function getUserInfo(): Promise<ElkUserInfo> {
   return fetchElkApi<ElkUserInfo>("/api/get-user");
 }
 
+export interface ElkServiceResult {
+  id: number;
+  name: string;
+  desc: string | null;
+  url: string;
+  score: number;
+}
+
+export interface ElkSearchServicesResponse {
+  total_hits: number;
+  categories: Record<string, number>;
+  results: ElkServiceResult[];
+}
+
+interface RawSearchAllResponse {
+  total_hits: number;
+  categories: Record<string, number>;
+  data: Array<{
+    category: string;
+    score: number;
+    data: { id: number; name: string; desc: string | null; url: string };
+  }>;
+}
+
+/**
+ * Полнотекстовый поиск по каталогу сервисов ЕЛК (lk.hse.ru/api/search/search-all) — разведано
+ * вживую 2026-09-15 через шапку SmartPoint: строка поиска ищет по 254 сервисам сразу, а также
+ * (отдельными категориями с тем же эндпоинтом) по сотрудникам/студентам/подразделениям.
+ * `categories` в ответе — счётчики по всем категориям для запроса, даже когда `category=services`
+ * сужает `data` до одной из них.
+ */
+export function searchServices(query: string, limit = 10): Promise<ElkSearchServicesResponse> {
+  const path = `/api/search/search-all?query=${encodeURIComponent(query)}&offset=0&limit=${limit}&category=services`;
+  return fetchElkApi<RawSearchAllResponse>(path).then((raw) => ({
+    total_hits: raw.total_hits,
+    categories: raw.categories,
+    results: raw.data.map((item) => ({
+      id: item.data.id,
+      name: item.data.name,
+      desc: item.data.desc,
+      url: item.data.url,
+      score: item.score,
+    })),
+  }));
+}
+
 async function dumpAuthenticatedPage(url: string): Promise<PageDump> {
   const page: Page = await openAuthenticatedPage(url);
   try {

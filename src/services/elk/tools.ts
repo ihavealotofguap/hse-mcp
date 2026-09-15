@@ -45,6 +45,26 @@ export function registerElkTools(server: McpServer): void {
   );
 
   server.registerTool(
+    "elk_search_services",
+    {
+      title: "Поиск сервисов в каталоге ЕЛК",
+      description:
+        "Полнотекстовый поиск по каталогу сервисов ЕЛК (lk.hse.ru/api/search/search-all, " +
+        "категория services — 254 сервиса на 2026-09-15): справки, заявки на практику/" +
+        "мобильность/стипендии, запись к психологу, антиплагиат и т.п. Возвращает id, название, " +
+        "описание, прямую ссылку на сервис и релевантность (score). Поле categories в ответе — " +
+        "счётчики совпадений по ВСЕМ категориям поиска (сотрудники/студенты/сервисы/" +
+        "подразделения), даже если сами результаты отданы только по сервисам — так можно понять, " +
+        "есть ли смысл поискать ещё и людей/подразделения по этому запросу.",
+      inputSchema: {
+        query: z.string().min(1).describe("Поисковый запрос, напр. 'справка' или 'стипендия'"),
+        limit: z.number().int().min(1).max(50).default(10).describe("Максимум результатов"),
+      },
+    },
+    async ({ query, limit }) => runTool(() => elk.searchServices(query, limit))
+  );
+
+  server.registerTool(
     "elk_get_profile",
     {
       title: "Профиль в ЕЛК",
