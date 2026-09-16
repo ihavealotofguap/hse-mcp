@@ -1,13 +1,9 @@
+import type { Page } from "playwright";
 import { openAuthenticatedPage } from "../../auth/browser-session.js";
 import { dumpPage, extractTable, type PageDump } from "../../dom-utils.js";
 import { resolveScopedUrl } from "../../url-utils.js";
 
 const BASE_URL = "https://edu.hse.ru";
-
-export interface CourseLink {
-  id: number;
-  name: string;
-}
 
 export interface ModuleLink {
   type: string;
@@ -24,20 +20,236 @@ export interface ModuleLink {
  * это устойчиво к теме оформления, в отличие от CSS-классов, которые ВШЭ могла кастомизировать.
  */
 
-export async function listCourses(): Promise<CourseLink[]> {
+interface MoodleAjaxResponse<T> {
+  error: boolean;
+  exception?: { message: string };
+  data: T;
+}
+
+/**
+ * Внутренний AJAX-сервис самого Moodle (lib/ajax/service.php) — то, чем пользуется JS дашборда,
+ * авторизация через sesskey текущей сессии (не требует отдельного mobile webservice-токена).
+ * Реверс-инжинирено 2026-09-15 на вызове дашборда /my/courses.php.
+ */
+async function fetchMoodleAjax<T>(
+  page: Page,
+  methodname: string,
+  args: Record<string, unknown>
+): Promise<T> {
+  type MoodleWindow = { M?: { cfg?: { sesskey?: string } } };
+  await page
+    .waitForFunction(() => !!(window as unknown as MoodleWindow).M?.cfg?.sesskey, undefined, { timeout: 15_000 })
+    .catch(() => {});
+  const sesskey = await page.evaluate(() => (window as unknown as MoodleWindow).M?.cfg?.sesskey);
+  if (!sesskey) {
+    throw new Error("Не удалось найти sesskey на странице edu.hse.ru — возможно, сессия слетела");
+  }
+  return page.evaluate(
+    async ({ methodname, args, sesskey }) => {
+      const res = await fetch(`/lib/ajax/service.php?sesskey=${sesskey}&info=${methodname}`, {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify([{ index: 0, methodname, args }]),
+      });
+      if (!res.ok) {
+        throw new Error(`edu.hse.ru AJAX ${methodname} вернул ${res.status}`);
+      }
+      const body = (await res.json()) as MoodleAjaxResponse<T>[];
+      if (body[0]?.error) {
+        throw new Error(`edu.hse.ru AJAX ${methodname}: ${body[0].exception?.message ?? "unknown error"}`);
+      }
+      return body[0].data;
+    },
+    { methodname, args, sesskey }
+  );
+}
+
+interface RawTimelineCourse {
+  id: number;
+  fullname: string;
+  shortname: string;
+  coursecategory: string;
+  startdate: number;
+  enddate: number;
+  visible: boolean;
+  hidden: boolean;
+  isfavourite: boolean;
+  hasprogress: boolean;
+  progress: number;
+  viewurl: string;
+}
+
+export interface CourseOverview {
+  id: number;
+  fullname: string;
+  shortname: string;
+  category: string;
+  startdate: string;
+  enddate: string | null;
+  progress: number | null;
+  isFavourite: boolean;
+  hidden: boolean;
+  visible: boolean;
+  viewUrl: string;
+}
+
+const stripHtml = (s: string) => s.replace(/<[^>]+>/g, "").trim();
+const unixToIso = (seconds: number) => new Date(seconds * 1000).toISOString();
+
+// Письма local_mail — это блочный HTML (<p>, <br>) без единого текстового поля; простой strip
+// тегов слепил бы все абзацы в одну строку.
+const htmlToText = (html: string) =>
+  html
+    .replace(/<\/(p|div|li)>/gi, "\n")
+    .replace(/<br\s*\/?>/gi, "\n")
+    .replace(/<[^>]+>/g, "")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+
+/**
+ * Список курсов через внутренний AJAX-эндпоинт дашборда (см. fetchMoodleAjax) — вместо парсинга
+ * ссылок со страницы: даёт прогресс прохождения, даты начала/окончания и категорию, которых нет
+ * в простой ссылке на курс. classification: "all" — все курсы, включая скрытые из вида.
+ */
+export async function listCourses(): Promise<CourseOverview[]> {
   const page = await openAuthenticatedPage(`${BASE_URL}/my/courses.php`);
   try {
-    return await page.evaluate(() => {
-      const anchors = Array.from(document.querySelectorAll('a[href*="/course/view.php?id="]'));
-      const byId = new Map<string, string>();
-      for (const a of anchors) {
-        const href = (a as HTMLAnchorElement).href;
-        const match = href.match(/course\/view\.php\?id=(\d+)/);
-        const text = a.textContent?.trim().replace(/\s+/g, " ");
-        if (match && text) byId.set(match[1], text);
+    const data = await fetchMoodleAjax<{ courses: RawTimelineCourse[] }>(
+      page,
+      "local_api_get_enrolled_courses_by_timeline_classification",
+      {
+        offset: 0,
+        limit: 100,
+        classification: "all",
+        sort: "fullname",
+        customfieldname: "",
+        customfieldvalue: "",
+        requiredfields: ["id", "fullname", "shortname", "showcoursecategory", "showshortname", "visible", "enddate"],
       }
-      return Array.from(byId.entries()).map(([id, name]) => ({ id: Number(id), name }));
+    );
+    return data.courses.map((c) => ({
+      id: c.id,
+      fullname: c.fullname,
+      shortname: c.shortname,
+      category: stripHtml(c.coursecategory),
+      startdate: unixToIso(c.startdate),
+      enddate: c.enddate > 0 ? unixToIso(c.enddate) : null,
+      progress: c.hasprogress ? c.progress : null,
+      isFavourite: c.isfavourite,
+      hidden: c.hidden,
+      visible: c.visible,
+      viewUrl: c.viewurl,
+    }));
+  } finally {
+    await page.close();
+  }
+}
+
+interface RawMailPerson {
+  fullname: string;
+  profileurl: string;
+}
+
+interface RawMailCourse {
+  id: number;
+  fullname: string;
+  shortname: string;
+}
+
+interface RawMailMessageSummary {
+  id: number;
+  subject: string;
+  numattachments: number;
+  time: number;
+  unread: boolean;
+  starred: boolean;
+  course: RawMailCourse;
+  sender: RawMailPerson;
+}
+
+export interface LmsMessageSummary {
+  id: number;
+  subject: string;
+  course: string;
+  sender: string;
+  time: string;
+  unread: boolean;
+  starred: boolean;
+  numAttachments: number;
+}
+
+/**
+ * Внутренняя почта SmartLMS (плагин local_mail, edu.hse.ru/local/mail/) — переписка с
+ * преподавателями внутри курсов, полностью отдельная от корпоративной почты Яндекс 360
+ * (см. src/services/mail/). Реверс-инжинирено 2026-09-15 через тот же внутренний AJAX-сервис
+ * Moodle (fetchMoodleAjax), метод local_mail_search_messages с ролями to/cc/bcc — это входящие.
+ */
+export async function listMessages(limit = 50): Promise<LmsMessageSummary[]> {
+  const page = await openAuthenticatedPage(`${BASE_URL}/local/mail/view.php?t=inbox`);
+  try {
+    const messages = await fetchMoodleAjax<RawMailMessageSummary[]>(page, "local_mail_search_messages", {
+      query: { roles: ["to", "cc", "bcc"], deleted: false },
+      limit,
     });
+    return messages.map((m) => ({
+      id: m.id,
+      subject: m.subject,
+      course: m.course.fullname,
+      sender: m.sender.fullname,
+      time: unixToIso(m.time),
+      unread: m.unread,
+      starred: m.starred,
+      numAttachments: m.numattachments,
+    }));
+  } finally {
+    await page.close();
+  }
+}
+
+interface RawMailAttachment {
+  filename: string;
+  filesize: number;
+  fileurl: string;
+}
+
+interface RawMailMessage {
+  id: number;
+  subject: string;
+  content: string;
+  time: number;
+  course: RawMailCourse;
+  sender: RawMailPerson;
+  recipients: Array<RawMailPerson & { type: string }>;
+  attachments: RawMailAttachment[];
+}
+
+export interface LmsMessage {
+  id: number;
+  subject: string;
+  text: string;
+  course: string;
+  sender: string;
+  recipients: string[];
+  time: string;
+  attachments: Array<{ filename: string; filesize: number; url: string }>;
+}
+
+/** Полный текст письма внутренней почты SmartLMS по id (см. listMessages). */
+export async function getMessage(messageId: number): Promise<LmsMessage> {
+  const page = await openAuthenticatedPage(`${BASE_URL}/local/mail/view.php?t=inbox`);
+  try {
+    const m = await fetchMoodleAjax<RawMailMessage>(page, "local_mail_get_message", { messageid: messageId });
+    return {
+      id: m.id,
+      subject: m.subject,
+      text: htmlToText(m.content),
+      course: m.course.fullname,
+      sender: m.sender.fullname,
+      recipients: m.recipients.map((r) => r.fullname),
+      time: unixToIso(m.time),
+      attachments: m.attachments.map((a) => ({ filename: a.filename, filesize: a.filesize, url: a.fileurl })),
+    };
   } finally {
     await page.close();
   }

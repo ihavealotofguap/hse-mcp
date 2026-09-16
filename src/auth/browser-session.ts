@@ -78,14 +78,18 @@ async function waitForRender(page: Page): Promise<void> {
 }
 
 /**
- * Некоторые сервисы ВШЭ (SmartLMS/edu.hse.ru) при заходе неавторизованным сразу редиректят на
- * Keycloak. Другие (ЕЛК/lk.hse.ru — подтверждено вживую 2026-09-15) НЕ редиректят: показывают
- * свою страницу "Вы не вошли в аккаунт" с явной ссылкой "Войти", ведущей на Keycloak, и ждут
- * клика. Эта функция ищет такую ссылку на текущей странице.
+ * Сервисы ВШЭ редиректят на Keycloak автоматически только если в браузере уже есть его сессия —
+ * иначе показывают свою страницу с явной ссылкой "Войти" и ждут клика. Формат ссылки отличается
+ * по сервису (подтверждено вживую 2026-09-15): ЕЛК/lk.hse.ru ведёт прямо на
+ * `openid-connect/auth`, а SmartLMS/edu.hse.ru — на собственный same-origin OIDC-мост
+ * `/auth/oidckc/`, который уже сам редиректит на `saml.hse.ru/.../openid-connect/auth`. Эта
+ * функция ищет ссылку любого из известных форматов на текущей странице.
  */
 async function findKeycloakLoginHref(page: Page): Promise<string | null> {
   return page.evaluate(() => {
-    const link = document.querySelector<HTMLAnchorElement>('a[href*="openid-connect/auth"]');
+    const link = document.querySelector<HTMLAnchorElement>(
+      'a[href*="openid-connect/auth"], a[href*="/auth/oidckc/"]'
+    );
     return link ? link.href : null;
   });
 }
