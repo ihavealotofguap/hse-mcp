@@ -1,9 +1,14 @@
-import type { Page } from "playwright";
-import { getApiRequestContext, openAuthenticatedPage } from "../../auth/browser-session.js";
-import { cached, TTL } from "../../cache.js";
+import type { Page } from "playwright"; // временно, удаляется в Task 5
+import { cached } from "../../cache.js"; // временно, удаляется в Task 5
+import { openAuthenticatedPage } from "../../auth/browser-session.js"; // временно, удаляется в Task 5
+import { getApiRequestContext, withPage } from "../../auth/browser-session.js";
+import { createBreaker } from "../../breaker.js";
+import { TTL } from "../../cache.js";
 import { config } from "../../config.js";
 import { dumpPage, extractTable, type PageDump } from "../../dom-utils.js";
-import { formatLocalDate } from "../../date-utils.js";
+import { addDays, formatLocalDate } from "../../date-utils.js";
+import { acquireRequestTurn } from "../../limiter.js";
+import { defineResource, type LoadContext } from "../../resource.js";
 import { resolveScopedUrl } from "../../url-utils.js";
 
 const BASE_URL = "https://lk.hse.ru";
@@ -32,6 +37,11 @@ const stripHtmlElk = (s: string) => s.replace(/<[^>]+>/g, " ").replace(/\s+/g, "
 const TOKEN_SKEW_MS = 30_000;
 const TOKEN_FALLBACK_TTL_MS = 60_000;
 const API_TIMEOUT_MS = 20_000;
+// Если прямой путь отказал дважды, а запрос через страницу прошёл — значит, API ЕЛК чем-то не
+// устраивает запрос вне браузерной страницы. Тогда идём через страницу, а через 10 минут
+// пробуем прямой путь снова (одна проба; удача возвращает прямой путь, неудача продлевает).
+const DIRECT_COOLDOWN_MS = 10 * 60_000;
+const directBreaker = createBreaker(DIRECT_COOLDOWN_MS);
 
 interface TokenEntry {
   token: string;
@@ -40,9 +50,6 @@ interface TokenEntry {
 
 let tokenEntry: TokenEntry | null = null;
 let tokenPromise: Promise<string> | null = null;
-// Если прямой запрос не прошёл, а старый путь через страницу прошёл — значит, API ЕЛК чем-то не
-// устраивает запрос вне браузерной страницы; дальше без повторных проб идём старым путём.
-let directApiBroken = false;
 
 /** Время истечения JWT в мс (из `exp`) либо null, если токен не JWT или без `exp`. */
 export function tokenExpiryMs(token: string): number | null {
@@ -56,9 +63,8 @@ export function tokenExpiryMs(token: string): number | null {
   }
 }
 
-async function acquireToken(): Promise<string> {
-  const page = await openAuthenticatedPage(`${BASE_URL}/profile`);
-  try {
+function acquireToken(): Promise<string> {
+  return withPage(`${BASE_URL}/profile`, async (page) => {
     await page.waitForFunction(() => !!localStorage.getItem("access_token"), undefined, {
       timeout: 10_000,
     });
@@ -75,9 +81,7 @@ async function acquireToken(): Promise<string> {
     if (!token) throw new Error("ЕЛК не выдал access_token — возможно, сессия слетела");
     tokenEntry = { token, expiresAt: tokenExpiryMs(token) ?? Date.now() + TOKEN_FALLBACK_TTL_MS };
     return token;
-  } finally {
-    await page.close();
-  }
+  });
 }
 
 function getElkToken(): Promise<string> {
@@ -101,7 +105,8 @@ function invalidateToken(usedToken: string): void {
 
 type DirectResult<T> = { ok: true; body: T } | { ok: false; status: number; error?: string };
 
-async function requestDirect<T>(apiPath: string, token: string): Promise<DirectResult<T>> {
+async function requestDirect<T>(apiPath: string, token: string, signal: AbortSignal): Promise<DirectResult<T>> {
+  await acquireRequestTurn(signal);
   const api = await getApiRequestContext();
   const res = await api.get(`${BASE_URL}${apiPath}`, {
     headers: { Authorization: `Bearer ${token}` },
@@ -116,74 +121,71 @@ async function requestDirect<T>(apiPath: string, token: string): Promise<DirectR
   }
 }
 
-/** Прежний путь: открыть /profile и сделать fetch внутри страницы. Запасной вариант. */
-async function fetchElkApiViaPage<T>(apiPath: string): Promise<T> {
-  const page = await openAuthenticatedPage(`${BASE_URL}/profile`);
-  try {
-    await page.waitForFunction(() => !!localStorage.getItem("access_token"), undefined, {
-      timeout: 10_000,
-    });
-    return await page.evaluate(async (path) => {
-      const token = localStorage.getItem("access_token");
-      const res = await fetch(path, {
-        credentials: "include",
-        headers: token ? { Authorization: `Bearer ${token}` } : {},
+/** Запасной путь: открыть /profile и сделать fetch внутри страницы. */
+function fetchElkApiViaPage<T>(apiPath: string, signal: AbortSignal): Promise<T> {
+  return withPage(
+    `${BASE_URL}/profile`,
+    async (page) => {
+      await page.waitForFunction(() => !!localStorage.getItem("access_token"), undefined, {
+        timeout: 10_000,
       });
-      if (!res.ok) {
-        throw new Error(`lk.hse.ru API ${path} вернул ${res.status}`);
-      }
-      return res.json();
-    }, apiPath);
-  } finally {
-    await page.close();
-  }
+      return page.evaluate(async (path) => {
+        const token = localStorage.getItem("access_token");
+        const res = await fetch(path, {
+          credentials: "include",
+          headers: token ? { Authorization: `Bearer ${token}` } : {},
+        });
+        if (!res.ok) {
+          throw new Error(`lk.hse.ru API ${path} вернул ${res.status}`);
+        }
+        return res.json();
+      }, apiPath) as Promise<T>;
+    },
+    { signal }
+  );
 }
 
-async function fetchElkApiUncached<T>(apiPath: string): Promise<T> {
-  if (directApiBroken) return fetchElkApiViaPage<T>(apiPath);
+const describeFailure = (r: { status: number; error?: string }): string =>
+  `${r.status}${r.error ? ` (${r.error})` : ""}`;
+
+/**
+ * Политика отказов прямого пути:
+ * - 401 и не-JSON (редирект на вход): токен сбрасывается, одна повторная попытка со свежим;
+ * - 403: это права, а не токен — токен не сбрасывается, повтор с тем же;
+ * - 5xx и прочее: ошибка как есть, без отката на страницу и без срабатывания выключателя;
+ * - два отказа подряд: один заход через страницу; прошёл — выключатель срабатывает на 10 минут,
+ *   не прошёл — ошибка пользователю, выключатель не трогаем (это реальный отказ, не особенность
+ *   вне-браузерного запроса).
+ */
+async function fetchElkApiUncached<T>(apiPath: string, signal: AbortSignal): Promise<T> {
+  if (!directBreaker.allow()) return fetchElkApiViaPage<T>(apiPath, signal);
 
   let lastFailure = "";
-  // Две попытки: с кэшированным токеном и (если сервер отверг его) со свежим.
   for (let attempt = 0; attempt < 2; attempt++) {
     const token = await getElkToken();
-    const result = await requestDirect<T>(apiPath, token);
-    if (result.ok) return result.body;
-    lastFailure = `${result.status}${result.error ? ` (${result.error})` : ""}`;
-    // 5xx и прочее — не вопрос токена/способа запроса: отдаём ошибку как раньше, не отключая
-    // прямой путь из-за разового сбоя сервера.
-    if (result.status !== 401 && result.status !== 403 && !result.error) {
-      throw new Error(`lk.hse.ru API ${apiPath} вернул ${result.status}`);
+    const result = await requestDirect<T>(apiPath, token, signal);
+    if (result.ok) {
+      directBreaker.reset();
+      return result.body;
     }
-    invalidateToken(token);
+    lastFailure = describeFailure(result);
+    const authFailure = result.status === 401 || result.status === 403 || result.error !== undefined;
+    if (!authFailure) throw new Error(`lk.hse.ru API ${apiPath} вернул ${result.status}`);
+    if (result.status !== 403) invalidateToken(token);
   }
 
-  // Прямой путь не сработал: проверяем старым. Если он тоже падает — это реальная ошибка (или
-  // слетевшая сессия), отдаём её; если проходит — прямые запросы с этим API не работают.
-  const data = await fetchElkApiViaPage<T>(apiPath).catch((err: unknown) => {
+  const data = await fetchElkApiViaPage<T>(apiPath, signal).catch((err: unknown) => {
     const message = err instanceof Error ? err.message : String(err);
     throw new Error(`${message} (прямой запрос тоже не прошёл: ${lastFailure})`);
   });
-  directApiBroken = true;
+  directBreaker.trip();
   console.error(
-    `hsemcp: прямые запросы к lk.hse.ru/api не работают (${lastFailure}) — перехожу на запросы через страницу`
+    `hsemcp: прямые запросы к lk.hse.ru/api не работают (${lastFailure}) — иду через страницу ${DIRECT_COOLDOWN_MS / 60_000} мин`
   );
   return data;
 }
 
-// TTL по префиксу пути: расписание и поиск — 5 мин, профиль/академ. карточка/ДПО — 30 мин,
-// остальное (заявки, задачи, уведомления, история, антиплагиат) — 2 мин.
-const ELK_API_TTL: Array<[prefix: string, ttlMs: number]> = [
-  ["/api/get-myschedule", TTL.medium],
-  ["/api/search/", TTL.medium],
-  ["/api/get-user", TTL.long],
-  ["/api/get-academic-data", TTL.long],
-  ["/dpo/rest/", TTL.long],
-];
-
-function fetchElkApi<T>(apiPath: string): Promise<T> {
-  const ttl = ELK_API_TTL.find(([prefix]) => apiPath.startsWith(prefix))?.[1] ?? TTL.short;
-  return cached(`elk:${apiPath}`, ttl, () => fetchElkApiUncached<T>(apiPath));
-}
+const elkJson = <T>(apiPath: string, ctx: LoadContext): Promise<T> => fetchElkApiUncached<T>(apiPath, ctx.signal);
 
 export interface ElkLesson {
   auditorium: string;
@@ -206,11 +208,41 @@ export interface ElkScheduleDay {
   lessons: ElkLesson[];
 }
 
+/** Понедельник (локальная дата, 00:00) недели, в которую попадает `d`. */
+function mondayOf(d: Date): Date {
+  const x = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+  x.setDate(x.getDate() - ((x.getDay() + 6) % 7));
+  return x;
+}
+
+const MAX_SCHEDULE_WEEKS = 53;
+
+// Расписание грузится и кэшируется по неделям (пн–вс): разные диапазоны (сегодня/неделя/две недели)
+// делят блоки, а не бьют по разным ключам.
+const elkScheduleWeek = defineResource<Date, ElkScheduleDay[]>({
+  name: "elk.schedule-week",
+  ttl: TTL.medium,
+  key: (monday) => formatLocalDate(monday, "-"),
+  load: (monday, ctx) =>
+    elkJson<ElkScheduleDay[]>(
+      `/api/get-myschedule?begin_date=${formatLocalDate(monday, "-")}&end_date=${formatLocalDate(addDays(monday, 6), "-")}`,
+      ctx
+    ),
+});
+
 /** Расписание студента через ЕЛК — работает из любой сети (в отличие от ruz_*). */
-export function getSchedule(from: Date, to: Date): Promise<ElkScheduleDay[]> {
-  return fetchElkApi<ElkScheduleDay[]>(
-    `/api/get-myschedule?begin_date=${formatLocalDate(from, "-")}&end_date=${formatLocalDate(to, "-")}`
-  );
+export async function getSchedule(from: Date, to: Date): Promise<ElkScheduleDay[]> {
+  const fromKey = formatLocalDate(from, "-");
+  const toKey = formatLocalDate(to, "-");
+  if (fromKey > toKey) return [];
+
+  const weeks: Date[] = [];
+  for (let m = mondayOf(from); formatLocalDate(m, "-") <= toKey; m = addDays(m, 7)) weeks.push(m);
+  if (weeks.length > MAX_SCHEDULE_WEEKS) {
+    throw new Error(`Диапазон расписания (${weeks.length} недель) больше ${MAX_SCHEDULE_WEEKS} недель — сузьте период`);
+  }
+  const chunks = await Promise.all(weeks.map((m) => elkScheduleWeek(m)));
+  return chunks.flat().filter((day) => day.date >= fromKey && day.date <= toKey);
 }
 
 export interface ElkUserInfo {
@@ -224,9 +256,16 @@ export interface ElkUserInfo {
   [key: string]: unknown;
 }
 
+const elkUser = defineResource<void, ElkUserInfo>({
+  name: "elk.user",
+  ttl: TTL.long,
+  key: () => "me",
+  load: (_a, ctx) => elkJson<ElkUserInfo>("/api/get-user", ctx),
+});
+
 /** Базовая identity-информация из ЕЛК (структурированный JSON, без академической карточки). */
 export function getUserInfo(): Promise<ElkUserInfo> {
-  return fetchElkApi<ElkUserInfo>("/api/get-user");
+  return elkUser();
 }
 
 export interface ElkAcademicData {
@@ -250,13 +289,20 @@ export interface ElkAcademicData {
   [key: string]: unknown;
 }
 
+const elkAcademic = defineResource<void, ElkAcademicData[]>({
+  name: "elk.academic",
+  ttl: TTL.long,
+  key: () => "me",
+  load: (_a, ctx) => elkJson<ElkAcademicData[]>("/api/get-academic-data", ctx),
+});
+
 /**
  * Академическая карточка студента (структурированный JSON): рейтинг, GPA, программа, факультет,
  * курс, группа. lk.hse.ru/api/get-academic-data — реверс-инжинирен 2026-09-15, тот же
  * Bearer-токен, что и остальные elk_get_*. Отдаёт массив с одной записью на пользователя.
  */
 export function getAcademicData(): Promise<ElkAcademicData[]> {
-  return fetchElkApi<ElkAcademicData[]>("/api/get-academic-data");
+  return elkAcademic();
 }
 
 export interface ElkServiceResult {
@@ -283,6 +329,30 @@ interface RawSearchAllResponse {
   }>;
 }
 
+const SEARCH_FETCH_LIMIT = 50; // максимум тула elk_search_services
+
+const elkSearch = defineResource<{ query: string; limit: number }, RawSearchAllResponse, ElkSearchServicesResponse>({
+  name: "elk.search",
+  ttl: TTL.medium,
+  key: (a) => a.query,
+  load: (a, ctx) =>
+    elkJson<RawSearchAllResponse>(
+      `/api/search/search-all?query=${encodeURIComponent(a.query)}&offset=0&limit=${SEARCH_FETCH_LIMIT}&category=services`,
+      ctx
+    ),
+  project: (raw, a) => ({
+    total_hits: raw.total_hits,
+    categories: raw.categories,
+    results: raw.data.slice(0, a.limit).map((item) => ({
+      id: item.data.id,
+      name: item.data.name,
+      desc: item.data.desc,
+      url: item.data.url,
+      score: item.score,
+    })),
+  }),
+});
+
 /**
  * Полнотекстовый поиск по каталогу сервисов ЕЛК (lk.hse.ru/api/search/search-all) — разведано
  * вживую 2026-09-15 через шапку SmartPoint: строка поиска ищет по 254 сервисам сразу, а также
@@ -291,18 +361,7 @@ interface RawSearchAllResponse {
  * сужает `data` до одной из них.
  */
 export function searchServices(query: string, limit = 10): Promise<ElkSearchServicesResponse> {
-  const path = `/api/search/search-all?query=${encodeURIComponent(query)}&offset=0&limit=${limit}&category=services`;
-  return fetchElkApi<RawSearchAllResponse>(path).then((raw) => ({
-    total_hits: raw.total_hits,
-    categories: raw.categories,
-    results: raw.data.map((item) => ({
-      id: item.data.id,
-      name: item.data.name,
-      desc: item.data.desc,
-      url: item.data.url,
-      score: item.score,
-    })),
-  }));
+  return elkSearch({ query, limit });
 }
 
 export interface ElkClaim {
@@ -341,16 +400,20 @@ function cleanClaimUrl(raw: string): string | null {
   return url || null;
 }
 
-/**
- * История заявок пользователя (lk.hse.ru/claim) — разведано вживую 2026-09-15. В отличие от
- * большинства elk_* эндпоинтов требует username (email) явным query-параметром, а не берёт его
- * из токена.
- */
-export function listRequests(limit = 500): Promise<{ count: number; requests: ElkClaim[] }> {
-  const path = `/api/claims?username=${encodeURIComponent(config.hseEmail)}&limit=${limit}&sort_by=created&order_by=desc`;
-  return fetchElkApi<{ data: RawClaim[]; count: number }>(path).then((raw) => ({
+const CLAIMS_FETCH_LIMIT = 500; // максимум тулов elk_list_requests / elk_list_tasks
+
+const elkClaims = defineResource<number, { data: RawClaim[]; count: number }, { count: number; requests: ElkClaim[] }>({
+  name: "elk.claims",
+  ttl: TTL.short,
+  key: () => "all",
+  load: (_limit, ctx) =>
+    elkJson<{ data: RawClaim[]; count: number }>(
+      `/api/claims?username=${encodeURIComponent(config.hseEmail)}&limit=${CLAIMS_FETCH_LIMIT}&sort_by=created&order_by=desc`,
+      ctx
+    ),
+  project: (raw, limit) => ({
     count: raw.count,
-    requests: raw.data.map((c) => ({
+    requests: raw.data.slice(0, limit).map((c) => ({
       num: c.num,
       text: c.text,
       service: c.service,
@@ -363,8 +426,29 @@ export function listRequests(limit = 500): Promise<{ count: number; requests: El
       updated: c.updated,
       url: cleanClaimUrl(c.url),
     })),
-  }));
+  }),
+});
+
+/**
+ * История заявок пользователя (lk.hse.ru/claim) — разведано вживую 2026-09-15. В отличие от
+ * большинства elk_* эндпоинтов требует username (email) явным query-параметром, а не берёт его
+ * из токена.
+ */
+export function listRequests(limit = 500): Promise<{ count: number; requests: ElkClaim[] }> {
+  return elkClaims(limit);
 }
+
+const elkTasks = defineResource<number, { count: number; data: unknown[] }>({
+  name: "elk.tasks",
+  ttl: TTL.short,
+  key: () => "all",
+  load: (_limit, ctx) =>
+    elkJson<{ count: number; data: unknown[] }>(
+      `/api/tasks?username=${encodeURIComponent(config.hseEmail)}&limit=${CLAIMS_FETCH_LIMIT}&sort_by=created&order_by=desc`,
+      ctx
+    ),
+  project: (raw, limit) => ({ count: raw.count, data: raw.data.slice(0, limit) }),
+});
 
 /**
  * Задачи пользователя (lk.hse.ru/task) — тот же API-паттерн, что и /api/claims (username, limit,
@@ -373,8 +457,7 @@ export function listRequests(limit = 500): Promise<{ count: number; requests: El
  * как есть, без предположений о конкретных именах полей.
  */
 export function listTasks(limit = 500): Promise<{ count: number; data: unknown[] }> {
-  const path = `/api/tasks?username=${encodeURIComponent(config.hseEmail)}&limit=${limit}&sort_by=created&order_by=desc`;
-  return fetchElkApi<{ count: number; data: unknown[] }>(path);
+  return elkTasks(limit);
 }
 
 interface RawDpoApplicationsResponse {
@@ -384,6 +467,17 @@ interface RawDpoApplicationsResponse {
   };
 }
 
+const elkDpo = defineResource<void, RawDpoApplicationsResponse, { docs: unknown[]; statusLabels: Record<string, string> }>({
+  name: "elk.dpo",
+  ttl: TTL.long,
+  key: () => "me",
+  load: (_a, ctx) => elkJson<RawDpoApplicationsResponse>("/dpo/rest/application", ctx),
+  project: (raw) => ({
+    docs: raw.data.docs,
+    statusLabels: Object.fromEntries(raw.data.filters.status.map((s) => [s.value, s.label])),
+  }),
+});
+
 /**
  * Мои программы ДПО (lk.hse.ru/dpo/my-programs → GET /dpo/rest/application) — реверс-инжинирено
  * 2026-09-15. Модуль «Моё ДПО» релевантен только студентам, проходящим доп. проф. образование
@@ -392,10 +486,7 @@ interface RawDpoApplicationsResponse {
  * `statusLabels` — расшифровка возможных статусов (processing/payment/waiting/studies/...).
  */
 export function listDpoPrograms(): Promise<{ docs: unknown[]; statusLabels: Record<string, string> }> {
-  return fetchElkApi<RawDpoApplicationsResponse>("/dpo/rest/application").then((raw) => ({
-    docs: raw.data.docs,
-    statusLabels: Object.fromEntries(raw.data.filters.status.map((s) => [s.value, s.label])),
-  }));
+  return elkDpo();
 }
 
 export interface ElkLoginRecord {
@@ -415,16 +506,17 @@ interface RawLoginRecord {
   deviceData: { device: string; type: string };
 }
 
-/**
- * История действий/входов в ЕЛК (вкладка "Прочее" → "История действий" на /profile, обычно не
- * захватывается elk_get_profile — Vue-таб рендерит контент только по клику, а не сразу в DOM).
- * Полезно для проверки безопасности аккаунта (неожиданные IP/устройства). Реверс-инжинирено
- * 2026-09-15: `GET /api/get-action-history-records?offset=0`, тот же Bearer-токен.
- */
-export function getLoginHistory(offset = 0): Promise<{ count: number; actions: ElkLoginRecord[] }> {
-  return fetchElkApi<{ count: number; actions: RawLoginRecord[] }>(
-    `/api/get-action-history-records?offset=${offset}`
-  ).then((raw) => ({
+const elkLoginHistory = defineResource<
+  number,
+  { count: number; actions: RawLoginRecord[] },
+  { count: number; actions: ElkLoginRecord[] }
+>({
+  name: "elk.login-history",
+  ttl: TTL.short,
+  key: (offset) => String(offset),
+  load: (offset, ctx) =>
+    elkJson<{ count: number; actions: RawLoginRecord[] }>(`/api/get-action-history-records?offset=${offset}`, ctx),
+  project: (raw) => ({
     count: raw.count,
     actions: raw.actions.map((a) => ({
       date: a.date,
@@ -434,7 +526,17 @@ export function getLoginHistory(offset = 0): Promise<{ count: number; actions: E
       device: a.deviceData.device,
       deviceType: a.deviceData.type,
     })),
-  }));
+  }),
+});
+
+/**
+ * История действий/входов в ЕЛК (вкладка "Прочее" → "История действий" на /profile, обычно не
+ * захватывается elk_get_profile — Vue-таб рендерит контент только по клику, а не сразу в DOM).
+ * Полезно для проверки безопасности аккаунта (неожиданные IP/устройства). Реверс-инжинирено
+ * 2026-09-15: `GET /api/get-action-history-records?offset=0`, тот же Bearer-токен.
+ */
+export function getLoginHistory(offset = 0): Promise<{ count: number; actions: ElkLoginRecord[] }> {
+  return elkLoginHistory(offset);
 }
 
 export interface ElkNotification {
@@ -455,17 +557,24 @@ interface RawNotification {
   date: string;
 }
 
-/**
- * Уведомления ЕЛК (`/notification`, колокольчик в шапке) — реверс-инжинирено 2026-09-15:
- * `GET /api/notifications?is_no_read=false&offset=0&limit=<n>`, тот же Bearer-токен.
- * `is_no_read=false` — включая уже прочитанные (иначе список часто пуст).
- */
-export function getNotifications(limit = 20): Promise<{ count: number; notifications: ElkNotification[] }> {
-  return fetchElkApi<{ data: RawNotification[]; count: number }>(
-    `/api/notifications?is_no_read=false&offset=0&limit=${limit}`
-  ).then((raw) => ({
+const NOTIFICATIONS_FETCH_LIMIT = 100; // максимум тула elk_get_notifications
+
+const elkNotifications = defineResource<
+  number,
+  { data: RawNotification[]; count: number },
+  { count: number; notifications: ElkNotification[] }
+>({
+  name: "elk.notifications",
+  ttl: TTL.short,
+  key: () => "all",
+  load: (_limit, ctx) =>
+    elkJson<{ data: RawNotification[]; count: number }>(
+      `/api/notifications?is_no_read=false&offset=0&limit=${NOTIFICATIONS_FETCH_LIMIT}`,
+      ctx
+    ),
+  project: (raw, limit) => ({
     count: raw.count,
-    notifications: raw.data.map((n) => ({
+    notifications: raw.data.slice(0, limit).map((n) => ({
       id: n.id,
       title: n.title,
       text: stripHtmlElk(n.text),
@@ -473,7 +582,16 @@ export function getNotifications(limit = 20): Promise<{ count: number; notificat
       isRead: n.is_read,
       date: n.date,
     })),
-  }));
+  }),
+});
+
+/**
+ * Уведомления ЕЛК (`/notification`, колокольчик в шапке) — реверс-инжинирено 2026-09-15:
+ * `GET /api/notifications?is_no_read=false&offset=0&limit=<n>`, тот же Bearer-токен.
+ * `is_no_read=false` — включая уже прочитанные (иначе список часто пуст).
+ */
+export function getNotifications(limit = 20): Promise<{ count: number; notifications: ElkNotification[] }> {
+  return elkNotifications(limit);
 }
 
 export interface ElkAntiplagiatStatus {
@@ -481,6 +599,17 @@ export interface ElkAntiplagiatStatus {
   completed: number;
   total: number;
 }
+
+const elkAntiplagiat = defineResource<void, ElkAntiplagiatStatus>({
+  name: "elk.antiplagiat",
+  ttl: TTL.short,
+  key: () => "me",
+  load: (_a, ctx) =>
+    elkJson<ElkAntiplagiatStatus>(
+      `/antiplagiat/api/antiplagiat/attempts?email=${encodeURIComponent(config.hseEmail)}`,
+      ctx
+    ),
+});
 
 /**
  * Статус проверок в системе Антиплагиат (lk.hse.ru/flow/antiplagiat/...) — реверс-инжинирен
@@ -490,8 +619,7 @@ export interface ElkAntiplagiatStatus {
  * реализована (запись данных, требует явного согласия пользователя).
  */
 export function getAntiplagiatStatus(): Promise<ElkAntiplagiatStatus> {
-  const path = `/antiplagiat/api/antiplagiat/attempts?email=${encodeURIComponent(config.hseEmail)}`;
-  return fetchElkApi<ElkAntiplagiatStatus>(path);
+  return elkAntiplagiat();
 }
 
 const SOP_URL =
