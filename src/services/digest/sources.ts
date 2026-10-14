@@ -21,7 +21,8 @@ export const OVERDUE_LOOKBACK_DAYS = 180;
 
 const TEXT_LIMIT = 300;
 // Статусы окна СОП, при которых действие уже не требуется. Подтверждён только «Анкета доступна».
-const WINDOW_DONE = /заполнен|пройден|заверш|закрыт/i;
+// «Анкета не заполнена» / «Не пройдена» — окно открыто, поэтому отрицание перед словом отменяет «закрыто».
+const WINDOW_DONE = /(?<!не\s+)(заполнен|пройден|заверш|закрыт)/i;
 
 const nonEmpty = (parts: Array<string | null | undefined>): string | undefined => {
   const joined = parts.filter((p): p is string => !!p && p.trim() !== "").join(", ");
@@ -129,11 +130,14 @@ export function pickDeadlineEvents(
 async function lmsDeadlines(args: { range: DateRange; now: Date; courses?: CourseFilter }): Promise<CollectorResult> {
   const { range, now, courses } = args;
   const lookback = addDays(startOfDay(now), -OVERDUE_LOOKBACK_DAYS);
-  // Две независимые выборки — параллельно, лимитер сам ставит страницы в очередь.
-  const [allCourses, events] = await Promise.all([lms.listCourses(), lms.listActionEvents(lookback, range.to)]);
+  // Две независимые выборки — параллельно (открытия страниц всё равно сериализует loginLock).
+  const [allCourses, calendar] = await Promise.all([lms.listCourses(), lms.listActionEvents(lookback, range.to)]);
   const candidates = selectCourses(allCourses, courses, now, { includeEnded: true });
   return {
-    items: pickDeadlineEvents(events, candidates, now).map((e) => actionEventToItem(e)),
+    items: pickDeadlineEvents(calendar.events, candidates, now).map((e) => actionEventToItem(e)),
+    ...(calendar.truncated
+      ? { warnings: ["календарь LMS усечён по лимиту событий — самые поздние дедлайны могут отсутствовать"] }
+      : {}),
   };
 }
 
@@ -147,7 +151,7 @@ async function lmsMessages(): Promise<CollectorResult> {
         when: null,
         received: toLocalIso(new Date(m.time)),
         title: m.subject,
-        course: m.course,
+        ...(m.course ? { course: m.course } : {}),
         source: "lms_messages",
         unread: true,
         raw: { sender: m.sender, attachments: m.numAttachments },

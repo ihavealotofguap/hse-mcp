@@ -3,7 +3,7 @@ import { endOfDay, sortItems, startOfDay, toLocalIso } from "./parse.js";
 import { realCollectors, type Collectors } from "./sources.js";
 import type { CollectorResult, CourseFilter, DateRange, DigestItem, DigestResult, SourceStatus } from "./types.js";
 
-// холодный процесс (первая страница ~8 с + последовательные страницы) укладывается в ~20 с, запас до 40 с.
+// холодный процесс (первая страница ~8 с + последовательные страницы) занимает 17–25 с (замер 2026-10-14), запас до 40 с.
 const DEFAULT_SOURCE_TIMEOUT_MS = 40_000;
 
 export interface DigestPlan {

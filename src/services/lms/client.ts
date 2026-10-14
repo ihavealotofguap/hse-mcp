@@ -183,6 +183,12 @@ export interface LmsActionEvent {
 const CALENDAR_PAGE_SIZE = 50;
 const CALENDAR_MAX_PAGES = 6;
 
+export interface LmsActionEventsResult {
+  events: LmsActionEvent[];
+  /** Выборка упёрлась в потолок страниц: события идут по возрастанию даты, значит, отсечены самые поздние. */
+  truncated: boolean;
+}
+
 /**
  * События календаря Moodle «нужно действие» (сдать задание, пройти тест) за период — один
  * AJAX-запрос вместо обхода страницы заданий каждого курса; тот же сервис, что питает блок
@@ -190,15 +196,16 @@ const CALENDAR_MAX_PAGES = 6;
  * просроченное несданное приходит с `overdue: true` и `actionable: false` (сдача закрыта) —
  * поэтому по `actionable` фильтровать нельзя. Ключ кэша дневной гранулярности.
  */
-export function listActionEvents(from: Date, to: Date): Promise<LmsActionEvent[]> {
+export function listActionEvents(from: Date, to: Date): Promise<LmsActionEventsResult> {
   const key = `lms:calendar:${formatLocalDate(from, "-")}:${formatLocalDate(to, "-")}`;
   return cached(key, TTL.medium, () => listActionEventsUncached(from, to));
 }
 
-async function listActionEventsUncached(from: Date, to: Date): Promise<LmsActionEvent[]> {
+async function listActionEventsUncached(from: Date, to: Date): Promise<LmsActionEventsResult> {
   const page = await openAuthenticatedPage(AJAX_HOST_URL);
   try {
     const events: LmsActionEvent[] = [];
+    let truncated = false;
     let afterEventId = 0;
     for (let i = 0; i < CALENDAR_MAX_PAGES; i++) {
       const data = await fetchMoodleAjax<{ events: RawActionEvent[]; lastid?: number }>(
@@ -227,9 +234,10 @@ async function listActionEventsUncached(from: Date, to: Date): Promise<LmsAction
         });
       }
       if (data.events.length < CALENDAR_PAGE_SIZE || !data.lastid) break;
+      if (i === CALENDAR_MAX_PAGES - 1) truncated = true;
       afterEventId = data.lastid;
     }
-    return events;
+    return { events, truncated };
   } finally {
     await page.close();
   }
