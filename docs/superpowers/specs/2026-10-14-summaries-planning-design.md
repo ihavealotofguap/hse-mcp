@@ -33,18 +33,21 @@
 
 ## 4. Архитектура
 
-Новый сервис `src/services/digest/` по образцу остальных (`client.ts` + `tools.ts`), плюс два
+Новый сервис `src/services/digest/` по образцу остальных (`client.ts` + `tools.ts`), плюс три
 вспомогательных файла. Подключается в `src/index.ts` вызовом `registerDigestTools(server)`.
 
 | Файл | Назначение | Зависимости |
 |---|---|---|
 | `types.ts` | `DigestItem`, `SourceStatus`, `DigestResult` | — |
-| `sources.ts` | По одному коллектору на источник; каждый возвращает `DigestItem[]`; не знает про MCP | клиенты `elk`/`lms`/`ruz`, `date-utils.ts` |
-| `client.ts` | `getToday()`, `getWeek()`, `getDeadlines({ days, courses })`: запуск коллекторов, слияние, сортировка, `sources` | `sources.ts` |
+| `parse.ts` | Чистые вспомогательные функции: даты и время, сортировка, определение экзамена, выбор курсов | — |
+| `sources.ts` | По одному коллектору на источник; каждый возвращает `DigestItem[]`; не знает про MCP | клиенты `elk`/`lms`/`ruz`, `parse.ts` |
+| `client.ts` | `getToday()`, `getWeek()`, `getDeadlines({ days, courses })`: запуск коллекторов, слияние, сортировка, `sources` | `sources.ts`, `parse.ts` |
 | `tools.ts` | `registerDigestTools(server)`: тулы `my_today`, `my_week`, `my_deadlines`, zod-схемы, `runTool()` | `client.ts`, `mcp-utils.ts` |
 
-Агрегаторы вызывают **клиентские функции**, не MCP-тулы. Существующий код сервисов не меняется,
-кроме возможного экспорта вспомогательной функции для календарного вызова Moodle (см. §6).
+Агрегаторы вызывают **клиентские функции**, не MCP-тулы. Существующий код сервисов почти не
+менялся: в `src/services/lms/client.ts` экспортирован `fetchMoodleAjax`, добавлены
+`listActionEvents` и `AJAX_HOST_URL`, а `listCourses` переведён на лёгкую страницу-хозяина AJAX
+(см. §7).
 
 ## 5. Модель данных
 
@@ -101,7 +104,7 @@ interface DigestResult {
 
 | Имя | Вызывает | Даёт |
 |---|---|---|
-| `elk_schedule` | `elk.getSchedule(from, to)` | `lesson`/`exam`. Экзамен — `lesson_type` совпал с `/экзамен\|зач[её]т\|коллоквиум/i`. Время: `day.date` + `begin_time`/`end_time` |
+| `elk_schedule` | `elk.getSchedule(from, to)` | `lesson`/`exam`. Экзамен — `lesson_type` совпал с `/экзамен\|зач[её]т\|коллоквиум\|exam/i` и не содержит «консультац» («консультация перед экзаменом» — обычное занятие). Время: `day.date` + `begin_time`/`end_time` |
 | `ruz_schedule` | `ruz.getStudentInfo(config.hseEmail)` → `ruz.getSchedule` | Только если `elk_schedule` завершился ошибкой; в остальных случаях `status: "skipped"`. Не кэшируется |
 | `lms_deadlines` | см. §7 | `assignment` / `lms_activity` |
 | `lms_messages` | `lms.listMessages(50)` | `lms_message`, только `unread === true` |
@@ -122,7 +125,9 @@ interface DigestResult {
 
 Единственная реализация — **календарь Moodle**: `lms.listActionEvents(from, to)` вызывает
 `core_calendar_get_action_events_by_timesort` через AJAX-сервис Moodle (авторизация по sesskey, как
-у `lms_list_courses`/`lms_list_messages`) одним вызовом на все курсы, постранично по 50 событий.
+у `lms_list_courses`/`lms_list_messages`) одним запросом на все курсы, постранично по 50 событий, не более 6 страниц (300 событий)
+за вызов (`CALENDAR_MAX_PAGES`): сверх этого результат молча усекается — события идут по
+возрастанию времени, то есть отрезаются самые поздние.
 Запасной обход таблиц курсов (`lms.listAssignments`) **не реализуется**: календарь подтверждён
 живьём, а разбор русских дат в таблицах не понадобился (первоначальный черновик предполагал две
 реализации).
@@ -161,7 +166,7 @@ LMS-источникам; расписание, окна СОП и осталь�
   `Promise.allSettled`); падение или таймаут одного даёт `sources[<имя>] = { status: "error",
   error, ms }`, остальные элементы возвращаются. Нефатальные замечания — в `warnings`.
 - Таймаут источника — 40 с по умолчанию, настраивается `DigestPlan.sourceTimeoutMs`. (Черновик
-  предполагал вдвое меньше; холодному процессу нужно ≈ 17–24 с: первая страница процесса ≈ 8 с разово
+  предполагал вдвое меньше; холодному процессу нужно ≈ 17 с (в отдельных прогонах до ≈ 24 с): первая страница процесса ≈ 8 с разово
   плюс последовательное открытие страниц.) Цепочка «ЕЛК → РУЗ» последовательна, поэтому при
   зависании обоих источников ожидание может достичь ≈ 80 с — выше типичного таймаута MCP-клиента
   (≈ 60 с). Известно, маловероятно, отложено.
@@ -215,7 +220,7 @@ LMS-источникам; расписание, окна СОП и осталь�
 timesortto, aftereventid, limitnum: 50, limittononsuspendedevents }`. Ответ: `{ events: [...],
 firstid, lastid }`. Поля события: `id, name, modulename, activityname, instance, eventtype,
 timesort, timestart, overdue (boolean), isactionevent, viewurl, url, course {id, fullname, ...},
-action {name, actionable, url, ...}` и др.; `timesort` — unix-секунды. Календарь — основной
+action {name, actionable, url, ...}` и др.; `timesort` — unix-секунды. Календарь — единственный
 источник дедлайнов LMS (§7).
 
 **Семантика «просроченных».**

@@ -1,5 +1,7 @@
 # Сводки и планирование (`my_today` / `my_week` / `my_deadlines`) — план реализации
 
+*Исторический документ: план писался до живых замеров; итоговое поведение (календарь без fallback, таймаут 40 с, просроченные видны всегда) — в спецификации.*
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Три read-only тула-агрегатора, отдающие единый JSON-список элементов (занятия, дедлайны **включая просроченные несданные**, входящие) с явным статусом каждого источника.
