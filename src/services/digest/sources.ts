@@ -128,9 +128,10 @@ export function pickDeadlineEvents(
 
 async function lmsDeadlines(args: { range: DateRange; now: Date; courses?: CourseFilter }): Promise<CollectorResult> {
   const { range, now, courses } = args;
-  const candidates = selectCourses(await lms.listCourses(), courses, now, { includeEnded: true });
   const lookback = addDays(startOfDay(now), -OVERDUE_LOOKBACK_DAYS);
-  const events = await lms.listActionEvents(lookback, range.to);
+  // Две независимые выборки — параллельно, лимитер сам ставит страницы в очередь.
+  const [allCourses, events] = await Promise.all([lms.listCourses(), lms.listActionEvents(lookback, range.to)]);
+  const candidates = selectCourses(allCourses, courses, now, { includeEnded: true });
   return {
     items: pickDeadlineEvents(events, candidates, now).map((e) => actionEventToItem(e)),
   };
