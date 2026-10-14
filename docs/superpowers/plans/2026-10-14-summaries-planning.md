@@ -1308,7 +1308,8 @@ const lesson = (title, h) => ({ kind: "lesson", when: iso(14, h), title, source:
   const r = await buildDigest(basePlan(), all);
   assert.deepEqual(r.items, []);
   assert.ok(Object.values(r.sources).every((s) => s.status === "error"));
-  assert.equal(Object.keys(r.sources).length, 7);
+  // elk_schedule, ruz_schedule, lms_deadlines, elk_windows, lms_messages, elk_notifications, elk_claims, elk_tasks
+  assert.equal(Object.keys(r.sources).length, 8);
 }
 
 // 4 (Review Focus 5). Зависший источник → таймаут, остальные отдаются
