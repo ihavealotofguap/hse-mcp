@@ -2,13 +2,37 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Три read-only тула-агрегатора, отдающие единый JSON-список элементов (занятия, дедлайны, входящие) с явным статусом каждого источника.
+**Goal:** Три read-only тула-агрегатора, отдающие единый JSON-список элементов (занятия, дедлайны **включая просроченные несданные**, входящие) с явным статусом каждого источника.
 
-**Architecture:** Новый сервис `src/services/digest/`: чистые функции разбора (`parse.ts`), коллекторы по источникам (`sources.ts`), сборка с частичными отказами и внедряемыми коллекторами (`client.ts`), MCP-обёртки (`tools.ts`). Агрегаторы вызывают клиентские функции `elk`/`lms`/`ruz`, не MCP-тулы. Дедлайны LMS берутся из календаря Moodle одним AJAX-запросом, при его отказе — обходом курсов.
+**Architecture:** Новый сервис `src/services/digest/`: чистые функции разбора (`parse.ts`), коллекторы по источникам (`sources.ts`), сборка с частичными отказами и внедряемыми коллекторами (`client.ts`), MCP-обёртки (`tools.ts`). Агрегаторы вызывают клиентские функции `elk`/`lms`/`ruz`, не MCP-тулы. Дедлайны LMS берутся из календаря Moodle одним AJAX-запросом (работоспособность подтверждена живым зондированием 2026-10-14, см. ниже); обход таблиц заданий по курсам не реализуется.
 
 **Tech Stack:** TypeScript (ESM, NodeNext), `@modelcontextprotocol/sdk`, `zod`, Playwright (через существующий `openAuthenticatedPage`).
 
-**Spec:** `docs/superpowers/specs/2026-10-14-summaries-planning-design.md`. Изменения к ней, возникшие при проработке плана, перечислены в Task 8 и вносятся в спецификацию там же.
+**Spec:** `docs/superpowers/specs/2026-10-14-summaries-planning-design.md`. Изменения к ней, возникшие при проработке плана и зондировании, перечислены в Task 8 и вносятся в спецификацию там же.
+
+## Результаты живого зондирования (2026-10-14, реальный аккаунт)
+
+Исполнитель этого плана их не видел — они здесь, чтобы опираться на факты, а не на допущения.
+
+**Календарь Moodle** — `core_calendar_get_action_events_by_timesort` через `fetchMoodleAjax` на `edu.hse.ru` **работает** (HTTP 200, без `error`). Аргументы, которые сработали: `{ timesortfrom, timesortto, aftereventid, limitnum: 50, limittononsuspendedevents }`. Ответ: `{ events: [...], firstid, lastid }`. Поля события: `id, name, modulename, activityname, instance, eventtype, timesort, timestart, overdue (boolean), isactionevent, viewurl, url, course {id, fullname, ...}, action {name, actionable, url, ...}` и др. `timesort` — unix-секунды.
+
+**Семантика для «просроченных»** (ключевое):
+- Сданное задание в календарь **не попадает вообще** (задание «Отправлено для оценивания» за 25 сентября в ответе отсутствует, хотя окно захватывало год назад).
+- Просроченное и несданное приходит с `overdue: true` **и `action.actionable: false`** (сдача уже закрыта). Поэтому фильтр по `actionable` **запрещён**: он спрятал бы ровно то, что пользователь хочет видеть.
+- Будущий тест до открытия имеет `actionable: false` и `overdue: false` — тоже остаётся в списке.
+- Модули в ответе: `assign`, `quiz`.
+
+**Таблица заданий** (`lms_list_assignments`): колонки `["Секция","Задания","Последний срок сдачи","Ответ","Оценка"]`; срок — «понедельник, 5 октября 2026, 23:59»; статусы «Ответ не представлен», «Нет ответа на задание», «Отправлено для оценивания»; строка-разделитель секции приходит как `[""]`. Нужна только для справки: в коде не используется.
+
+**Курсы:** 19 видимых, у 14 есть `enddate`, завершённых нет; все курсы с событиями проходят правило «актуальный».
+
+**Расписание ЕЛК** (`get-myschedule`): `date` = `"2026-10-14"`, `begin_time`/`end_time` = `"13:00"`/`"14:20"`; поля занятия: `auditorium, building, name, lesson_type, lesson_type_id, begin_time, end_time, lecturer, lesson_number, parent_schedule, url1, url1_description, url2, url2_description`. Значения `lesson_type`: «Проведение семинаров (студенты)», «Лекция», «Проведение практических занятий (студенты)», «Научно-исследовательский семинар» — экзаменов в окне не встретилось, их точное написание не подтверждено.
+
+**СОП** (`getCourseEvaluationStatus`): колонки `["#","Период","Дата начала","Дата окончания","Статус"]`; даты вида `"23:59 25.10.2026 по московскому времени"` (**время перед датой**); статус «Анкета доступна».
+
+**Форматы дат:** уведомления ЕЛК — `"2026-09-17"`; заявки (`updated`) — `"2026-09-17T09:58:51+03:00"` (с зоной); задачи ЕЛК — `count: 0`, форма не подтверждена.
+
+**Побочное наблюдение:** при каждом запуске `openAuthenticatedPage("https://edu.hse.ru/my/courses.php")` печатает в stderr «страница … не отрендерилась за таймаут при проверке логина», хотя данные приходят. Существующее поведение, не часть этого плана; зафиксировать в PROGRESS.md как наблюдение (Task 8).
 
 ## Global Constraints
 
@@ -18,33 +42,33 @@
 - Страницы открывать только через `openAuthenticatedPage` (внутри клиентских функций); не держать несколько страниц в одном вызове. Лимитер: 3 одновременных, ≥300 мс между открытиями.
 - RUZ не кэшируется; агрегат сам не кэшируется.
 - Не копировать `.env` и `storage/` в воркtree. `.env` лежит в `C:\Users\alexk\hsemcp\.env`; скрипты читают из него только `HSE_EMAIL`/`HSE_PASSWORD` в `process.env`, ничего не печатают.
-- В вывод скриптов не попадают токены, пароли, ФИО, email. Письма и их отправители не печатаются.
+- В вывод скриптов не попадают токены, пароли, ФИО, email. Письма и их отправители не печатаются; в текстах ошибок email маскируется.
 - Комментарии и документация — по-русски, в стиле окружающего кода. Время — локальное (как `src/date-utils.ts`), ISO со смещением.
 - Коммиты — с трейлером `Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>`.
 - Рабочий каталог: `C:\Users\alexk\hsemcp\.claude\worktrees\update` (ветка `worktree-update`).
-- Scratchpad: `C:/Users/alexk/AppData/Local/Temp/claude/C--Users-alexk-hsemcp/485276c7-15d8-4d67-b960-d3782532e1c8/scratchpad` (далее `$SP`).
+- Scratchpad: `C:/Users/alexk/AppData/Local/Temp/claude/C--Users-alexk-hsemcp/485276c7-15d8-4d67-b960-d3782532e1c8/scratchpad` (далее `$SP`). Там уже лежат `common.mjs`, `probe.mjs`, `probe2.mjs`, `probe3.mjs`.
 
 ## Review Focus
 
 Входы и отказы, которые спецификация подразумевает, но которые легко сломать; каждый пин закреплён за задачей-владельцем.
 
-1. **Дата без времени** в таблице LMS («15 октября 2026») → срок = конец дня 23:59, а не 00:00 (иначе задание «просрочено» с утра в день сдачи). Task 2.
-2. **Статус «Не отправлено» не считается сданным** (подстрока «отправлено»); «Отправлено для оценивания» — сдано. Task 2.
+1. **Просроченное несданное задание не пропадает**, даже если сдача закрыта (`overdue: true`, `actionable: false`); фильтра по `actionable` нет. Task 4 (`check-sources`) и Task 7 (живая проверка).
+2. **Дата без времени** («15 октября 2026») → срок = конец дня 23:59, а не 00:00; **время перед датой** в СОП («23:59 25.10.2026») читается правильно; ISO с зоной (`+03:00`) не сдвигается на зону машины. Task 2.
 3. **Ночь 00:00–02:59 по МСК:** границы «сегодня» считаются по локальным компонентам, не по UTC. Task 2.
-4. **Фильтр `courses`, не нашедший ни одного курса** → ошибка источника со списком доступных курсов, а не тихий пустой результат; скрытые/завершённые курсы по умолчанию не обходятся. Task 2.
+4. **Фильтр `courses`, не нашедший ни одного курса** → ошибка источника со списком доступных курсов, а не тихий пустой результат; скрытые/завершённые курсы по умолчанию не попадают. Task 2.
 5. **Все источники упали / завис один** → `DigestResult` с пустым `items` и ошибками в `sources`, без исключения; завис — по таймауту, остальные источники отдаются. Task 5.
 
 ---
 
-## Task 1: Базовая линия, экспорт `fetchMoodleAjax`, живое зондирование
+## Task 1: Экспорт `fetchMoodleAjax` и запись результатов зондирования в спецификацию
 
 **Files:**
 - Modify: `src/services/lms/client.ts:35` (добавить `export`)
-- Create (вне репозитория): `$SP/common.mjs`, `$SP/probe.mjs`
-- Modify: `docs/superpowers/specs/2026-10-14-summaries-planning-design.md` (§13: результаты зондирования)
+- Modify: `docs/superpowers/specs/2026-10-14-summaries-planning-design.md` (§13)
+- Проверить наличие вне репозитория: `$SP/common.mjs` (создаётся ниже, если его нет)
 
 **Interfaces:**
-- Produces: `fetchMoodleAjax<T>(page: Page, methodname: string, args: Record<string, unknown>): Promise<T>` экспортируется из `src/services/lms/client.ts`; `$SP/common.mjs` экспортирует `WT`, `dist(relPath)`, `loadEnv()`, `shape(value)`.
+- Produces: `fetchMoodleAjax<T>(page: Page, methodname: string, args: Record<string, unknown>): Promise<T>` экспортируется из `src/services/lms/client.ts`; `$SP/common.mjs` экспортирует `WT`, `dist(relPath)`, `loadEnv()`, `shape(value)`, `trunc(value, n)`.
 
 - [ ] **Step 1: Проверить базовую сборку**
 
@@ -60,7 +84,7 @@ Expected: без ошибок (node_modules резолвятся из `C:\Users\
 Run: `npm run build`
 Expected: без ошибок.
 
-- [ ] **Step 4: Создать `$SP/common.mjs`**
+- [ ] **Step 4: Убедиться, что `$SP/common.mjs` существует; иначе создать**
 
 ```js
 import fs from "node:fs";
@@ -89,104 +113,15 @@ export function shape(v, depth = 0) {
   }
   return v === null ? "null" : typeof v;
 }
+
+export const trunc = (s, n = 70) => String(s ?? "").replace(/\s+/g, " ").slice(0, n);
 ```
 
-- [ ] **Step 5: Создать `$SP/probe.mjs`**
+- [ ] **Step 5: Заменить §13 спецификации результатами зондирования**
 
-```js
-import { dist, loadEnv, shape } from "./common.mjs";
-loadEnv();
+Секцию «13. Открытые вопросы реализации» заменить на «13. Результаты живого зондирования (2026-10-14)» с содержанием раздела «Результаты живого зондирования» этого плана (календарь работает; семантика `overdue`/`actionable`; сданное не возвращается; форматы расписания, СОП, дат; что осталось не подтверждено: точное написание `lesson_type` экзаменов, форма задачи ЕЛК). Только форма и форматы, без персональных данных.
 
-const { openAuthenticatedPage, closeBrowserSession } = await dist("auth/browser-session.js");
-const lms = await dist("services/lms/client.js");
-const elk = await dist("services/elk/client.js");
-const trunc = (s, n = 70) => String(s).replace(/\s+/g, " ").slice(0, n);
-
-async function step(name, fn) {
-  try { await fn(); } catch (e) { console.log(`[${name}] ОШИБКА: ${trunc(e.message, 200)}`); }
-}
-
-// 1. Календарь Moodle
-await step("calendar", async () => {
-  const page = await openAuthenticatedPage("https://edu.hse.ru/my/courses.php");
-  try {
-    const now = Math.floor(Date.now() / 1000);
-    const data = await lms.fetchMoodleAjax(page, "core_calendar_get_action_events_by_timesort", {
-      timesortfrom: now - 60 * 86400, timesortto: now + 30 * 86400,
-      aftereventid: 0, limitnum: 50, limittononsuspendedevents: true,
-    });
-    console.log("[calendar] shape:", shape(data));
-    const ev = data.events ?? [];
-    console.log("[calendar] events:", ev.length, "lastid:", data.lastid);
-    const count = (f) => ev.reduce((m, e) => ((m[f(e)] = (m[f(e)] ?? 0) + 1), m), {});
-    console.log("[calendar] modulename:", JSON.stringify(count((e) => e.modulename)));
-    console.log("[calendar] actionable:", JSON.stringify(count((e) => String(e.action?.actionable))));
-    console.log("[calendar] overdue-флаг:", JSON.stringify(count((e) => String(e.overdue))));
-    console.log("[calendar] timesort sample:", ev[0]?.timesort, typeof ev[0]?.timesort);
-  } finally { await page.close(); }
-});
-
-// 2. Формат расписания ЕЛК
-await step("elk_schedule", async () => {
-  const days = await elk.getSchedule(new Date(), new Date(Date.now() + 7 * 86400_000));
-  console.log("[schedule] days:", days.length, "shape:", shape(days[0]));
-  const d = days.find((x) => x.lessons?.length);
-  if (d) {
-    const l = d.lessons[0];
-    console.log("[schedule] date:", JSON.stringify(d.date), "begin:", JSON.stringify(l.begin_time), "end:", JSON.stringify(l.end_time));
-    const types = {};
-    for (const x of days) for (const y of x.lessons ?? []) types[y.lesson_type] = (types[y.lesson_type] ?? 0) + 1;
-    console.log("[schedule] lesson_type:", JSON.stringify(types));
-  }
-});
-
-// 3. Строки СОП
-await step("sop", async () => {
-  const rows = await elk.getCourseEvaluationStatus();
-  console.log("[sop] rows:", rows.length, "keys:", JSON.stringify(Object.keys(rows[0] ?? {})));
-  for (const r of rows.slice(0, 3)) console.log("[sop] row:", JSON.stringify(Object.values(r).map((v) => trunc(v))));
-});
-
-// 4. Таблица заданий (запасной путь) на первых двух актуальных курсах
-await step("assignments", async () => {
-  const courses = (await lms.listCourses()).filter((c) => c.visible && !c.hidden).slice(0, 2);
-  for (const c of courses) {
-    const rows = await lms.listAssignments(c.id);
-    console.log(`[assign] course ${c.id}: rows=${rows.length} keys=${JSON.stringify(Object.keys(rows[0] ?? {}))}`);
-    for (const r of rows.slice(0, 3)) console.log("[assign] row:", JSON.stringify(Object.values(r).map((v) => trunc(v, 50))));
-  }
-});
-
-// 5. Формат дат уведомлений и заявок (только строки дат)
-await step("dates", async () => {
-  const n = await elk.getNotifications(3);
-  console.log("[notif] date samples:", JSON.stringify(n.notifications.map((x) => x.date)));
-  const c = await elk.listRequests(3);
-  console.log("[claims] updated samples:", JSON.stringify(c.requests.map((x) => x.updated)));
-});
-
-await closeBrowserSession();
-```
-
-- [ ] **Step 6: Запустить зондирование**
-
-Run: `node $SP/probe.mjs`
-Expected: пять блоков `[calendar]`, `[schedule]`, `[sop]`, `[assign]`, `[notif]/[claims]`. Блок с `ОШИБКА` — тоже результат, его надо записать.
-
-Если `[calendar]` вернул ошибку «метод недоступен» — найти реальный метод таймлайна дашборда: через playwright-плагин открыть `https://edu.hse.ru/my/`, `browser_network_requests`, отфильтровать `lib/ajax/service.php?...info=<method>`; подставить найденное имя метода и форму аргументов в `$SP/probe.mjs` и повторить. Если дашборд ничего подходящего не вызывает — запасной путь (по курсам) становится основным, это допустимый исход.
-
-- [ ] **Step 7: Записать результаты в спецификацию §13**
-
-Заменить в §13 каждый пункт «Открытые вопросы» фактическим ответом: работает ли календарный метод (имя метода, доли `actionable`, есть ли поле `overdue`), форма `date`/`begin_time`/`end_time` расписания ЕЛК, ключи и значения строк СОП, ключи колонок таблицы заданий и вид текста даты и статуса, форматы дат уведомлений/заявок. Только форма и формат, без персональных данных.
-
-- [ ] **Step 8: Сверить допущения плана с результатами**
-
-Если результаты расходятся с допущениями, зафиксированными в Task 2/4, — внести правку в соответствующие шаги плана **до** их выполнения. Допущения:
-- календарный метод `core_calendar_get_action_events_by_timesort`, поля `name`, `modulename`, `timesort`, `course.{id,fullname}`, `action.{name,actionable,url}`, `url`, ответ `{events, lastid}`;
-- `day.date` расписания ЕЛК — дата, `begin_time`/`end_time` — `HH:MM` или полная дата-время;
-- колонки таблицы заданий: срок — `/срок|due/i`, статус — `/статус|отправл|submi/i`, название — `/назван|name|assign|задани/i`.
-
-- [ ] **Step 9: Commit**
+- [ ] **Step 6: Commit**
 
 ```bash
 git add src/services/lms/client.ts docs/superpowers/specs/2026-10-14-summaries-planning-design.md
@@ -208,13 +143,13 @@ EOF
 
 **Interfaces:**
 - Consumes: `CourseOverview` из `src/services/lms/client.ts` (поля `id`, `fullname`, `shortname`, `enddate: string | null`, `visible`, `hidden`).
-- Produces (все экспортируются из `types.ts` / `parse.ts`):
+- Produces (экспортируется из `types.ts` / `parse.ts`):
   - `ItemKind`, `DigestItem`, `SourceStatus`, `DigestResult`, `CollectorResult`, `DateRange`, `CourseFilter`
   - `scanDates(text: string, opts?: { endOfDayIfNoTime?: boolean }): Date[]`
   - `parseDateTime(text: string, opts?: { endOfDayIfNoTime?: boolean }): Date | null`
   - `combineDateAndTime(dateText: string, timeText: string | null | undefined): Date | null`
   - `toLocalIso(d: Date): string`, `startOfDay(d: Date): Date`, `endOfDay(d: Date): Date`
-  - `isExamType(lessonType: string | undefined): boolean`, `isSubmitted(status: string | undefined): boolean`
+  - `isExamType(lessonType: string | undefined): boolean`
   - `sortItems(items: DigestItem[]): DigestItem[]`
   - `selectCourses(all: CourseOverview[], filter: CourseFilter | undefined, now: Date): CourseOverview[]`
 
@@ -249,7 +184,7 @@ export interface DigestItem {
   place?: string;
   /** Имя коллектора: elk_schedule, ruz_schedule, lms_deadlines, ... */
   source: string;
-  /** true только для элементов со сроком в прошлом и без сдачи. */
+  /** true только для просроченных и несданных работ (в т.ч. когда сдача уже закрыта). */
   overdue?: boolean;
   unread?: boolean;
   /** isImportant уведомления ЕЛК. */
@@ -262,7 +197,7 @@ export interface DigestItem {
 export interface SourceStatus {
   status: "ok" | "error" | "skipped";
   error?: string;
-  /** Нефатальные замечания: напр. «календарь Moodle недоступен, использован обход курсов». */
+  /** Нефатальные замечания источника. */
   warnings?: string[];
   ms: number;
 }
@@ -302,33 +237,59 @@ const MONTHS: Record<string, number> = {
   july: 6, august: 7, september: 8, october: 9, november: 10, december: 11,
 };
 
-// Необязательная часть «время»: «23:59», «в 23:59», «T10:30:00», «11:59 pm». Группы 4–6.
+// Необязательное время после даты: «23:59», «в 23:59», «T10:30:00», «11:59 pm». Группы 4–6.
 const TIME = String.raw`(?:(?:[,\s]+|T)(?:в\s+)?(\d{1,2}):(\d{2})(?::\d{2})?(?:\s*([ap]m))?)?`;
 
 type Ymd = [year: number, month: number, day: number];
 
-const PATTERNS: Array<{ re: RegExp; read: (m: RegExpMatchArray) => Ymd | null }> = [
+interface Hit {
+  ymd: Ymd;
+  hours?: number;
+  minutes?: number;
+  meridiem?: string;
+}
+
+const timeAfter = (m: RegExpMatchArray): Partial<Hit> =>
+  m[4] !== undefined ? { hours: +m[4], minutes: +m[5], meridiem: m[6] } : {};
+
+const PATTERNS: Array<{ re: RegExp; read: (m: RegExpMatchArray) => Hit | null }> = [
   // 2026-10-14, 2026.10.14 (формат РУЗ), 2026-10-14T10:30:00
-  { re: new RegExp(String.raw`(\d{4})[-.](\d{1,2})[-.](\d{1,2})` + TIME, "gi"), read: (m) => [+m[1], +m[2] - 1, +m[3]] },
-  // 14.10.2026
-  { re: new RegExp(String.raw`(\d{1,2})\.(\d{1,2})\.(\d{4})` + TIME, "gi"), read: (m) => [+m[3], +m[2] - 1, +m[1]] },
-  // 15 октября 2026 [г.], 15 October 2026 (перед датой может стоять день недели — он игнорируется)
+  {
+    re: new RegExp(String.raw`(\d{4})[-.](\d{1,2})[-.](\d{1,2})` + TIME, "gi"),
+    read: (m) => ({ ymd: [+m[1], +m[2] - 1, +m[3]], ...timeAfter(m) }),
+  },
+  // 14.10.2026 [10:30]
+  {
+    re: new RegExp(String.raw`(\d{1,2})\.(\d{1,2})\.(\d{4})` + TIME, "gi"),
+    read: (m) => ({ ymd: [+m[3], +m[2] - 1, +m[1]], ...timeAfter(m) }),
+  },
+  // 15 октября 2026 [г.] [23:59], 15 October 2026 (день недели перед датой игнорируется)
   {
     re: new RegExp(String.raw`(\d{1,2})\s+([a-zа-яё]+)\.?\s+(\d{4})(?:\s*г\.?)?` + TIME, "gi"),
     read: (m) => {
       const month = MONTHS[m[2].toLowerCase()];
-      return month === undefined ? null : [+m[3], month, +m[1]];
+      return month === undefined ? null : { ymd: [+m[3], month, +m[1]], ...timeAfter(m) };
     },
+  },
+  // «23:59 25.10.2026 по московскому времени» (формат окон СОП в ЕЛК): время ПЕРЕД датой
+  {
+    re: /(\d{1,2}):(\d{2})\s+(\d{1,2})\.(\d{1,2})\.(\d{4})/gi,
+    read: (m) => ({ ymd: [+m[5], +m[4] - 1, +m[3]], hours: +m[1], minutes: +m[2] }),
   },
 ];
 
-function toDate(m: RegExpMatchArray, [y, mo, d]: Ymd, endOfDayIfNoTime: boolean): Date | null {
+// Полный ISO с явной зоной (`2026-09-17T09:58:51+03:00`, `...Z`) разбирается движком и не
+// переинтерпретируется в локальной зоне машины.
+const ISO_WITH_ZONE = /^\s*\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})\s*$/i;
+
+function toDate(hit: Hit, endOfDayIfNoTime: boolean): Date | null {
+  const [y, mo, d] = hit.ymd;
   let hours = 0;
   let minutes = 0;
-  if (m[4] !== undefined) {
-    hours = +m[4];
-    minutes = +m[5];
-    const meridiem = m[6]?.toLowerCase();
+  if (hit.hours !== undefined) {
+    hours = hit.hours;
+    minutes = hit.minutes ?? 0;
+    const meridiem = hit.meridiem?.toLowerCase();
     if (meridiem === "pm" && hours < 12) hours += 12;
     if (meridiem === "am" && hours === 12) hours = 0;
   } else if (endOfDayIfNoTime) {
@@ -348,9 +309,9 @@ export function scanDates(text: string, opts: { endOfDayIfNoTime?: boolean } = {
   const found: Array<{ index: number; end: number; date: Date }> = [];
   for (const { re, read } of PATTERNS) {
     for (const m of normalized.matchAll(re)) {
-      const ymd = read(m);
-      if (!ymd) continue;
-      const date = toDate(m, ymd, opts.endOfDayIfNoTime ?? false);
+      const hit = read(m);
+      if (!hit) continue;
+      const date = toDate(hit, opts.endOfDayIfNoTime ?? false);
       if (!date) continue;
       const index = m.index ?? 0;
       found.push({ index, end: index + m[0].length, date });
@@ -369,6 +330,10 @@ export function scanDates(text: string, opts: { endOfDayIfNoTime?: boolean } = {
 }
 
 export function parseDateTime(text: string, opts?: { endOfDayIfNoTime?: boolean }): Date | null {
+  if (ISO_WITH_ZONE.test(text)) {
+    const t = Date.parse(text.trim());
+    if (!Number.isNaN(t)) return new Date(t);
+  }
   return scanDates(text, opts)[0] ?? null;
 }
 
@@ -404,20 +369,9 @@ export function toLocalIso(d: Date): string {
 export const startOfDay = (d: Date): Date => new Date(d.getFullYear(), d.getMonth(), d.getDate(), 0, 0, 0, 0);
 export const endOfDay = (d: Date): Date => new Date(d.getFullYear(), d.getMonth(), d.getDate(), 23, 59, 59, 999);
 
+/** Экзамен/зачёт по типу занятия; «консультация к экзамену» экзаменом не считается. */
 export function isExamType(lessonType: string | undefined): boolean {
-  return !!lessonType && /экзамен|зач[её]т|коллоквиум|exam/i.test(lessonType);
-}
-
-// «Не отправлено» содержит подстроку «отправлено», «not submitted» — «submitted», поэтому
-// отрицания проверяются первыми.
-const NOT_SUBMITTED = /не\s+отправлен|нет\s+попыт|не\s+сдан|no\s+submission|no\s+attempt|not\s+submitted|draft|черновик/i;
-const SUBMITTED = /отправлен[оа]?\s+для\s+оцени|сдан|оценен|submitted\s+for\s+grading|graded|submitted/i;
-
-/** Есть ли в тексте статуса сдачи признак «работа сдана». Пустой/неизвестный статус — не сдано. */
-export function isSubmitted(status: string | undefined): boolean {
-  if (!status) return false;
-  if (NOT_SUBMITTED.test(status)) return false;
-  return SUBMITTED.test(status);
+  return !!lessonType && /экзамен|зач[её]т|коллоквиум|exam/i.test(lessonType) && !/консультац/i.test(lessonType);
 }
 
 /** Просроченные первыми, затем по времени, затем элементы без даты. Стабильная. */
@@ -467,29 +421,38 @@ const p = await dist("services/digest/parse.js");
 
 const ymdhm = (d) => d && [d.getFullYear(), d.getMonth() + 1, d.getDate(), d.getHours(), d.getMinutes()].join("-");
 
-// Форматы дат
+// Форматы дат, реально встреченные на ВШЭ
+assert.equal(ymdhm(p.parseDateTime("понедельник, 5 октября 2026, 23:59")), "2026-10-5-23-59");
 assert.equal(ymdhm(p.parseDateTime("среда, 15 октября 2026, 23:59")), "2026-10-15-23-59");
 assert.equal(ymdhm(p.parseDateTime("15 октября 2026 г. в 09:05")), "2026-10-15-9-5");
 assert.equal(ymdhm(p.parseDateTime("14.10.2026 10:30")), "2026-10-14-10-30");
 assert.equal(ymdhm(p.parseDateTime("2026-10-14T10:30:00")), "2026-10-14-10-30");
 assert.equal(ymdhm(p.parseDateTime("2026.10.14")), "2026-10-14-0-0");
+assert.equal(ymdhm(p.parseDateTime("2026-09-17")), "2026-9-17-0-0");
 assert.equal(ymdhm(p.parseDateTime("Wednesday, 15 October 2026, 11:59 PM")), "2026-10-15-23-59");
 assert.equal(ymdhm(p.parseDateTime("1 January 2026, 12:05 AM")), "2026-1-1-0-5");
 assert.equal(p.parseDateTime("31 февраля 2026"), null);
 assert.equal(p.parseDateTime("нет даты"), null);
 assert.equal(p.parseDateTime("5 штук 2026"), null);
 
-// Review Focus 1: срок без времени = конец дня
+// Review Focus 2: срок без времени = конец дня; время ПЕРЕД датой (СОП); ISO с зоной
 assert.equal(ymdhm(p.parseDateTime("15 октября 2026", { endOfDayIfNoTime: true })), "2026-10-15-23-59");
 assert.equal(ymdhm(p.parseDateTime("15 октября 2026")), "2026-10-15-0-0");
+assert.equal(ymdhm(p.parseDateTime("23:59 25.10.2026 по московскому времени")), "2026-10-25-23-59");
+assert.equal(ymdhm(p.parseDateTime("23:00 05.10.2026 по московскому времени")), "2026-10-5-23-0");
+assert.equal(p.scanDates("23:00 05.10.2026 по московскому времени").length, 1);
+assert.equal(
+  p.parseDateTime("2026-09-17T09:58:51+03:00").getTime(),
+  new Date("2026-09-17T09:58:51+03:00").getTime()
+);
 
-// Несколько дат в строке (окно СОП)
+// Несколько дат в строке
 const two = p.scanDates("с 01.10.2026 по 20.10.2026", { endOfDayIfNoTime: true });
 assert.equal(two.length, 2);
 assert.equal(ymdhm(two[1]), "2026-10-20-23-59");
 
-// combineDateAndTime
-assert.equal(ymdhm(p.combineDateAndTime("2026-10-14", "10:30")), "2026-10-14-10-30");
+// combineDateAndTime (формат расписания ЕЛК: «2026-10-14» + «13:00»)
+assert.equal(ymdhm(p.combineDateAndTime("2026-10-14", "13:00")), "2026-10-14-13-0");
 assert.equal(ymdhm(p.combineDateAndTime("2026.10.14", "10:30:00")), "2026-10-14-10-30");
 assert.equal(ymdhm(p.combineDateAndTime("2026-10-14", "2026-10-14 11:00:00")), "2026-10-14-11-0");
 assert.equal(ymdhm(p.combineDateAndTime("2026-10-14", null)), "2026-10-14-0-0");
@@ -502,22 +465,13 @@ assert.match(p.toLocalIso(night), /[+-]\d\d:\d\d$/);
 assert.equal(ymdhm(p.startOfDay(night)), "2026-10-14-0-0");
 assert.equal(ymdhm(p.endOfDay(night)), "2026-10-14-23-59");
 
-// Review Focus 2: статусы сдачи
-assert.equal(p.isSubmitted("Не отправлено"), false);
-assert.equal(p.isSubmitted("Нет попыток"), false);
-assert.equal(p.isSubmitted("Не отправлено Не оценено"), false);
-assert.equal(p.isSubmitted("Not submitted"), false);
-assert.equal(p.isSubmitted("Отправлено для оценивания"), true);
-assert.equal(p.isSubmitted("Submitted for grading"), true);
-assert.equal(p.isSubmitted("Оценено"), true);
-assert.equal(p.isSubmitted(""), false);
-assert.equal(p.isSubmitted(undefined), false);
-
-// Экзамены
+// Экзамены: реальные типы занятий не экзамены; консультация к экзамену — тоже нет
 assert.equal(p.isExamType("Экзамен"), true);
 assert.equal(p.isExamType("Зачёт с оценкой"), true);
 assert.equal(p.isExamType("зачет"), true);
-assert.equal(p.isExamType("Семинар"), false);
+assert.equal(p.isExamType("Консультация перед экзаменом"), false);
+assert.equal(p.isExamType("Проведение семинаров (студенты)"), false);
+assert.equal(p.isExamType("Лекция"), false);
 assert.equal(p.isExamType(undefined), false);
 
 // Сортировка: просроченные → по времени → без даты; порядок равных сохраняется
@@ -555,7 +509,7 @@ Expected: сборка чистая, вывод `check-parse: OK`. Падени�
 ```bash
 git add src/services/digest/types.ts src/services/digest/parse.ts
 git commit -F - <<'EOF'
-Add digest types and pure parsing helpers (dates, submission status, course filter)
+Add digest types and pure parsing helpers (dates, exam type, sorting, course filter)
 
 Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
 EOF
@@ -566,16 +520,17 @@ EOF
 ## Task 3: Календарь Moodle в клиенте LMS
 
 **Files:**
-- Modify: `src/services/lms/client.ts` (импорт `formatLocalDate`; новый блок после `listCourses`)
+- Modify: `src/services/lms/client.ts` (импорт `formatLocalDate`; новый блок после `listCoursesUncached`)
 
 **Interfaces:**
-- Consumes: `fetchMoodleAjax`, `openAuthenticatedPage`, `cached`, `TTL`, `BASE_URL` (уже в файле).
+- Consumes: `fetchMoodleAjax`, `openAuthenticatedPage`, `cached`, `TTL`, `BASE_URL`, `stripHtml`, `unixToIso` (всё уже в файле).
 - Produces:
   ```ts
   export interface LmsActionEvent {
     id: number; name: string; module: string;       // module: modulename (assign, quiz, ...) или ""
     course: string; courseId: number | null;
     due: string;                                     // ISO UTC из timesort
+    overdue: boolean;                                // флаг Moodle: просрочено и не завершено
     actionable: boolean; actionName: string; url: string | null;
   }
   export function listActionEvents(from: Date, to: Date): Promise<LmsActionEvent[]>;
@@ -597,6 +552,7 @@ interface RawActionEvent {
   name: string;
   modulename?: string;
   timesort: number;
+  overdue?: boolean;
   url?: string;
   course?: { id: number; fullname: string };
   action?: { name: string; actionable: boolean; url: string };
@@ -609,6 +565,7 @@ export interface LmsActionEvent {
   course: string;
   courseId: number | null;
   due: string;
+  overdue: boolean;
   actionable: boolean;
   actionName: string;
   url: string | null;
@@ -618,10 +575,11 @@ const CALENDAR_PAGE_SIZE = 50;
 const CALENDAR_MAX_PAGES = 6;
 
 /**
- * События календаря Moodle «требует действия» (сдать задание, пройти тест) за период — один
- * AJAX-запрос вместо обхода страницы заданий каждого курса. Тот же сервис, что питает блок
- * «Таймлайн» дашборда. `actionable: false` — действие уже не требуется (сдано/закрыто).
- * Ключ кэша дневной гранулярности: границы окна внутри суток не плодят записи.
+ * События календаря Moodle «нужно действие» (сдать задание, пройти тест) за период — один
+ * AJAX-запрос вместо обхода страницы заданий каждого курса; тот же сервис, что питает блок
+ * «Таймлайн» дашборда. Проверено вживую 2026-10-14: сданные работы в ответ не попадают;
+ * просроченное несданное приходит с `overdue: true` и `actionable: false` (сдача закрыта) —
+ * поэтому по `actionable` фильтровать нельзя. Ключ кэша дневной гранулярности.
  */
 export function listActionEvents(from: Date, to: Date): Promise<LmsActionEvent[]> {
   const key = `lms:calendar:${formatLocalDate(from, "-")}:${formatLocalDate(to, "-")}`;
@@ -653,6 +611,7 @@ async function listActionEventsUncached(from: Date, to: Date): Promise<LmsAction
           course: e.course?.fullname ?? "",
           courseId: e.course?.id ?? null,
           due: unixToIso(e.timesort),
+          overdue: e.overdue ?? false,
           actionable: e.action?.actionable ?? false,
           actionName: e.action?.name ?? "",
           url: e.action?.url ?? e.url ?? null,
@@ -668,8 +627,6 @@ async function listActionEventsUncached(from: Date, to: Date): Promise<LmsAction
 }
 ```
 
-Если в Task 1 выяснилось другое имя метода/форма аргументов/ответа — подставить найденные.
-
 - [ ] **Step 3: Собрать**
 
 Run: `npm run build`
@@ -680,30 +637,36 @@ Expected: без ошибок.
 Создать `$SP/check-calendar.mjs`:
 
 ```js
+import assert from "node:assert/strict";
 import { dist, loadEnv } from "./common.mjs";
 loadEnv();
 const { closeBrowserSession } = await dist("auth/browser-session.js");
 const lms = await dist("services/lms/client.js");
-const now = new Date();
+const from = new Date(Date.now() - 180 * 86400_000);
+const to = new Date(Date.now() + 30 * 86400_000);
 const t0 = Date.now();
-const ev = await lms.listActionEvents(new Date(now.getTime() - 60 * 86400_000), new Date(now.getTime() + 14 * 86400_000));
+const ev = await lms.listActionEvents(from, to);
 const t1 = Date.now();
-const again = await lms.listActionEvents(new Date(now.getTime() - 60 * 86400_000), new Date(now.getTime() + 14 * 86400_000));
-console.log("events:", ev.length, "actionable:", ev.filter((e) => e.actionable).length,
+const again = await lms.listActionEvents(from, to);
+const overdue = ev.filter((e) => e.overdue);
+console.log("events:", ev.length, "overdue:", overdue.length,
+  "overdue и actionable=false:", overdue.filter((e) => !e.actionable).length,
   "модули:", JSON.stringify([...new Set(ev.map((e) => e.module))]),
-  "холодный:", t1 - t0, "мс; повтор из кэша:", Date.now() - t1, "мс; тот же объект:", ev === again);
+  "холодный:", t1 - t0, "мс; повтор:", Date.now() - t1, "мс; тот же объект:", ev === again);
+assert.ok(ev.every((e) => typeof e.overdue === "boolean" && typeof e.due === "string"));
+assert.equal(ev, again);
 await closeBrowserSession();
 ```
 
 Run: `node $SP/check-calendar.mjs`
-Expected: число событий ≥ 0 без исключения, повтор ≈ 0 мс, `тот же объект: true`. Если исключение «метод недоступен» — это штатный исход для запасного пути; зафиксировать в спецификации §13 (Task 1 Step 7) и продолжать.
+Expected: без исключения; `overdue ≥ 1` и среди них есть `actionable=false` (на аккаунте 2026-10-14 — одно задание от 5 октября; если с тех пор его сдали или оно исчезло, число может быть 0 — это не ошибка кода, зафиксировать); повтор ≈ 0 мс, `тот же объект: true`.
 
 - [ ] **Step 5: Commit**
 
 ```bash
 git add src/services/lms/client.ts
 git commit -F - <<'EOF'
-Add Moodle calendar action events to the LMS client
+Add Moodle calendar action events (incl. overdue flag) to the LMS client
 
 Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
 EOF
@@ -715,11 +678,15 @@ EOF
 
 **Files:**
 - Create: `src/services/digest/sources.ts`
+- Create (вне репозитория): `$SP/check-sources.mjs`
 
 **Interfaces:**
-- Consumes: `elk.getSchedule/getNotifications/listRequests/listTasks/getCourseEvaluationStatus`, `lms.listCourses/listMessages/listAssignments/listActionEvents`, `ruz.getStudentInfo/getSchedule`, `config.hseEmail`, всё из `parse.ts` и `types.ts`.
+- Consumes: `elk.getSchedule/getNotifications/listRequests/listTasks/getCourseEvaluationStatus`, `lms.listCourses/listMessages/listActionEvents`, тип `LmsActionEvent`, `ruz.getStudentInfo/getSchedule`, `config.hseEmail`, всё из `parse.ts` и `types.ts`.
 - Produces:
   ```ts
+  export const OVERDUE_LOOKBACK_DAYS = 180;
+  export function actionEventToItem(e: LmsActionEvent): DigestItem;
+  export function windowToItem(row: Record<string, string>, now: Date): DigestItem | null;
   export interface Collectors {
     elkSchedule(range: DateRange): Promise<CollectorResult>;
     ruzSchedule(range: DateRange): Promise<CollectorResult>;
@@ -731,9 +698,8 @@ EOF
     elkWindows(now: Date): Promise<CollectorResult>;
   }
   export const realCollectors: Collectors;
-  export const OVERDUE_LOOKBACK_DAYS = 60;
   ```
-  `lmsDeadlines` возвращает и просроченные (за `OVERDUE_LOOKBACK_DAYS`), и до `range.to`; фильтрация по окну — в `client.ts`.
+  `lmsDeadlines` возвращает и просроченные (за `OVERDUE_LOOKBACK_DAYS`), и будущие до `range.to`; фильтрация по окну — в `client.ts`.
 
 - [ ] **Step 1: Создать `src/services/digest/sources.ts`**
 
@@ -742,11 +708,11 @@ import { config } from "../../config.js";
 import { addDays } from "../../date-utils.js";
 import * as elk from "../elk/client.js";
 import * as lms from "../lms/client.js";
+import type { LmsActionEvent } from "../lms/client.js";
 import * as ruz from "../ruz/client.js";
 import {
   combineDateAndTime,
   isExamType,
-  isSubmitted,
   parseDateTime,
   scanDates,
   selectCourses,
@@ -756,20 +722,12 @@ import {
 import type { CollectorResult, CourseFilter, DateRange, DigestItem } from "./types.js";
 
 /** На сколько дней назад искать просроченные несданные работы. */
-export const OVERDUE_LOOKBACK_DAYS = 60;
+export const OVERDUE_LOOKBACK_DAYS = 180;
 
 const TEXT_LIMIT = 300;
+// Статусы окна СОП, при которых действие уже не требуется. Подтверждён только «Анкета доступна».
+const WINDOW_DONE = /заполнен|пройден|заверш|закрыт/i;
 
-// Названия колонок таблицы заданий Moodle (mod/assign/index.php), запасной путь дедлайнов LMS.
-// Уточнены по живому зондированию (Task 1); при смене темы оформления правятся здесь.
-const TABLE_COLUMNS = {
-  due: /срок|due/i,
-  status: /статус|отправл|submi/i,
-  title: /назван|name|assign|задани/i,
-  titleFallback: /тема|topic/i,
-};
-
-const errorMessage = (err: unknown): string => (err instanceof Error ? err.message : String(err));
 const nonEmpty = (parts: Array<string | null | undefined>): string | undefined => {
   const joined = parts.filter((p): p is string => !!p && p.trim() !== "").join(", ");
   return joined || undefined;
@@ -837,89 +795,35 @@ async function ruzSchedule(range: DateRange): Promise<CollectorResult> {
   return { items };
 }
 
+/**
+ * Событие календаря → элемент сводки. Календарь возвращает только несданное; `overdue` — флаг
+ * Moodle (просрочено и не завершено). `actionable` в отбор НЕ участвует: у просроченного
+ * задания со сданным окном приёма он false, а пользователь хочет видеть такие работы.
+ */
+export function actionEventToItem(e: LmsActionEvent): DigestItem {
+  return {
+    kind: e.module === "assign" ? "assignment" : "lms_activity",
+    when: toLocalIso(new Date(e.due)),
+    title: e.name,
+    ...(e.course ? { course: e.course } : {}),
+    source: "lms_deadlines",
+    ...(e.overdue ? { overdue: true } : {}),
+    ...(e.url ? { url: e.url } : {}),
+    raw: { module: e.module, action: e.actionName, actionable: e.actionable },
+  };
+}
+
 async function lmsDeadlines(args: { range: DateRange; now: Date; courses?: CourseFilter }): Promise<CollectorResult> {
   const { range, now, courses } = args;
   const selected = selectCourses(await lms.listCourses(), courses, now);
+  const ids = new Set(selected.map((c) => c.id));
   const lookback = addDays(startOfDay(now), -OVERDUE_LOOKBACK_DAYS);
-  const warnings: string[] = [];
-
-  try {
-    const ids = new Set(selected.map((c) => c.id));
-    const events = await lms.listActionEvents(lookback, range.to);
-    const items: DigestItem[] = events
-      .filter((e) => e.actionable && e.courseId !== null && ids.has(e.courseId))
-      .map((e) => {
-        const due = new Date(e.due);
-        return {
-          kind: e.module === "assign" ? "assignment" : "lms_activity",
-          when: toLocalIso(due),
-          title: e.name,
-          course: e.course,
-          source: "lms_deadlines",
-          overdue: due.getTime() < now.getTime(),
-          ...(e.url ? { url: e.url } : {}),
-          raw: { module: e.module, action: e.actionName },
-        };
-      });
-    return { items };
-  } catch (err) {
-    warnings.push(`календарь Moodle недоступен (${truncate(errorMessage(err))}), использован обход курсов`);
-  }
-
-  return deadlinesFromTables(selected, range, now, lookback, warnings);
-}
-
-async function deadlinesFromTables(
-  selected: Awaited<ReturnType<typeof lms.listCourses>>,
-  range: DateRange,
-  now: Date,
-  lookback: Date,
-  warnings: string[]
-): Promise<CollectorResult> {
-  // Параллельные вызовы безопасны: лимитер сам ставит страницы в очередь (3 одновременно).
-  const results = await Promise.allSettled(selected.map((c) => lms.listAssignments(c.id)));
-  const items: DigestItem[] = [];
-  let failed = 0;
-
-  results.forEach((r, idx) => {
-    const course = selected[idx];
-    if (r.status === "rejected") {
-      failed++;
-      warnings.push(`курс ${course.id}: ${truncate(errorMessage(r.reason))}`);
-      return;
-    }
-    for (const row of r.value) {
-      const keys = Object.keys(row);
-      const dueKey = keys.find((k) => TABLE_COLUMNS.due.test(k));
-      const statusKey = keys.find((k) => TABLE_COLUMNS.status.test(k));
-      const titleKey =
-        keys.find((k) => TABLE_COLUMNS.title.test(k)) ??
-        keys.find((k) => TABLE_COLUMNS.titleFallback.test(k)) ??
-        keys.find((k) => row[k]);
-
-      if (isSubmitted(statusKey ? row[statusKey] : undefined)) continue;
-
-      const dueText = dueKey ? row[dueKey] : "";
-      const due = dueText ? parseDateTime(dueText, { endOfDayIfNoTime: true }) : null;
-      if (due && due.getTime() > range.to.getTime()) continue;
-      if (due && due.getTime() < lookback.getTime()) continue;
-
-      items.push({
-        kind: "assignment",
-        when: due ? toLocalIso(due) : null,
-        title: (titleKey ? row[titleKey] : "") || "(без названия)",
-        course: course.fullname,
-        source: "lms_deadlines",
-        ...(due ? { overdue: due.getTime() < now.getTime() } : {}),
-        raw: row,
-      });
-    }
-  });
-
-  if (selected.length > 0 && failed === selected.length) {
-    throw new Error(`не удалось прочитать задания ни одного курса: ${warnings.join("; ")}`);
-  }
-  return { items, ...(warnings.length ? { warnings } : {}) };
+  const events = await lms.listActionEvents(lookback, range.to);
+  return {
+    items: events
+      .filter((e) => e.courseId !== null && ids.has(e.courseId))
+      .map((e) => actionEventToItem(e)),
+  };
 }
 
 async function lmsMessages(): Promise<CollectorResult> {
@@ -1003,26 +907,40 @@ async function elkTasks(): Promise<CollectorResult> {
   };
 }
 
-// Окна СОП: срок — самая поздняя дата в строке (конец периода); закрытые (срок в прошлом)
-// отбрасываются, строки без распознанной даты остаются с when: null. Форма строк уточняется
-// по живому зондированию (Task 1).
+/**
+ * Строка окна СОП → элемент. Колонки (подтверждено вживую): «#», «Период», «Дата начала»,
+ * «Дата окончания», «Статус»; даты вида «23:59 25.10.2026 по московскому времени». Срок —
+ * «Дата окончания», иначе самая поздняя дата в строке. Закрытые окна (срок в прошлом или статус
+ * «заполнена» и т.п.) отбрасываются; без распознанной даты — остаётся с `when: null`.
+ */
+export function windowToItem(row: Record<string, string>, now: Date): DigestItem | null {
+  const entries = Object.entries(row).filter(([, v]) => v && v.trim() !== "");
+  const byKey = (re: RegExp): string | undefined => entries.find(([k]) => re.test(k))?.[1];
+
+  const status = byKey(/статус|status/i);
+  if (status && WINDOW_DONE.test(status)) return null;
+
+  const endText = byKey(/окончан|end/i);
+  const explicitEnd = endText ? parseDateTime(endText, { endOfDayIfNoTime: true }) : null;
+  const all = entries.flatMap(([, v]) => scanDates(v, { endOfDayIfNoTime: true }));
+  const end = explicitEnd ?? (all.length ? new Date(Math.max(...all.map((d) => d.getTime()))) : null);
+  if (end && end.getTime() < now.getTime()) return null;
+
+  const period = byKey(/период|назван|period|name/i) ?? entries.find(([, v]) => v.length > 3)?.[1] ?? "окно";
+  return {
+    kind: "elk_window",
+    when: end ? toLocalIso(end) : null,
+    title: `Оценка курсов (СОП): ${period}`,
+    source: "elk_windows",
+    raw: row,
+  };
+}
+
 async function elkWindows(now: Date): Promise<CollectorResult> {
   const rows = await elk.getCourseEvaluationStatus();
-  const items: DigestItem[] = [];
-  for (const row of rows) {
-    const values = Object.values(row).filter((v) => v && v.trim() !== "");
-    const dates = values.flatMap((v) => scanDates(v, { endOfDayIfNoTime: true }));
-    const end = dates.length ? new Date(Math.max(...dates.map((d) => d.getTime()))) : null;
-    if (end && end.getTime() < now.getTime()) continue;
-    items.push({
-      kind: "elk_window",
-      when: end ? toLocalIso(end) : null,
-      title: values[0] ?? "Окно ЕЛК",
-      source: "elk_windows",
-      raw: row,
-    });
-  }
-  return { items };
+  return {
+    items: rows.map((r) => windowToItem(r, now)).filter((i): i is DigestItem => i !== null),
+  };
 }
 
 export const realCollectors: Collectors = {
@@ -1040,18 +958,69 @@ export const realCollectors: Collectors = {
 - [ ] **Step 2: Собрать**
 
 Run: `npm run build`
-Expected: без ошибок. (Типовые риски: `l.name`/`l.lesson_type` обязательны в `ElkLesson`; `Lesson.url1` — `string | undefined`.)
+Expected: без ошибок. (Типовые риски: поля `ElkLesson`/`Lesson` обязательны; `l.url1` у РУЗ — `string | undefined`.)
 
-- [ ] **Step 3: Сверить `TABLE_COLUMNS` и `elkWindows` с зондированием Task 1**
+- [ ] **Step 3: Создать `$SP/check-sources.mjs`**
 
-По результатам `[assign]` и `[sop]` из Task 1 проверить, что регулярные выражения колонок находят реальные заголовки, а строки СОП содержат распознаваемые даты. Если нет — поправить `TABLE_COLUMNS` / логику `elkWindows` (например, признак «анкета заполнена» → пропуск строки). Если зондирование не показало однозначного признака — оставить как есть и записать это в «не проверено» (Task 8).
+```js
+import assert from "node:assert/strict";
+import { dist } from "./common.mjs";
+const s = await dist("services/digest/sources.js");
 
-- [ ] **Step 4: Commit**
+const now = new Date(2026, 9, 14, 12, 0);
+
+// Review Focus 1: просроченное несданное задание со ЗАКРЫТОЙ сдачей остаётся и помечено overdue
+const overdue = s.actionEventToItem({
+  id: 1, name: "Домашнее задание по блоку 1", module: "assign", course: "Создание контента",
+  courseId: 299092, due: "2026-10-05T20:59:00.000Z", overdue: true, actionable: false,
+  actionName: "", url: "https://edu.hse.ru/mod/assign/view.php?id=1",
+});
+assert.equal(overdue.kind, "assignment");
+assert.equal(overdue.overdue, true);
+assert.equal(overdue.course, "Создание контента");
+assert.equal(overdue.raw.actionable, false);
+assert.match(overdue.when, /^2026-10-0[56]T\d\d:\d\d:\d\d[+-]\d\d:\d\d$/);
+
+// Будущий тест: lms_activity, без флага overdue; actionable=false (до открытия) не скрывает
+const quiz = s.actionEventToItem({
+  id: 2, name: "Экзамен 26 октября", module: "quiz", course: "Основы государственности",
+  courseId: 295601, due: "2026-10-26T07:30:00.000Z", overdue: false, actionable: false,
+  actionName: "", url: null,
+});
+assert.equal(quiz.kind, "lms_activity");
+assert.equal("overdue" in quiz, false);
+assert.equal("url" in quiz, false);
+
+// Окно СОП (реальная форма строки)
+const row = {
+  "#": "1", "Период": "1 модуль 2026/2027 учебного года",
+  "Дата начала": "23:00 05.10.2026 по московскому времени",
+  "Дата окончания": "23:59 25.10.2026 по московскому времени",
+  "Статус": "Анкета доступна",
+};
+const w = s.windowToItem(row, now);
+assert.equal(w.kind, "elk_window");
+assert.equal(w.title, "Оценка курсов (СОП): 1 модуль 2026/2027 учебного года");
+assert.ok(w.when.startsWith("2026-10-25T23:59:00"));
+assert.equal(s.windowToItem({ ...row, "Статус": "Анкета заполнена" }, now), null);
+assert.equal(s.windowToItem({ ...row, "Дата окончания": "23:59 01.10.2026 по московскому времени" }, now), null);
+const undated = s.windowToItem({ "Период": "Весна", "Статус": "Анкета доступна" }, now);
+assert.equal(undated.when, null);
+
+console.log("check-sources: OK");
+```
+
+- [ ] **Step 4: Запустить**
+
+Run: `node $SP/check-sources.mjs`
+Expected: `check-sources: OK`. Падение — править `sources.ts`.
+
+- [ ] **Step 5: Commit**
 
 ```bash
 git add src/services/digest/sources.ts
 git commit -F - <<'EOF'
-Add digest source collectors (schedule, LMS deadlines, inbox, ELK windows)
+Add digest source collectors (schedule, LMS deadlines incl. overdue, inbox, ELK windows)
 
 Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
 EOF
@@ -1164,6 +1133,7 @@ function keep(item: DigestItem, plan: DigestPlan): boolean {
     case "assignment":
     case "lms_activity":
     case "elk_window":
+      // Просроченные несданные показываются всегда — по явному требованию пользователя.
       if (item.overdue) return true;
       if (when === null) return plan.includeUndated;
       return when <= plan.deadlinesUntil.getTime();
@@ -1355,17 +1325,20 @@ const lesson = (title, h) => ({ kind: "lesson", when: iso(14, h), title, source:
   assert.deepEqual(r.items.map((i) => i.title), ["A"]);
 }
 
-// 5. Фильтрация и порядок: просроченное первым, далёкое и безвременное отброшено в my_today
+// 5. Фильтрация и порядок: просроченное (в т.ч. давнее) первым; далёкое и безвременное отброшено
 {
   const dl = (title, when, extra = {}) => ({ kind: "assignment", when, title, source: "lms_deadlines", ...extra });
-  const items = [
+  const deadlines = [
     dl("far", iso(30, 10)), dl("tomorrow", iso(15, 10)), dl("old", iso(1, 10), { overdue: true }),
-    dl("undated", null), { kind: "lesson", when: iso(15, 10), title: "tomorrow-lesson", source: "elk_schedule" },
+    dl("undated", null),
+  ];
+  const schedule = [
+    { kind: "lesson", when: iso(15, 10), title: "tomorrow-lesson", source: "elk_schedule" },
     { kind: "exam", when: iso(15, 9), title: "exam", source: "elk_schedule" },
   ];
-  const r = await buildDigest(basePlan(), fake({ lmsDeadlines: ok(items.slice(0, 5)), elkSchedule: ok(items.slice(4)) }));
+  const r = await buildDigest(basePlan(), fake({ lmsDeadlines: ok(deadlines), elkSchedule: ok(schedule) }));
   assert.deepEqual(r.items.map((i) => i.title), ["old", "exam", "tomorrow"]);
-  const r2 = await buildDigest(basePlan({ includeUndated: true }), fake({ lmsDeadlines: ok(items.slice(0, 4)) }));
+  const r2 = await buildDigest(basePlan({ includeUndated: true }), fake({ lmsDeadlines: ok(deadlines) }));
   assert.deepEqual(r2.items.map((i) => i.title), ["old", "tomorrow", "undated"]);
 }
 
@@ -1374,11 +1347,11 @@ const lesson = (title, h) => ({ kind: "lesson", when: iso(14, h), title, source:
   const r = await buildDigest(
     basePlan({ schedule: { range: { from: day(14), to: day(15, 23) }, lessonsUntil: null, examsUntil: day(15, 23) } }),
     fake({
-      lmsDeadlines: ok([], ["календарь Moodle недоступен, использован обход курсов"]),
+      lmsDeadlines: ok([], ["замечание источника"]),
       elkSchedule: ok([lesson("A", 10), { kind: "exam", when: iso(15, 9), title: "E", source: "elk_schedule" }]),
     })
   );
-  assert.deepEqual(r.sources.lms_deadlines.warnings, ["календарь Moodle недоступен, использован обход курсов"]);
+  assert.deepEqual(r.sources.lms_deadlines.warnings, ["замечание источника"]);
   assert.deepEqual(r.items.map((i) => i.title), ["E"]);
 }
 
@@ -1424,10 +1397,10 @@ import * as digest from "./client.js";
 
 const RESULT_NOTE =
   "Возвращает JSON: items — единый список элементов (kind, when, title, course, place, " +
-  "overdue, unread, source, ...), отсортированный: просроченные, затем по времени, затем без " +
-  "даты; sources — статус каждого источника (ok/error/skipped, текст ошибки, warnings). " +
-  "Если источник недоступен (например, РУЗ вне сети ВШЭ), сводка всё равно возвращается — " +
-  "смотрите sources. Корпоративная почта (mail_*) в сводку не входит.";
+  "overdue, unread, source, ...), отсортированный: просроченные несданные первыми, затем по " +
+  "времени, затем без даты; sources — статус каждого источника (ok/error/skipped, текст " +
+  "ошибки, warnings). Если источник недоступен (например, РУЗ вне сети ВШЭ), сводка всё " +
+  "равно возвращается — смотрите sources. Корпоративная почта (mail_*) в сводку не входит.";
 
 export function registerDigestTools(server: McpServer): void {
   server.registerTool(
@@ -1435,9 +1408,10 @@ export function registerDigestTools(server: McpServer): void {
     {
       title: "Сводка на сегодня",
       description:
-        "Что у студента сегодня: занятия на сегодня, дедлайны (просроченные и до конца " +
-        "завтрашнего дня) из SmartLMS и ЕЛК, экзамены/зачёты, непрочитанная внутренняя почта " +
-        "SmartLMS, непрочитанные уведомления ЕЛК, активные заявки и задачи ЕЛК. " +
+        "Что у студента сегодня: занятия на сегодня, дедлайны (все просроченные несданные и " +
+        "до конца завтрашнего дня) из SmartLMS и ЕЛК, экзамены/зачёты, непрочитанная " +
+        "внутренняя почта SmartLMS, непрочитанные уведомления ЕЛК, активные заявки и задачи " +
+        "ЕЛК. " +
         RESULT_NOTE,
       inputSchema: {},
     },
@@ -1450,7 +1424,8 @@ export function registerDigestTools(server: McpServer): void {
       title: "Сводка на неделю",
       description:
         "План на ближайшие 7 дней (сегодня + 6): расписание занятий, дедлайны SmartLMS и ЕЛК, " +
-        "экзамены/зачёты, просроченные работы. Без почты и уведомлений — для них my_today. " +
+        "экзамены/зачёты, просроченные несданные работы. Без почты и уведомлений — для них " +
+        "my_today. " +
         RESULT_NOTE,
       inputSchema: {},
     },
@@ -1462,9 +1437,10 @@ export function registerDigestTools(server: McpServer): void {
     {
       title: "Дедлайны",
       description:
-        "Что горит: несданные задания и тесты SmartLMS, окна ЕЛК (например, оценка курсов), " +
-        "активные задачи и заявки ЕЛК, ближайшие экзамены/зачёты за days дней вперёд плюс все " +
-        "просроченные. Элементы без распознанной даты идут в конце с when: null. " +
+        "Что горит: несданные задания и тесты SmartLMS (в том числе просроченные, у которых " +
+        "приём уже закрыт), окна ЕЛК (например, оценка курсов), активные задачи и заявки ЕЛК, " +
+        "ближайшие экзамены/зачёты за days дней вперёд. Элементы без распознанной даты идут в " +
+        "конце с when: null. " +
         RESULT_NOTE,
       inputSchema: {
         days: z.number().int().min(1).max(120).default(14).describe("Горизонт в днях вперёд"),
@@ -1535,7 +1511,7 @@ child.kill();
 ```
 
 Run: `node $SP/check-tools.mjs`
-Expected: `tools: 37` (34 прежних + 3 новых), `digest: my_today, my_week, my_deadlines`, `properties: days, courses`. Если абсолютное число отличается от 37 — это поправка к документам (PROGRESS.md называет 34), а не ошибка реализации; три новых тула должны присутствовать.
+Expected: `digest: my_today, my_week, my_deadlines` и `properties: days, courses`; общее число тулов — на 3 больше прежнего. Если абсолютное число отличается от 37 — это поправка к документам (PROGRESS.md называет 34), а не ошибка реализации.
 
 - [ ] **Step 5: Commit**
 
@@ -1575,7 +1551,7 @@ const SAFE_TITLE = new Set(["lesson", "exam", "assignment", "lms_activity", "elk
 function report(label, r, ms) {
   const kinds = {};
   for (const i of r.items) kinds[i.kind] = (kinds[i.kind] ?? 0) + 1;
-  console.log(`\n== ${label}: ${ms} мс, элементов: ${r.items.length}`);
+  console.log(`\n== ${label}: ${ms} мс, элементов: ${r.items.length}, просроченных: ${r.items.filter((i) => i.overdue).length}`);
   console.log("   по видам:", JSON.stringify(kinds));
   for (const [name, s] of Object.entries(r.sources)) {
     // Тексты ошибок бывают с email (RUZ: «студент с email ... не найден») — маскируем.
@@ -1583,9 +1559,9 @@ function report(label, r, ms) {
     const extra = [s.error && `error: ${masked}`, s.warnings && `warnings: ${s.warnings.length}`].filter(Boolean).join("; ");
     console.log(`   источник ${name}: ${s.status} (${s.ms} мс)${extra ? " — " + extra : ""}`);
   }
-  for (const i of r.items.slice(0, 12)) {
+  for (const i of r.items.slice(0, 14)) {
     const title = SAFE_TITLE.has(i.kind) ? i.title.slice(0, 60) : "<скрыто>";
-    console.log(`   - ${i.kind}${i.overdue ? " [просрочено]" : ""} ${i.when ?? "без даты"} ${title}`);
+    console.log(`   - ${i.kind}${i.overdue ? " [ПРОСРОЧЕНО]" : ""} ${i.when ?? "без даты"} ${title}`);
   }
 }
 
@@ -1596,12 +1572,18 @@ async function timed(label, fn) {
   return r;
 }
 
-await timed("my_today (холодный)", () => digest.getToday());
+const today = await timed("my_today (холодный)", () => digest.getToday());
 await timed("my_today (повтор, из кэша)", () => digest.getToday());
-await timed("my_week", () => digest.getWeek());
-await timed("my_deadlines (14 дней)", () => digest.getDeadlines({ days: 14 }));
+const week = await timed("my_week", () => digest.getWeek());
+const dl = await timed("my_deadlines (14 дней)", () => digest.getDeadlines({ days: 14 }));
 
-// Фильтр курсов: подстрока названия первого актуального курса и заведомо несуществующий.
+// Требование пользователя: просроченные несданные видны во всех трёх тулах
+for (const [name, r] of [["my_today", today], ["my_week", week], ["my_deadlines", dl]]) {
+  const n = r.items.filter((i) => i.overdue && i.source === "lms_deadlines").length;
+  console.log(`просроченных LMS-заданий в ${name}: ${n}`);
+}
+
+// Фильтр курсов: id первого актуального курса и заведомо несуществующая подстрока
 const courses = (await lms.listCourses()).filter((c) => c.visible && !c.hidden);
 if (courses[0]) {
   await timed("my_deadlines (фильтр по id первого курса)", () => digest.getDeadlines({ days: 30, courses: [courses[0].id] }));
@@ -1621,19 +1603,20 @@ await closeBrowserSession();
 - [ ] **Step 2: Запустить**
 
 Run: `node $SP/live-digest.mjs`
-Expected: четыре отчёта + блок фильтра + замер кэша LMS. Проверить:
-- нет исключений; для каждого источника статус `ok`, либо осмысленный `error` (РУЗ вне кампуса — `skipped`, пока ЕЛК жив);
-- `my_today` повтор заметно быстрее холодного (кэш клиентских функций);
-- `lms_deadlines`: `warnings` присутствуют только если календарь недоступен и использован обход курсов — в этом случае зафиксировать время холодного обхода (оценка в спецификации «несколько секунд»);
-- в выводе нет ФИО, email, текстов писем/уведомлений.
+Expected (на аккаунте на 2026-10-14; конкретные элементы могут измениться, если пользователь сдал работы):
+- нет исключений; `lms_deadlines`, `elk_schedule`, `elk_windows`, `lms_messages`, `elk_notifications`, `elk_claims`, `elk_tasks` — `ok`; `ruz_schedule` — `skipped`;
+- **во всех трёх тулах есть просроченное LMS-задание** («Домашнее задание по блоку 1 …», срок 5 октября) с пометкой `[ПРОСРОЧЕНО]`; «Отправлено для оценивания» (25 сентября) — отсутствует;
+- в `my_today` и `my_week` нет безвременных LMS-заданий; в `my_deadlines` есть окно СОП «1 модуль 2026/2027 учебного года» со сроком 25 октября;
+- повтор `my_today` заметно быстрее холодного (кэш клиентских функций);
+- в выводе нет ФИО, email, текстов писем и уведомлений.
 
 - [ ] **Step 3: Разобрать расхождения**
 
-Любой `error` из ожидаемо рабочего источника, подозрительный `when: null` у занятий (формат времени), «просроченные» работы, которые на самом деле сданы (колонка статуса), пустой `lms_deadlines` при заведомо непустых курсах — исправить в `sources.ts`/`parse.ts`, пересобрать, повторить Step 2. Если проблему нельзя исправить без изменения замысла — остановиться и описать пользователю.
+Любой `error` из ожидаемо рабочего источника, подозрительный `when: null` у занятий, пропавшее просроченное задание, лишние элементы — исправить в `sources.ts`/`parse.ts`/`client.ts`, пересобрать, повторить Step 2 и `check-*.mjs`. Если проблему нельзя исправить без изменения замысла — остановиться и описать пользователю.
 
 - [ ] **Step 4: Записать факты для документации (в заметки, не в репозиторий)**
 
-Для Task 8 выписать: какой путь дедлайнов LMS сработал (календарь/обход), замеренные времена холодного/повторного вызова каждого тула, какие источники вернули `ok`/`error`, что осталось непроверенным (не воспроизведено: протухший токен ЕЛК, протухшая SSO-сессия, форма задачи ЕЛК, РУЗ из сети ВШЭ, при необходимости — статус «заполнено» у окон СОП).
+Для Task 8 выписать: замеренные времена холодного/повторного вызова каждого тула, статусы источников, количество просроченных, что осталось непроверенным (не воспроизведено: протухший токен ЕЛК end-to-end, протухшая SSO-сессия, форма задачи ЕЛК, точный `lesson_type` экзамена, РУЗ из сети ВШЭ как запасной источник).
 
 - [ ] **Step 5: Commit (только если Step 3 менял код)**
 
@@ -1657,28 +1640,31 @@ EOF
 - [ ] **Step 1: Привести спецификацию в соответствие с реализацией**
 
 Внести в спецификацию:
-- §5: у `DigestItem` добавлено поле `received?: string` (момент прихода/обновления письма, уведомления, заявки); `when` для них всегда `null`. У `SourceStatus` добавлено `warnings?: string[]`.
-- §6: источники `lms_messages`, `elk_notifications`, `elk_claims` кладут время в `received`, а не в `when`; в `my_today`/`my_week` дедлайны без даты отбрасываются (остаются только в `my_deadlines`).
-- §7: кэширование — на уровне клиентских функций (`lms:calendar:<от>:<до>` для календаря, существующий `lms:assignments:<id>` для запасного пути), отдельного ключа `lms:deadlines:*` нет; просроченные ищутся за `OVERDUE_LOOKBACK_DAYS = 60` дней; события календаря с `actionable: false` скрываются.
-- §9: «`Promise.allSettled`» → каждый коллектор обёрнут в `runSource`, который не бросает (эквивалент); таймаут 20 с настраивается `DigestPlan.sourceTimeoutMs`.
-- §13: оставить только то, что реально не выяснено.
+- §5: у `DigestItem` добавлено поле `received?: string` (момент прихода/обновления письма, уведомления, заявки); `when` для них всегда `null`. У `SourceStatus` добавлено `warnings?: string[]`. `overdue` — «просрочено и несдано, в т.ч. когда приём закрыт».
+- §6: источники `lms_messages`, `elk_notifications`, `elk_claims` кладут время в `received`; в `my_today`/`my_week` дедлайны без даты отбрасываются (остаются только в `my_deadlines`); просроченные несданные показываются **во всех трёх** тулах (требование пользователя).
+- §7: **единственная реализация — календарь Moodle** (обход таблиц курсов не реализуется: календарь подтверждён живьём). Отбор по `actionable` не применяется — просроченное несданное приходит с `overdue: true`, `actionable: false`; сданное календарь не возвращает. Кэш — на уровне клиентской функции (`lms:calendar:<от>:<до>`), отдельного `lms:deadlines:*` нет. Просроченные ищутся за `OVERDUE_LOOKBACK_DAYS = 180` дней.
+- §6/`elk_windows`: фактические колонки и формат дат СОП; статус «Анкета доступна» — активно; «заполнен/пройден/завершён/закрыт» — отбрасывается.
+- §9: вместо `Promise.allSettled` — `runSource`, который не бросает (эквивалент); таймаут 20 с настраивается `DigestPlan.sourceTimeoutMs`.
+- §12: убрать пункт про разбор русских дат в запасном пути как основной риск; живая проверка — по факту Task 7.
+- §13: оставить только то, что реально не подтверждено.
 
 - [ ] **Step 2: `PROGRESS.md`**
 
 - В «Дорожной карте» строку `2. Сводки и планирование ... — не начато` заменить на статус «реализовано, проверено вживую (список — ниже)» или «реализовано, частично проверено» — по итогам Task 7.
-- Добавить раздел «### Подпроект 2: сводки и планирование» по образцу «Подпроекта 1»: что сделано (3 тула, сервис `digest`, модель элемента, источники, путь дедлайнов LMS, частичные отказы) → как проверено.
-- Раздельно: «**Проверено вживую (дата)**» — только то, что реально получено в Task 7 (цифры замеров из заметок Step 4), и «**Не проверено**» — протухший токен ЕЛК end-to-end, протухшая SSO-сессия, РУЗ из сети ВШЭ, форма задачи ЕЛК, остальное из заметок.
-- В итоговой строке заголовка «34 тула» → «37 тулов», «в 5 сервисах данных ... + служебный» дополнить «+ 3 агрегатора».
-- В «Известный технический долг»/«Не проверено» подпроекта 1: если Task 7 проверил `lms_*` через кэш — перенести пункт в «проверено».
+- Добавить раздел «### Подпроект 2: сводки и планирование» по образцу «Подпроекта 1»: что сделано (3 тула, сервис `digest`, модель элемента, источники, календарь Moodle, просроченные, частичные отказы) → как проверено.
+- Раздельно: «**Проверено вживую (дата)**» — только то, что реально получено в Task 7 и зондировании (в т.ч. семантика `overdue`/`actionable`, замеры) и «**Не проверено**» — протухший токен ЕЛК end-to-end, протухшая SSO-сессия, форма задачи ЕЛК, точный `lesson_type` экзамена, РУЗ-запасной путь из сети ВШЭ.
+- Наблюдение: на каждом запуске `openAuthenticatedPage` для `/my/courses.php` пишет в stderr «страница … не отрендерилась за таймаут при проверке логина», хотя данные приходят — существующее поведение, не исследовано.
+- В итоговой строке заголовка «34 тула» → «37 тулов», дополнить «+ 3 агрегатора».
+- Если Task 7 проверил `lms_*` через кэш — перенести пункт из «не проверено» подпроекта 1 в «проверено».
 
 - [ ] **Step 3: `REQUIREMENTS.md`**
 
-- Функциональные требования (Реализовано): добавить пункт 10 — сводки `my_today`/`my_week`/`my_deadlines` (состав, горизонты, корпоративная почта не входит).
+- Функциональные требования (Реализовано): добавить пункт 10 — сводки `my_today`/`my_week`/`my_deadlines` (состав, горизонты, просроченные несданные видны, корпоративная почта не входит).
 - Нефункциональные: «Агрегаторы возвращают частичный результат — отказ одного источника не роняет сводку и явно отражается в `sources`; таймаут источника 20 с; агрегат не кэшируется и не использует почту/IMAP».
 
 - [ ] **Step 4: `CLAUDE.md`**
 
-В раздел «Архитектура» добавить абзац про `services/digest/`: сервис вызывает клиентские функции (не MCP-тулы), `buildDigest` с внедряемыми `Collectors`, единая модель `DigestItem`, `sources` со статусами, РУЗ — только запасной, IMAP не используется. В «Roadmap» отметить подпроект 2 как готовый.
+В раздел «Архитектура» добавить абзац про `services/digest/`: сервис вызывает клиентские функции (не MCP-тулы), `buildDigest` с внедряемыми `Collectors`, единая модель `DigestItem`, `sources` со статусами, дедлайны LMS — календарь Moodle, РУЗ — только запасной, IMAP не используется. В «Roadmap» отметить подпроект 2 как готовый.
 
 - [ ] **Step 5: `README.md`**
 
@@ -1702,5 +1688,5 @@ EOF
 
 - [ ] **Step 8: Итоговая проверка перед завершением**
 
-Run: `npm run build && node $SP/check-parse.mjs && node $SP/check-digest.mjs && git status -sb`
-Expected: сборка чистая, оба скрипта `OK`, дерево чистое. Дальше — `superpowers:finishing-a-development-branch` (решение о слиянии с `master` принимает пользователь).
+Run: `npm run build && node $SP/check-parse.mjs && node $SP/check-sources.mjs && node $SP/check-digest.mjs && git status -sb`
+Expected: сборка чистая, три скрипта `OK`, дерево чистое. Дальше — `superpowers:finishing-a-development-branch` (решение о слиянии с `master` принимает пользователь).
