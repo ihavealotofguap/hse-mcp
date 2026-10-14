@@ -7,6 +7,10 @@ import { resolveScopedUrl } from "../../url-utils.js";
 
 const BASE_URL = "https://edu.hse.ru";
 
+// AJAX-сервису Moodle нужен только sesskey, а дашборд /my/courses.php рендерится 7–9 с и упирается
+// в таймаут ожидания рендера; любая лёгкая страница отдаёт sesskey сразу.
+const AJAX_HOST_URL = `${BASE_URL}/user/preferences.php`;
+
 export interface ModuleLink {
   type: string;
   cmid: number | null;
@@ -119,7 +123,7 @@ export function listCourses(): Promise<CourseOverview[]> {
 }
 
 async function listCoursesUncached(): Promise<CourseOverview[]> {
-  const page = await openAuthenticatedPage(`${BASE_URL}/my/courses.php`);
+  const page = await openAuthenticatedPage(AJAX_HOST_URL);
   try {
     const data = await fetchMoodleAjax<{ courses: RawTimelineCourse[] }>(
       page,
@@ -192,7 +196,7 @@ export function listActionEvents(from: Date, to: Date): Promise<LmsActionEvent[]
 }
 
 async function listActionEventsUncached(from: Date, to: Date): Promise<LmsActionEvent[]> {
-  const page = await openAuthenticatedPage(`${BASE_URL}/my/courses.php`);
+  const page = await openAuthenticatedPage(AJAX_HOST_URL);
   try {
     const events: LmsActionEvent[] = [];
     let afterEventId = 0;
