@@ -99,6 +99,11 @@ export function defineResource<A, Raw, R = Raw>(
   const deadlineMs = def.deadlineMs ?? DEFAULT_DEADLINE_MS;
 
   return (args: A, opts: ResourceCallOptions = {}): Promise<R> => {
+    // Уже отменённый вызов не запускает загрузку и не пишет в кэш (иначе отказ загрузки
+    // остался бы без обработчика и дал unhandledRejection).
+    if (opts.signal?.aborted) {
+      return Promise.reject(opts.signal.reason ?? new Error("операция отменена"));
+    }
     const key = prefix + def.key(args);
     const shared = cached<Raw>(key, def.ttl, async () => {
       const raw = deepFreeze(await loadWithDeadline(def, args, deadlineMs));
