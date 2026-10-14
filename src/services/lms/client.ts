@@ -1,5 +1,6 @@
 import type { Page } from "playwright";
 import { openAuthenticatedPage } from "../../auth/browser-session.js";
+import { cached, TTL } from "../../cache.js";
 import { dumpPage, extractTable, type PageDump } from "../../dom-utils.js";
 import { resolveScopedUrl } from "../../url-utils.js";
 
@@ -112,7 +113,11 @@ const htmlToText = (html: string) =>
  * ссылок со страницы: даёт прогресс прохождения, даты начала/окончания и категорию, которых нет
  * в простой ссылке на курс. classification: "all" — все курсы, включая скрытые из вида.
  */
-export async function listCourses(): Promise<CourseOverview[]> {
+export function listCourses(): Promise<CourseOverview[]> {
+  return cached("lms:courses", TTL.medium, listCoursesUncached);
+}
+
+async function listCoursesUncached(): Promise<CourseOverview[]> {
   const page = await openAuthenticatedPage(`${BASE_URL}/my/courses.php`);
   try {
     const data = await fetchMoodleAjax<{ courses: RawTimelineCourse[] }>(
@@ -185,7 +190,11 @@ export interface LmsMessageSummary {
  * (см. src/services/mail/). Реверс-инжинирено 2026-09-15 через тот же внутренний AJAX-сервис
  * Moodle (fetchMoodleAjax), метод local_mail_search_messages с ролями to/cc/bcc — это входящие.
  */
-export async function listMessages(limit = 50): Promise<LmsMessageSummary[]> {
+export function listMessages(limit = 50): Promise<LmsMessageSummary[]> {
+  return cached(`lms:messages:${limit}`, TTL.short, () => listMessagesUncached(limit));
+}
+
+async function listMessagesUncached(limit: number): Promise<LmsMessageSummary[]> {
   const page = await openAuthenticatedPage(`${BASE_URL}/local/mail/view.php?t=inbox`);
   try {
     const messages = await fetchMoodleAjax<RawMailMessageSummary[]>(page, "local_mail_search_messages", {
@@ -236,7 +245,11 @@ export interface LmsMessage {
 }
 
 /** Полный текст письма внутренней почты SmartLMS по id (см. listMessages). */
-export async function getMessage(messageId: number): Promise<LmsMessage> {
+export function getMessage(messageId: number): Promise<LmsMessage> {
+  return cached(`lms:message:${messageId}`, TTL.medium, () => getMessageUncached(messageId));
+}
+
+async function getMessageUncached(messageId: number): Promise<LmsMessage> {
   const page = await openAuthenticatedPage(`${BASE_URL}/local/mail/view.php?t=inbox`);
   try {
     const m = await fetchMoodleAjax<RawMailMessage>(page, "local_mail_get_message", { messageid: messageId });
@@ -255,7 +268,11 @@ export async function getMessage(messageId: number): Promise<LmsMessage> {
   }
 }
 
-export async function getCourseMaterials(courseId: number): Promise<ModuleLink[]> {
+export function getCourseMaterials(courseId: number): Promise<ModuleLink[]> {
+  return cached(`lms:materials:${courseId}`, TTL.medium, () => getCourseMaterialsUncached(courseId));
+}
+
+async function getCourseMaterialsUncached(courseId: number): Promise<ModuleLink[]> {
   const page = await openAuthenticatedPage(`${BASE_URL}/course/view.php?id=${courseId}`);
   try {
     return await page.evaluate(() => {
@@ -279,7 +296,11 @@ export async function getCourseMaterials(courseId: number): Promise<ModuleLink[]
   }
 }
 
-export async function listAssignments(courseId: number): Promise<Array<Record<string, string>>> {
+export function listAssignments(courseId: number): Promise<Array<Record<string, string>>> {
+  return cached(`lms:assignments:${courseId}`, TTL.medium, () => listAssignmentsUncached(courseId));
+}
+
+async function listAssignmentsUncached(courseId: number): Promise<Array<Record<string, string>>> {
   const page = await openAuthenticatedPage(`${BASE_URL}/mod/assign/index.php?id=${courseId}`);
   try {
     return await extractTable(page, "table.generaltable");
@@ -288,7 +309,11 @@ export async function listAssignments(courseId: number): Promise<Array<Record<st
   }
 }
 
-export async function getGrades(courseId: number): Promise<Array<Record<string, string>>> {
+export function getGrades(courseId: number): Promise<Array<Record<string, string>>> {
+  return cached(`lms:grades:${courseId}`, TTL.medium, () => getGradesUncached(courseId));
+}
+
+async function getGradesUncached(courseId: number): Promise<Array<Record<string, string>>> {
   const page = await openAuthenticatedPage(`${BASE_URL}/grade/report/user/index.php?id=${courseId}`);
   try {
     const rows = await extractTable(page, "table.user-grade");

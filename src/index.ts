@@ -5,6 +5,7 @@ import { registerLmsTools } from "./services/lms/tools.js";
 import { registerElkTools } from "./services/elk/tools.js";
 import { registerIstudyTools } from "./services/istudy/tools.js";
 import { registerMailTools } from "./services/mail/tools.js";
+import { registerSystemTools } from "./services/system/tools.js";
 import { closeBrowserSession } from "./auth/browser-session.js";
 
 const server = new McpServer({
@@ -17,6 +18,7 @@ registerLmsTools(server);
 registerElkTools(server);
 registerIstudyTools(server);
 registerMailTools(server);
+registerSystemTools(server);
 
 async function main(): Promise<void> {
   const transport = new StdioServerTransport();

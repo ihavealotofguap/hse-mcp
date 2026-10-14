@@ -1,0 +1,29 @@
+import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { z } from "zod";
+import { clearCache } from "../../cache.js";
+import { runTool } from "../../mcp-utils.js";
+
+export function registerSystemTools(server: McpServer): void {
+  server.registerTool(
+    "hse_clear_cache",
+    {
+      title: "Сбросить кэш данных ВШЭ",
+      description:
+        "Результаты тулов lms_*/elk_*/istudy_* кэшируются в памяти на 2–30 минут, чтобы не " +
+        "открывать браузер заново ради неизменившихся данных (почта и RUZ не кэшируются). Если " +
+        "нужно гарантированно свежее значение — например, сразу после подачи работы или заявки, — " +
+        "вызовите этот тул, затем повторите нужный запрос. scope сужает сброс до одного сервиса.",
+      inputSchema: {
+        scope: z
+          .enum(["all", "elk", "lms", "istudy"])
+          .optional()
+          .describe("Что сбросить: all (по умолчанию) или один сервис"),
+      },
+    },
+    async ({ scope }) =>
+      runTool(async () => {
+        const prefix = !scope || scope === "all" ? "" : `${scope}:`;
+        return { cleared: clearCache(prefix), scope: scope ?? "all" };
+      })
+  );
+}

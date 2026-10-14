@@ -1,5 +1,6 @@
 import type { Page } from "playwright";
-import { openAuthenticatedPage } from "../../auth/browser-session.js";
+import { getApiRequestContext, openAuthenticatedPage } from "../../auth/browser-session.js";
+import { cached, TTL } from "../../cache.js";
 import { config } from "../../config.js";
 import { dumpPage, extractTable, type PageDump } from "../../dom-utils.js";
 import { formatLocalDate } from "../../date-utils.js";
@@ -26,7 +27,97 @@ const stripHtmlElk = (s: string) => s.replace(/<[^>]+>/g, " ").replace(/\s+/g, "
  *   расковырены (форма отправки), см. ROADMAP.md.
  */
 
-async function fetchElkApi<T>(apiPath: string): Promise<T> {
+// Токен берём один раз через страницу /profile и дальше ходим в API напрямую (без страницы) до
+// истечения. Срок — из `exp` JWT; если токен не JWT или `exp` нет, живёт консервативные 60 с.
+const TOKEN_SKEW_MS = 30_000;
+const TOKEN_FALLBACK_TTL_MS = 60_000;
+const API_TIMEOUT_MS = 20_000;
+
+interface TokenEntry {
+  token: string;
+  expiresAt: number;
+}
+
+let tokenEntry: TokenEntry | null = null;
+let tokenPromise: Promise<string> | null = null;
+// Если прямой запрос не прошёл, а старый путь через страницу прошёл — значит, API ЕЛК чем-то не
+// устраивает запрос вне браузерной страницы; дальше без повторных проб идём старым путём.
+let directApiBroken = false;
+
+/** Время истечения JWT в мс (из `exp`) либо null, если токен не JWT или без `exp`. */
+export function tokenExpiryMs(token: string): number | null {
+  try {
+    const payload = token.split(".")[1];
+    if (!payload) return null;
+    const json = JSON.parse(Buffer.from(payload, "base64url").toString("utf8")) as { exp?: unknown };
+    return typeof json.exp === "number" && Number.isFinite(json.exp) ? json.exp * 1000 : null;
+  } catch {
+    return null;
+  }
+}
+
+async function acquireToken(): Promise<string> {
+  const page = await openAuthenticatedPage(`${BASE_URL}/profile`);
+  try {
+    await page.waitForFunction(() => !!localStorage.getItem("access_token"), undefined, {
+      timeout: 10_000,
+    });
+    let token = await page.evaluate(() => localStorage.getItem("access_token"));
+    // storageState на диске восстанавливает localStorage, так что сразу после перезапуска там
+    // может лежать уже просроченный токен — даём SPA несколько секунд заменить его свежим.
+    const expiry = token ? tokenExpiryMs(token) : null;
+    if (token && expiry !== null && expiry - TOKEN_SKEW_MS <= Date.now()) {
+      await page
+        .waitForFunction((old) => localStorage.getItem("access_token") !== old, token, { timeout: 5_000 })
+        .catch(() => {});
+      token = await page.evaluate(() => localStorage.getItem("access_token"));
+    }
+    if (!token) throw new Error("ЕЛК не выдал access_token — возможно, сессия слетела");
+    tokenEntry = { token, expiresAt: tokenExpiryMs(token) ?? Date.now() + TOKEN_FALLBACK_TTL_MS };
+    return token;
+  } finally {
+    await page.close();
+  }
+}
+
+function getElkToken(): Promise<string> {
+  if (tokenEntry && tokenEntry.expiresAt - TOKEN_SKEW_MS > Date.now()) {
+    return Promise.resolve(tokenEntry.token);
+  }
+  // Параллельные вызовы делят одно получение токена, а не открывают по странице на каждый.
+  if (!tokenPromise) {
+    const promise: Promise<string> = acquireToken().finally(() => {
+      if (tokenPromise === promise) tokenPromise = null;
+    });
+    tokenPromise = promise;
+  }
+  return tokenPromise;
+}
+
+function invalidateToken(usedToken: string): void {
+  // Не сбрасываем токен, который уже успели обновить параллельным вызовом.
+  if (tokenEntry?.token === usedToken) tokenEntry = null;
+}
+
+type DirectResult<T> = { ok: true; body: T } | { ok: false; status: number; error?: string };
+
+async function requestDirect<T>(apiPath: string, token: string): Promise<DirectResult<T>> {
+  const api = await getApiRequestContext();
+  const res = await api.get(`${BASE_URL}${apiPath}`, {
+    headers: { Authorization: `Bearer ${token}` },
+    timeout: API_TIMEOUT_MS,
+  });
+  if (!res.ok()) return { ok: false, status: res.status() };
+  try {
+    return { ok: true, body: (await res.json()) as T };
+  } catch {
+    // 200 не-JSON — обычно редирект на страницу входа вместо 401.
+    return { ok: false, status: res.status(), error: "ответ не JSON" };
+  }
+}
+
+/** Прежний путь: открыть /profile и сделать fetch внутри страницы. Запасной вариант. */
+async function fetchElkApiViaPage<T>(apiPath: string): Promise<T> {
   const page = await openAuthenticatedPage(`${BASE_URL}/profile`);
   try {
     await page.waitForFunction(() => !!localStorage.getItem("access_token"), undefined, {
@@ -46,6 +137,52 @@ async function fetchElkApi<T>(apiPath: string): Promise<T> {
   } finally {
     await page.close();
   }
+}
+
+async function fetchElkApiUncached<T>(apiPath: string): Promise<T> {
+  if (directApiBroken) return fetchElkApiViaPage<T>(apiPath);
+
+  let lastFailure = "";
+  // Две попытки: с кэшированным токеном и (если сервер отверг его) со свежим.
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const token = await getElkToken();
+    const result = await requestDirect<T>(apiPath, token);
+    if (result.ok) return result.body;
+    lastFailure = `${result.status}${result.error ? ` (${result.error})` : ""}`;
+    // 5xx и прочее — не вопрос токена/способа запроса: отдаём ошибку как раньше, не отключая
+    // прямой путь из-за разового сбоя сервера.
+    if (result.status !== 401 && result.status !== 403 && !result.error) {
+      throw new Error(`lk.hse.ru API ${apiPath} вернул ${result.status}`);
+    }
+    invalidateToken(token);
+  }
+
+  // Прямой путь не сработал: проверяем старым. Если он тоже падает — это реальная ошибка (или
+  // слетевшая сессия), отдаём её; если проходит — прямые запросы с этим API не работают.
+  const data = await fetchElkApiViaPage<T>(apiPath).catch((err: unknown) => {
+    const message = err instanceof Error ? err.message : String(err);
+    throw new Error(`${message} (прямой запрос тоже не прошёл: ${lastFailure})`);
+  });
+  directApiBroken = true;
+  console.error(
+    `hsemcp: прямые запросы к lk.hse.ru/api не работают (${lastFailure}) — перехожу на запросы через страницу`
+  );
+  return data;
+}
+
+// TTL по префиксу пути: расписание и поиск — 5 мин, профиль/академ. карточка/ДПО — 30 мин,
+// остальное (заявки, задачи, уведомления, история, антиплагиат) — 2 мин.
+const ELK_API_TTL: Array<[prefix: string, ttlMs: number]> = [
+  ["/api/get-myschedule", TTL.medium],
+  ["/api/search/", TTL.medium],
+  ["/api/get-user", TTL.long],
+  ["/api/get-academic-data", TTL.long],
+  ["/dpo/rest/", TTL.long],
+];
+
+function fetchElkApi<T>(apiPath: string): Promise<T> {
+  const ttl = ELK_API_TTL.find(([prefix]) => apiPath.startsWith(prefix))?.[1] ?? TTL.short;
+  return cached(`elk:${apiPath}`, ttl, () => fetchElkApiUncached<T>(apiPath));
 }
 
 export interface ElkLesson {
@@ -367,7 +504,11 @@ const SOP_URL =
  * /elk_login.php. Данные — обычная HTML-таблица `table.event-table` (thead/tbody), извлекается
  * через extractTable.
  */
-export async function getCourseEvaluationStatus(): Promise<Array<Record<string, string>>> {
+export function getCourseEvaluationStatus(): Promise<Array<Record<string, string>>> {
+  return cached("elk:course-evaluation", TTL.medium, getCourseEvaluationStatusUncached);
+}
+
+async function getCourseEvaluationStatusUncached(): Promise<Array<Record<string, string>>> {
   const page = await openAuthenticatedPage(SOP_URL);
   try {
     await page.waitForSelector("table.event-table", { timeout: 10_000 }).catch(() => {});
@@ -386,7 +527,11 @@ const VKR_URL = "https://lms.hse.ru/elk_login.php?role=student&elk_lms_url=https
  * (единственная на странице) — на аккаунте без зарегистрированной темы работы возвращает
  * пустой массив (страница показывает только пояснение "Тема работы не занесена в систему АСАВ").
  */
-export async function getThesisStatus(): Promise<Array<Record<string, string>>> {
+export function getThesisStatus(): Promise<Array<Record<string, string>>> {
+  return cached("elk:thesis", TTL.medium, getThesisStatusUncached);
+}
+
+async function getThesisStatusUncached(): Promise<Array<Record<string, string>>> {
   const page = await openAuthenticatedPage(VKR_URL);
   try {
     await page.waitForSelector("table", { timeout: 10_000 }).catch(() => {});
@@ -408,7 +553,11 @@ const EMPTY_TABLE_PLACEHOLDER = "Ничего не найдено.";
  * состоянии отдаёт строку-заглушку "Ничего не найдено." как будто это данные — отфильтровываем
  * её, иначе пустой список практик выглядел бы как одна поддельная запись.
  */
-export async function listInternships(): Promise<Array<Record<string, string>>> {
+export function listInternships(): Promise<Array<Record<string, string>>> {
+  return cached("elk:internships", TTL.medium, listInternshipsUncached);
+}
+
+async function listInternshipsUncached(): Promise<Array<Record<string, string>>> {
   const page = await openAuthenticatedPage(INTERNSHIP_LIST_URL);
   try {
     await page.waitForSelector("table.theme_list_table", { timeout: 10_000 }).catch(() => {});
@@ -431,7 +580,11 @@ const PORTFOLIO_URL =
  * таблиц + список достижений, каждый раздел деятельности — вложенная страница по
  * `page_point=view_*`) — текстовый дамп через dumpPage, а не extractTable.
  */
-export async function getPortfolio(): Promise<PageDump> {
+export function getPortfolio(): Promise<PageDump> {
+  return cached("elk:portfolio", TTL.long, getPortfolioUncached);
+}
+
+async function getPortfolioUncached(): Promise<PageDump> {
   const page = await openAuthenticatedPage(PORTFOLIO_URL);
   try {
     return await dumpPage(page);
@@ -452,7 +605,11 @@ const SCHOLARSHIP_URL =
  * поэтому реализуемо без реверс-инжиниринга протокола DataTables. На проверенном аккаунте заявок
  * не было (`{"data":[]}`), поэтому форма отдельной записи не типизирована.
  */
-export async function getScholarshipHistory(): Promise<unknown[]> {
+export function getScholarshipHistory(): Promise<unknown[]> {
+  return cached("elk:scholarship-history", TTL.medium, getScholarshipHistoryUncached);
+}
+
+async function getScholarshipHistoryUncached(): Promise<unknown[]> {
   const page = await openAuthenticatedPage(SCHOLARSHIP_URL);
   try {
     const result = await page.evaluate(async () => {
@@ -484,7 +641,7 @@ async function dumpAuthenticatedPage(url: string): Promise<PageDump> {
  * академической карточки (рейтинг, GPA, группа, факультет) используйте getAcademicData().
  */
 export function getProfile(): Promise<PageDump> {
-  return dumpAuthenticatedPage(`${BASE_URL}/profile`);
+  return cached("elk:profile-page", TTL.long, () => dumpAuthenticatedPage(`${BASE_URL}/profile`));
 }
 
 // pmo.hse.ru — домен хелпдеска (создание тикетов), на который ведут документированные ссылки

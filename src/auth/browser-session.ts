@@ -1,9 +1,10 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
+import { chromium, type APIRequestContext, type Browser, type BrowserContext, type Page } from "playwright";
 import { config } from "../config.js";
 import { waitForRenderedBody } from "../dom-utils.js";
+import { acquirePageSlot } from "../limiter.js";
 
 // Считаем от расположения самого файла, а не process.cwd() — хосты вроде Claude
 // Desktop запускают stdio-сервер с произвольным (иногда непишущим, напр.
@@ -147,13 +148,18 @@ function withLoginLock<T>(fn: () => Promise<T>): Promise<T> {
  * сессия переживала перезапуск сервера, не перезаписывая её сомнительным/неизменным состоянием.
  */
 export async function openAuthenticatedPage(targetUrl: string): Promise<Page> {
-  const context = await getContext();
-  const page = await context.newPage();
+  // Слот лимитера (см. limiter.ts) держится, пока страница открыта: освобождается по её закрытию
+  // — вызывающие код закрывает страницы сам, в finally — либо здесь при ошибке открытия.
+  const release = await acquirePageSlot();
+  let page: Page | undefined;
   try {
+    const context = await getContext();
+    page = await context.newPage();
+    page.once("close", release);
     await page.goto(targetUrl, { waitUntil: "load" });
 
     await withLoginLock(async () => {
-      const state = await ensureLoggedIn(page);
+      const state = await ensureLoggedIn(page!);
       if (state === "logged-in") {
         await context.storageState({ path: STORAGE_STATE_PATH });
       }
@@ -163,9 +169,18 @@ export async function openAuthenticatedPage(targetUrl: string): Promise<Page> {
   } catch (err) {
     // Без этого страница осталась бы висеть открытой в общем контексте навсегда при любой
     // ошибке навигации/логина — утечка ресурсов Playwright при повторяющихся сбоях.
-    await page.close().catch(() => {});
+    await page?.close().catch(() => {});
+    release();
     throw err;
   }
+}
+
+/**
+ * HTTP-клиент поверх общей браузерной сессии: делит cookies контекста, но не открывает страницу
+ * (и потому не занимает слот лимитера). Для JSON-API, которым достаточно cookies + Bearer-токена.
+ */
+export async function getApiRequestContext(): Promise<APIRequestContext> {
+  return (await getContext()).request;
 }
 
 export async function closeBrowserSession(): Promise<void> {

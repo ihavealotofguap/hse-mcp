@@ -1,5 +1,6 @@
 import type { Page } from "playwright";
 import { openAuthenticatedPage } from "../../auth/browser-session.js";
+import { cached, TTL } from "../../cache.js";
 
 /**
  * istudy.hse.ru — детальная зачётка/рейтинг студента, отдельная от ЕЛК система со своим REST API.
@@ -109,13 +110,15 @@ export interface IstudyReport {
 const STUDENT_API = /\/api\/student\/\d+\//;
 
 /** Сводная академическая карточка (профиль + рейтинг/GPA/кредиты) с реальными числами из istudy.hse.ru. */
-export async function getReport(): Promise<IstudyReport> {
-  const data = await collectIstudyResponses({
-    profile: new RegExp(`${STUDENT_API.source}profile$`),
-    reportInfo: new RegExp(`${STUDENT_API.source}report-info$`),
-    rating: new RegExp(`${STUDENT_API.source}rating$`),
+export function getReport(): Promise<IstudyReport> {
+  return cached("istudy:report", TTL.long, async () => {
+    const data = await collectIstudyResponses({
+      profile: new RegExp(`${STUDENT_API.source}profile$`),
+      reportInfo: new RegExp(`${STUDENT_API.source}report-info$`),
+      rating: new RegExp(`${STUDENT_API.source}rating$`),
+    });
+    return data as unknown as IstudyReport;
   });
-  return data as unknown as IstudyReport;
 }
 
 export interface IstudyExam {
@@ -141,9 +144,11 @@ export interface ExamsByPeriodResponse {
 }
 
 /** Список дисциплин с результатами (экзамены/зачёты) за текущий учебный период студента. */
-export async function getExams(): Promise<ExamsByPeriodResponse> {
-  const data = await collectIstudyResponses({
-    exams: new RegExp(`${STUDENT_API.source}exams-by-period\\?`),
+export function getExams(): Promise<ExamsByPeriodResponse> {
+  return cached("istudy:exams", TTL.long, async () => {
+    const data = await collectIstudyResponses({
+      exams: new RegExp(`${STUDENT_API.source}exams-by-period\\?`),
+    });
+    return data.exams as ExamsByPeriodResponse;
   });
-  return data.exams as ExamsByPeriodResponse;
 }
