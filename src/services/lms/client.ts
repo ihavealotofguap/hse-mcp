@@ -2,6 +2,7 @@ import type { Page } from "playwright";
 import { openAuthenticatedPage } from "../../auth/browser-session.js";
 import { cached, TTL } from "../../cache.js";
 import { dumpPage, extractTable, type PageDump } from "../../dom-utils.js";
+import { formatLocalDate } from "../../date-utils.js";
 import { resolveScopedUrl } from "../../url-utils.js";
 
 const BASE_URL = "https://edu.hse.ru";
@@ -146,6 +147,85 @@ async function listCoursesUncached(): Promise<CourseOverview[]> {
       visible: c.visible,
       viewUrl: c.viewurl,
     }));
+  } finally {
+    await page.close();
+  }
+}
+
+interface RawActionEvent {
+  id: number;
+  name: string;
+  modulename?: string;
+  timesort: number;
+  overdue?: boolean;
+  url?: string;
+  course?: { id: number; fullname: string };
+  action?: { name: string; actionable: boolean; url: string };
+}
+
+export interface LmsActionEvent {
+  id: number;
+  name: string;
+  module: string;
+  course: string;
+  courseId: number | null;
+  due: string;
+  overdue: boolean;
+  actionable: boolean;
+  actionName: string;
+  url: string | null;
+}
+
+const CALENDAR_PAGE_SIZE = 50;
+const CALENDAR_MAX_PAGES = 6;
+
+/**
+ * События календаря Moodle «нужно действие» (сдать задание, пройти тест) за период — один
+ * AJAX-запрос вместо обхода страницы заданий каждого курса; тот же сервис, что питает блок
+ * «Таймлайн» дашборда. Проверено вживую 2026-10-14: сданные работы в ответ не попадают;
+ * просроченное несданное приходит с `overdue: true` и `actionable: false` (сдача закрыта) —
+ * поэтому по `actionable` фильтровать нельзя. Ключ кэша дневной гранулярности.
+ */
+export function listActionEvents(from: Date, to: Date): Promise<LmsActionEvent[]> {
+  const key = `lms:calendar:${formatLocalDate(from, "-")}:${formatLocalDate(to, "-")}`;
+  return cached(key, TTL.medium, () => listActionEventsUncached(from, to));
+}
+
+async function listActionEventsUncached(from: Date, to: Date): Promise<LmsActionEvent[]> {
+  const page = await openAuthenticatedPage(`${BASE_URL}/my/courses.php`);
+  try {
+    const events: LmsActionEvent[] = [];
+    let afterEventId = 0;
+    for (let i = 0; i < CALENDAR_MAX_PAGES; i++) {
+      const data = await fetchMoodleAjax<{ events: RawActionEvent[]; lastid?: number }>(
+        page,
+        "core_calendar_get_action_events_by_timesort",
+        {
+          timesortfrom: Math.floor(from.getTime() / 1000),
+          timesortto: Math.floor(to.getTime() / 1000),
+          aftereventid: afterEventId,
+          limitnum: CALENDAR_PAGE_SIZE,
+          limittononsuspendedevents: true,
+        }
+      );
+      for (const e of data.events) {
+        events.push({
+          id: e.id,
+          name: stripHtml(e.name),
+          module: e.modulename ?? "",
+          course: e.course?.fullname ?? "",
+          courseId: e.course?.id ?? null,
+          due: unixToIso(e.timesort),
+          overdue: e.overdue ?? false,
+          actionable: e.action?.actionable ?? false,
+          actionName: e.action?.name ?? "",
+          url: e.action?.url ?? e.url ?? null,
+        });
+      }
+      if (data.events.length < CALENDAR_PAGE_SIZE || !data.lastid) break;
+      afterEventId = data.lastid;
+    }
+    return events;
   } finally {
     await page.close();
   }
