@@ -1,10 +1,11 @@
 import fs from "node:fs";
 import path from "node:path";
+import { AsyncLocalStorage } from "node:async_hooks";
 import { fileURLToPath } from "node:url";
 import { chromium, type APIRequestContext, type Browser, type BrowserContext, type Page } from "playwright";
 import { config } from "../config.js";
 import { waitForRenderedBody } from "../dom-utils.js";
-import { acquirePageSlot } from "../limiter.js";
+import { acquirePageSlot, LEASE_GRACE_MS } from "../limiter.js";
 
 // Считаем от расположения самого файла, а не process.cwd() — хосты вроде Claude
 // Desktop запускают stdio-сервер с произвольным (иногда непишущим, напр.
@@ -14,13 +15,18 @@ const STORAGE_DIR = path.join(projectRoot, "storage");
 const STORAGE_STATE_PATH = path.join(STORAGE_DIR, "hse-session.json");
 const KEYCLOAK_HOST = "saml.hse.ru";
 
+/** Верхняя граница на всё в `withPage`: слот, открытие, вход и тело вызова. */
+export const PAGE_DEADLINE_MS = 45_000;
+
 let browserPromise: Promise<Browser> | null = null;
 let contextPromise: Promise<BrowserContext> | null = null;
 let closingPromise: Promise<void> | null = null;
-// Сериализует только шаг прохождения логина (не всю openAuthenticatedPage) — иначе параллельные
-// вызовы тулов сразу после истечения сессии могли бы одновременно запустить Keycloak-логин на
-// двух страницах общего контекста и конкурировать за его cookies/OIDC state.
+// Сериализует только фактическое прохождение логина (не открытие и не ожидание рендера) —
+// параллельные вызовы сразу после истечения сессии не должны одновременно запускать
+// Keycloak-логин на двух страницах общего контекста и конкурировать за его cookies/OIDC state.
 let loginLock: Promise<void> = Promise.resolve();
+// Растёт при каждом реальном входе: вызов, ждавший замок, понимает, что вход уже выполнен другим.
+let loginEpoch = 0;
 
 async function getContext(): Promise<BrowserContext> {
   if (!contextPromise) {
@@ -53,6 +59,15 @@ function hostnameOf(url: string): string {
     return new URL(url).hostname;
   } catch {
     return "";
+  }
+}
+
+function labelOf(url: string): string {
+  try {
+    const u = new URL(url);
+    return u.host + u.pathname;
+  } catch {
+    return "страница";
   }
 }
 
@@ -102,7 +117,7 @@ type LoginState = "already-authenticated" | "logged-in" | "unknown";
  * редирект на Keycloak, и вариант с ручной ссылкой "Войти". Не более 3 итераций — этого
  * достаточно на переход по ссылке "Войти" + сам логин на Keycloak.
  * Возвращает, произошёл ли реальный логин в этом вызове — от этого зависит, стоит ли
- * перезаписывать сохранённую storageState (см. openAuthenticatedPage).
+ * перезаписывать сохранённую storageState.
  */
 async function ensureLoggedIn(page: Page): Promise<LoginState> {
   let loggedInNow = false;
@@ -140,16 +155,137 @@ function withLoginLock<T>(fn: () => Promise<T>): Promise<T> {
   return result;
 }
 
+/** Нужен ли вход: страница на Keycloak либо показывает ссылку «Войти». Работает без замка. */
+async function needsLogin(page: Page): Promise<boolean> {
+  await waitForRender(page);
+  if (hostnameOf(page.url()) === KEYCLOAK_HOST) return true;
+  return (await findKeycloakLoginHref(page)) !== null;
+}
+
 /**
- * Открывает targetUrl в переиспользуемом браузерном контексте. Если сервис требует входа,
- * проходит единый SSO ВШЭ один раз — благодаря сохранённой Keycloak-сессии остальные сервисы
- * в большинстве случаев авторизуются без повторного ввода пароля.
- * Сохраняет storageState на диск только при реальном переходе в залогиненное состояние, чтобы
- * сессия переживала перезапуск сервера, не перезаписывая её сомнительным/неизменным состоянием.
+ * Сохраняет сессию на диск атомарно: во временный файл и rename — оборванная запись не
+ * портит рабочий `hse-session.json`.
+ */
+async function saveStorageState(context: BrowserContext): Promise<void> {
+  const state = await context.storageState();
+  const tmp = `${STORAGE_STATE_PATH}.${process.pid}.tmp`;
+  fs.writeFileSync(tmp, JSON.stringify(state));
+  fs.renameSync(tmp, STORAGE_STATE_PATH);
+}
+
+/**
+ * Определение «нужен ли вход» идёт вне замка (параллельно). Замок берётся только на сам вход и
+ * после повторной проверки: если другой вызов уже вошёл, пока мы ждали, страница перезагружается
+ * с обновлёнными cookies.
+ */
+async function ensureAuthenticated(page: Page, context: BrowserContext, targetUrl: string): Promise<void> {
+  const epochAtDetect = loginEpoch;
+  if (!(await needsLogin(page))) return;
+  await withLoginLock(async () => {
+    if (loginEpoch !== epochAtDetect) {
+      await page.goto(targetUrl, { waitUntil: "load" });
+    }
+    const state = await ensureLoggedIn(page);
+    if (state === "logged-in") {
+      loginEpoch++;
+      await saveStorageState(context);
+    }
+  });
+}
+
+export interface WithPageOptions {
+  /** Верхняя граница на слот, открытие, вход и `fn`. По умолчанию PAGE_DEADLINE_MS. */
+  deadlineMs?: number;
+  /** Внешняя отмена (например, от ресурса). */
+  signal?: AbortSignal;
+}
+
+export interface PageCallContext {
+  signal: AbortSignal;
+}
+
+const pageScope = new AsyncLocalStorage<true>();
+
+/**
+ * Открывает `url` в общем браузерном контексте, проходит единый SSO ВШЭ при необходимости,
+ * вызывает `fn` и **в `finally` закрывает страницу и освобождает слот лимитера**. Вызывающий код
+ * `page.close()` не пишет. По истечении `deadlineMs` (или по `signal`) страница закрывается, слот
+ * освобождается, вызов отклоняется. Вложенный `withPage` запрещён — он удерживал бы второй слот
+ * и мог зависнуть на лимите.
+ */
+export async function withPage<T>(
+  url: string,
+  fn: (page: Page, ctx: PageCallContext) => Promise<T>,
+  opts: WithPageOptions = {}
+): Promise<T> {
+  if (pageScope.getStore()) {
+    throw new Error(
+      "withPage: вложенное открытие страницы внутри withPage недопустимо (слот лимитера удерживается до конца внешнего вызова)"
+    );
+  }
+  const deadlineMs = opts.deadlineMs ?? PAGE_DEADLINE_MS;
+  const ctrl = new AbortController();
+  const timer = setTimeout(
+    () => ctrl.abort(new Error(`${labelOf(url)} не уложилась в ${deadlineMs / 1000} с`)),
+    deadlineMs
+  );
+  const onExternalAbort = () => ctrl.abort(opts.signal?.reason ?? new Error("операция отменена"));
+  if (opts.signal?.aborted) onExternalAbort();
+  else opts.signal?.addEventListener("abort", onExternalAbort, { once: true });
+
+  let page: Page | undefined;
+  let release: (() => void) | undefined;
+
+  const aborted = new Promise<never>((_, reject) => {
+    ctrl.signal.addEventListener(
+      "abort",
+      () => {
+        page?.close().catch(() => {});
+        reject(ctrl.signal.reason);
+      },
+      { once: true }
+    );
+    if (ctrl.signal.aborted) reject(ctrl.signal.reason);
+  });
+  aborted.catch(() => {});
+
+  const work = pageScope.run(true, async () => {
+    const rel = await acquirePageSlot({ signal: ctrl.signal, leaseMs: deadlineMs + LEASE_GRACE_MS });
+    release = rel;
+    if (ctrl.signal.aborted) {
+      rel();
+      ctrl.signal.throwIfAborted();
+    }
+    const context = await getContext();
+    const p = await context.newPage();
+    page = p;
+    if (ctrl.signal.aborted) {
+      await p.close().catch(() => {});
+      ctrl.signal.throwIfAborted();
+    }
+    await p.goto(url, { waitUntil: "load" });
+    await ensureAuthenticated(p, context, url);
+    ctrl.signal.throwIfAborted();
+    return fn(p, { signal: ctrl.signal });
+  });
+  // Если победила отмена, поздний отказ `work` не должен стать unhandled rejection.
+  work.catch(() => {});
+
+  try {
+    return await Promise.race([work, aborted]);
+  } finally {
+    clearTimeout(timer);
+    opts.signal?.removeEventListener("abort", onExternalAbort);
+    await page?.close().catch(() => {});
+    release?.();
+  }
+}
+
+/**
+ * @deprecated Переходный экспорт на время миграции клиентов на `withPage`; удаляется в конце
+ * миграции. Слот держится до закрытия страницы, закрывать её должен вызывающий.
  */
 export async function openAuthenticatedPage(targetUrl: string): Promise<Page> {
-  // Слот лимитера (см. limiter.ts) держится, пока страница открыта: освобождается по её закрытию
-  // — вызывающие код закрывает страницы сам, в finally — либо здесь при ошибке открытия.
   const release = await acquirePageSlot();
   let page: Page | undefined;
   try {
@@ -157,14 +293,7 @@ export async function openAuthenticatedPage(targetUrl: string): Promise<Page> {
     page = await context.newPage();
     page.once("close", release);
     await page.goto(targetUrl, { waitUntil: "load" });
-
-    await withLoginLock(async () => {
-      const state = await ensureLoggedIn(page!);
-      if (state === "logged-in") {
-        await context.storageState({ path: STORAGE_STATE_PATH });
-      }
-    });
-
+    await ensureAuthenticated(page, context, targetUrl);
     return page;
   } catch (err) {
     // Без этого страница осталась бы висеть открытой в общем контексте навсегда при любой
