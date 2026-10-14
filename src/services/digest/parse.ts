@@ -156,14 +156,24 @@ export function sortItems(items: DigestItem[]): DigestItem[] {
   });
 }
 
+/** Курс актуален: `enddate` не задан или не прошёл. Видимость/скрытость проверяются отдельно. */
+export function isActualCourse(c: CourseOverview, now: Date): boolean {
+  return c.enddate === null || Date.parse(c.enddate) >= now.getTime();
+}
+
 /**
  * Актуальные курсы (видимые, не скрытые, `enddate` не прошёл) и необязательный фильтр по id или
  * подстроке названия. Фильтр, не нашедший ничего, — ошибка со списком доступных курсов:
  * молчаливый пустой результат выглядел бы как «дедлайнов нет».
  */
-export function selectCourses(all: CourseOverview[], filter: CourseFilter | undefined, now: Date): CourseOverview[] {
+export function selectCourses(
+  all: CourseOverview[],
+  filter: CourseFilter | undefined,
+  now: Date,
+  opts: { includeEnded?: boolean } = {}
+): CourseOverview[] {
   const actual = all.filter(
-    (c) => c.visible && !c.hidden && (c.enddate === null || Date.parse(c.enddate) >= now.getTime())
+    (c) => c.visible && !c.hidden && (opts.includeEnded || isActualCourse(c, now))
   );
   if (!filter || filter.length === 0) return actual;
   const picked = actual.filter((c) =>
@@ -175,7 +185,7 @@ export function selectCourses(all: CourseOverview[], filter: CourseFilter | unde
   );
   if (picked.length === 0) {
     throw new Error(
-      `Ни один актуальный курс не подошёл под фильтр ${JSON.stringify(filter)}. ` +
+      `Ни один ${opts.includeEnded ? "" : "актуальный "}курс не подошёл под фильтр ${JSON.stringify(filter)}. ` +
         `Доступные курсы: ${actual.map((c) => `${c.id} — ${c.fullname}`).join("; ") || "нет"}`
     );
   }

@@ -2,10 +2,11 @@ import { config } from "../../config.js";
 import { addDays } from "../../date-utils.js";
 import * as elk from "../elk/client.js";
 import * as lms from "../lms/client.js";
-import type { LmsActionEvent } from "../lms/client.js";
+import type { CourseOverview, LmsActionEvent } from "../lms/client.js";
 import * as ruz from "../ruz/client.js";
 import {
   combineDateAndTime,
+  isActualCourse,
   isExamType,
   parseDateTime,
   scanDates,
@@ -107,16 +108,31 @@ export function actionEventToItem(e: LmsActionEvent): DigestItem {
   };
 }
 
+/**
+ * Отбор событий календаря по курсам-кандидатам. Просроченное несданное показывается и у завершившихся
+ * курсов; будущие дедлайны — только у актуальных.
+ */
+export function pickDeadlineEvents(
+  events: LmsActionEvent[],
+  candidates: CourseOverview[],
+  now: Date
+): LmsActionEvent[] {
+  const byId = new Map(candidates.map((c) => [c.id, c]));
+  return events.filter((e) => {
+    if (e.courseId === null) return false;
+    const course = byId.get(e.courseId);
+    if (!course) return false;
+    return e.overdue || isActualCourse(course, now);
+  });
+}
+
 async function lmsDeadlines(args: { range: DateRange; now: Date; courses?: CourseFilter }): Promise<CollectorResult> {
   const { range, now, courses } = args;
-  const selected = selectCourses(await lms.listCourses(), courses, now);
-  const ids = new Set(selected.map((c) => c.id));
+  const candidates = selectCourses(await lms.listCourses(), courses, now, { includeEnded: true });
   const lookback = addDays(startOfDay(now), -OVERDUE_LOOKBACK_DAYS);
   const events = await lms.listActionEvents(lookback, range.to);
   return {
-    items: events
-      .filter((e) => e.courseId !== null && ids.has(e.courseId))
-      .map((e) => actionEventToItem(e)),
+    items: pickDeadlineEvents(events, candidates, now).map((e) => actionEventToItem(e)),
   };
 }
 
