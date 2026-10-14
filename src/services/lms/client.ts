@@ -1,8 +1,9 @@
 import type { Page } from "playwright";
-import { openAuthenticatedPage } from "../../auth/browser-session.js";
-import { cached, TTL } from "../../cache.js";
+import { withPage } from "../../auth/browser-session.js";
+import { TTL } from "../../cache.js";
 import { dumpPage, extractTable, type PageDump } from "../../dom-utils.js";
 import { formatLocalDate } from "../../date-utils.js";
+import { defineResource } from "../../resource.js";
 import { resolveScopedUrl } from "../../url-utils.js";
 
 const BASE_URL = "https://edu.hse.ru";
@@ -113,47 +114,52 @@ const htmlToText = (html: string) =>
     .replace(/\n{3,}/g, "\n\n")
     .trim();
 
+const lmsCourses = defineResource<void, CourseOverview[]>({
+  name: "lms.courses",
+  ttl: TTL.medium,
+  key: () => "all",
+  load: (_a, ctx) =>
+    withPage(
+      AJAX_HOST_URL,
+      async (page) => {
+        const data = await fetchMoodleAjax<{ courses: RawTimelineCourse[] }>(
+          page,
+          "local_api_get_enrolled_courses_by_timeline_classification",
+          {
+            offset: 0,
+            limit: 100,
+            classification: "all",
+            sort: "fullname",
+            customfieldname: "",
+            customfieldvalue: "",
+            requiredfields: ["id", "fullname", "shortname", "showcoursecategory", "showshortname", "visible", "enddate"],
+          }
+        );
+        return data.courses.map((c) => ({
+          id: c.id,
+          fullname: c.fullname,
+          shortname: c.shortname,
+          category: stripHtml(c.coursecategory),
+          startdate: unixToIso(c.startdate),
+          enddate: c.enddate > 0 ? unixToIso(c.enddate) : null,
+          progress: c.hasprogress ? c.progress : null,
+          isFavourite: c.isfavourite,
+          hidden: c.hidden,
+          visible: c.visible,
+          viewUrl: c.viewurl,
+        }));
+      },
+      { signal: ctx.signal }
+    ),
+});
+
 /**
  * Список курсов через внутренний AJAX-эндпоинт дашборда (см. fetchMoodleAjax) — вместо парсинга
  * ссылок со страницы: даёт прогресс прохождения, даты начала/окончания и категорию, которых нет
  * в простой ссылке на курс. classification: "all" — все курсы, включая скрытые из вида.
  */
 export function listCourses(): Promise<CourseOverview[]> {
-  return cached("lms:courses", TTL.medium, listCoursesUncached);
-}
-
-async function listCoursesUncached(): Promise<CourseOverview[]> {
-  const page = await openAuthenticatedPage(AJAX_HOST_URL);
-  try {
-    const data = await fetchMoodleAjax<{ courses: RawTimelineCourse[] }>(
-      page,
-      "local_api_get_enrolled_courses_by_timeline_classification",
-      {
-        offset: 0,
-        limit: 100,
-        classification: "all",
-        sort: "fullname",
-        customfieldname: "",
-        customfieldvalue: "",
-        requiredfields: ["id", "fullname", "shortname", "showcoursecategory", "showshortname", "visible", "enddate"],
-      }
-    );
-    return data.courses.map((c) => ({
-      id: c.id,
-      fullname: c.fullname,
-      shortname: c.shortname,
-      category: stripHtml(c.coursecategory),
-      startdate: unixToIso(c.startdate),
-      enddate: c.enddate > 0 ? unixToIso(c.enddate) : null,
-      progress: c.hasprogress ? c.progress : null,
-      isFavourite: c.isfavourite,
-      hidden: c.hidden,
-      visible: c.visible,
-      viewUrl: c.viewurl,
-    }));
-  } finally {
-    await page.close();
-  }
+  return lmsCourses();
 }
 
 interface RawActionEvent {
@@ -189,58 +195,94 @@ export interface LmsActionEventsResult {
   truncated: boolean;
 }
 
+// Правая граница запроса округляется вверх до корзины (7/14/30/60 дней от сегодня): сводки
+// «сегодня/неделя/две недели» делят одну дорогую загрузку (страница + до 6 AJAX-запросов), а
+// `project` отсекает лишнее. Дальше 60 дней и в прошлом — точный ключ по дате.
+const CALENDAR_BUCKET_DAYS = [7, 14, 30, 60];
+const MS_PER_DAY = 86_400_000;
+
+export function calendarHorizon(to: Date, today: Date = new Date()): { key: string; end: Date } {
+  const t0 = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+  const t1 = new Date(to.getFullYear(), to.getMonth(), to.getDate());
+  const days = Math.round((t1.getTime() - t0.getTime()) / MS_PER_DAY);
+  const bucket = days >= 0 ? CALENDAR_BUCKET_DAYS.find((b) => b >= days) : undefined;
+  if (bucket === undefined) return { key: `d${formatLocalDate(t1, "-")}`, end: to };
+  const end = new Date(t0);
+  end.setDate(end.getDate() + bucket);
+  end.setHours(23, 59, 59, 999);
+  return { key: `b${bucket}@${formatLocalDate(t0, "-")}`, end };
+}
+
+interface CalendarArgs {
+  from: Date;
+  to: Date;
+}
+
+const lmsCalendar = defineResource<CalendarArgs, LmsActionEventsResult, LmsActionEventsResult>({
+  name: "lms.calendar",
+  ttl: TTL.medium,
+  key: (a) => `${formatLocalDate(a.from, "-")}:${calendarHorizon(a.to).key}`,
+  load: (a, ctx) =>
+    withPage(
+      AJAX_HOST_URL,
+      async (page) => {
+        const end = calendarHorizon(a.to).end;
+        const events: LmsActionEvent[] = [];
+        let truncated = false;
+        let afterEventId = 0;
+        for (let i = 0; i < CALENDAR_MAX_PAGES; i++) {
+          const data = await fetchMoodleAjax<{ events: RawActionEvent[]; lastid?: number }>(
+            page,
+            "core_calendar_get_action_events_by_timesort",
+            {
+              timesortfrom: Math.floor(a.from.getTime() / 1000),
+              timesortto: Math.floor(end.getTime() / 1000),
+              aftereventid: afterEventId,
+              limitnum: CALENDAR_PAGE_SIZE,
+              limittononsuspendedevents: true,
+            }
+          );
+          for (const e of data.events) {
+            events.push({
+              id: e.id,
+              name: stripHtml(e.name),
+              module: e.modulename ?? "",
+              course: e.course?.fullname ?? "",
+              courseId: e.course?.id ?? null,
+              due: unixToIso(e.timesort),
+              overdue: e.overdue ?? false,
+              actionable: e.action?.actionable ?? false,
+              actionName: e.action?.name ?? "",
+              url: e.action?.url ?? e.url ?? null,
+            });
+          }
+          if (data.events.length < CALENDAR_PAGE_SIZE || !data.lastid) break;
+          if (i === CALENDAR_MAX_PAGES - 1) truncated = true;
+          afterEventId = data.lastid;
+        }
+        return { events, truncated };
+      },
+      { signal: ctx.signal }
+    ),
+  // Событий позже запрошенной границы быть не должно; усечение относится только к хвосту выборки,
+  // поэтому для запроса с более ранней границей, чем последнее полученное событие, оно неактуально.
+  project: (raw, a) => {
+    const toMs = a.to.getTime();
+    const events = raw.events.filter((e) => Date.parse(e.due) <= toMs);
+    const lastDue = raw.events.reduce((m, e) => Math.max(m, Date.parse(e.due)), -Infinity);
+    return { events, truncated: raw.truncated && lastDue <= toMs };
+  },
+});
+
 /**
  * События календаря Moodle «нужно действие» (сдать задание, пройти тест) за период — один
  * AJAX-запрос вместо обхода страницы заданий каждого курса; тот же сервис, что питает блок
  * «Таймлайн» дашборда. Проверено вживую 2026-10-14: сданные работы в ответ не попадают;
  * просроченное несданное приходит с `overdue: true` и `actionable: false` (сдача закрыта) —
- * поэтому по `actionable` фильтровать нельзя. Ключ кэша дневной гранулярности.
+ * поэтому по `actionable` фильтровать нельзя. Ключ кэша: дата начала + корзина правой границы.
  */
 export function listActionEvents(from: Date, to: Date): Promise<LmsActionEventsResult> {
-  const key = `lms:calendar:${formatLocalDate(from, "-")}:${formatLocalDate(to, "-")}`;
-  return cached(key, TTL.medium, () => listActionEventsUncached(from, to));
-}
-
-async function listActionEventsUncached(from: Date, to: Date): Promise<LmsActionEventsResult> {
-  const page = await openAuthenticatedPage(AJAX_HOST_URL);
-  try {
-    const events: LmsActionEvent[] = [];
-    let truncated = false;
-    let afterEventId = 0;
-    for (let i = 0; i < CALENDAR_MAX_PAGES; i++) {
-      const data = await fetchMoodleAjax<{ events: RawActionEvent[]; lastid?: number }>(
-        page,
-        "core_calendar_get_action_events_by_timesort",
-        {
-          timesortfrom: Math.floor(from.getTime() / 1000),
-          timesortto: Math.floor(to.getTime() / 1000),
-          aftereventid: afterEventId,
-          limitnum: CALENDAR_PAGE_SIZE,
-          limittononsuspendedevents: true,
-        }
-      );
-      for (const e of data.events) {
-        events.push({
-          id: e.id,
-          name: stripHtml(e.name),
-          module: e.modulename ?? "",
-          course: e.course?.fullname ?? "",
-          courseId: e.course?.id ?? null,
-          due: unixToIso(e.timesort),
-          overdue: e.overdue ?? false,
-          actionable: e.action?.actionable ?? false,
-          actionName: e.action?.name ?? "",
-          url: e.action?.url ?? e.url ?? null,
-        });
-      }
-      if (data.events.length < CALENDAR_PAGE_SIZE || !data.lastid) break;
-      if (i === CALENDAR_MAX_PAGES - 1) truncated = true;
-      afterEventId = data.lastid;
-    }
-    return { events, truncated };
-  } finally {
-    await page.close();
-  }
+  return lmsCalendar({ from, to });
 }
 
 interface RawMailPerson {
@@ -276,24 +318,24 @@ export interface LmsMessageSummary {
   numAttachments: number;
 }
 
-/**
- * Внутренняя почта SmartLMS (плагин local_mail, edu.hse.ru/local/mail/) — переписка с
- * преподавателями внутри курсов, полностью отдельная от корпоративной почты Яндекс 360
- * (см. src/services/mail/). Реверс-инжинирено 2026-09-15 через тот же внутренний AJAX-сервис
- * Moodle (fetchMoodleAjax), метод local_mail_search_messages с ролями to/cc/bcc — это входящие.
- */
-export function listMessages(limit = 50): Promise<LmsMessageSummary[]> {
-  return cached(`lms:messages:${limit}`, TTL.short, () => listMessagesUncached(limit));
-}
+const MESSAGES_FETCH_LIMIT = 200; // максимум тула lms_list_messages
 
-async function listMessagesUncached(limit: number): Promise<LmsMessageSummary[]> {
-  const page = await openAuthenticatedPage(`${BASE_URL}/local/mail/view.php?t=inbox`);
-  try {
-    const messages = await fetchMoodleAjax<RawMailMessageSummary[]>(page, "local_mail_search_messages", {
-      query: { roles: ["to", "cc", "bcc"], deleted: false },
-      limit,
-    });
-    return messages.map((m) => ({
+const lmsMessages = defineResource<number, RawMailMessageSummary[], LmsMessageSummary[]>({
+  name: "lms.messages",
+  ttl: TTL.short,
+  key: () => "inbox",
+  load: (_limit, ctx) =>
+    withPage(
+      `${BASE_URL}/local/mail/view.php?t=inbox`,
+      (page) =>
+        fetchMoodleAjax<RawMailMessageSummary[]>(page, "local_mail_search_messages", {
+          query: { roles: ["to", "cc", "bcc"], deleted: false },
+          limit: MESSAGES_FETCH_LIMIT,
+        }),
+      { signal: ctx.signal }
+    ),
+  project: (raw, limit) =>
+    raw.slice(0, limit).map((m) => ({
       id: m.id,
       subject: m.subject,
       course: m.course.fullname,
@@ -302,10 +344,17 @@ async function listMessagesUncached(limit: number): Promise<LmsMessageSummary[]>
       unread: m.unread,
       starred: m.starred,
       numAttachments: m.numattachments,
-    }));
-  } finally {
-    await page.close();
-  }
+    })),
+});
+
+/**
+ * Внутренняя почта SmartLMS (плагин local_mail, edu.hse.ru/local/mail/) — переписка с
+ * преподавателями внутри курсов, полностью отдельная от корпоративной почты Яндекс 360
+ * (см. src/services/mail/). Реверс-инжинирено 2026-09-15 через тот же внутренний AJAX-сервис
+ * Moodle (fetchMoodleAjax), метод local_mail_search_messages с ролями to/cc/bcc — это входящие.
+ */
+export function listMessages(limit = 50): Promise<LmsMessageSummary[]> {
+  return lmsMessages(limit);
 }
 
 interface RawMailAttachment {
@@ -336,93 +385,103 @@ export interface LmsMessage {
   attachments: Array<{ filename: string; filesize: number; url: string }>;
 }
 
+const lmsMessage = defineResource<number, RawMailMessage, LmsMessage>({
+  name: "lms.message",
+  ttl: TTL.medium,
+  key: (id) => String(id),
+  load: (id, ctx) =>
+    withPage(
+      `${BASE_URL}/local/mail/view.php?t=inbox`,
+      (page) => fetchMoodleAjax<RawMailMessage>(page, "local_mail_get_message", { messageid: id }),
+      { signal: ctx.signal }
+    ),
+  project: (m) => ({
+    id: m.id,
+    subject: m.subject,
+    text: htmlToText(m.content),
+    course: m.course.fullname,
+    sender: m.sender.fullname,
+    recipients: m.recipients.map((r) => r.fullname),
+    time: unixToIso(m.time),
+    attachments: m.attachments.map((a) => ({ filename: a.filename, filesize: a.filesize, url: a.fileurl })),
+  }),
+});
+
 /** Полный текст письма внутренней почты SmartLMS по id (см. listMessages). */
 export function getMessage(messageId: number): Promise<LmsMessage> {
-  return cached(`lms:message:${messageId}`, TTL.medium, () => getMessageUncached(messageId));
+  return lmsMessage(messageId);
 }
 
-async function getMessageUncached(messageId: number): Promise<LmsMessage> {
-  const page = await openAuthenticatedPage(`${BASE_URL}/local/mail/view.php?t=inbox`);
-  try {
-    const m = await fetchMoodleAjax<RawMailMessage>(page, "local_mail_get_message", { messageid: messageId });
-    return {
-      id: m.id,
-      subject: m.subject,
-      text: htmlToText(m.content),
-      course: m.course.fullname,
-      sender: m.sender.fullname,
-      recipients: m.recipients.map((r) => r.fullname),
-      time: unixToIso(m.time),
-      attachments: m.attachments.map((a) => ({ filename: a.filename, filesize: a.filesize, url: a.fileurl })),
-    };
-  } finally {
-    await page.close();
-  }
-}
+const lmsMaterials = defineResource<number, ModuleLink[]>({
+  name: "lms.materials",
+  ttl: TTL.medium,
+  key: (courseId) => String(courseId),
+  load: (courseId, ctx) =>
+    withPage(
+      `${BASE_URL}/course/view.php?id=${courseId}`,
+      (page) =>
+        page.evaluate(() => {
+          const anchors = Array.from(document.querySelectorAll('a[href*="/mod/"]'));
+          const seen = new Set<string>();
+          const result: Array<{ type: string; cmid: number | null; title: string; url: string }> = [];
+          for (const a of anchors) {
+            const href = (a as HTMLAnchorElement).href;
+            const modMatch = href.match(/\/mod\/([a-z]+)\/view\.php/);
+            if (!modMatch) continue;
+            const idMatch = href.match(/[?&]id=(\d+)/);
+            const title = a.textContent?.trim().replace(/\s+/g, " ") || "";
+            if (!title || seen.has(href)) continue;
+            seen.add(href);
+            result.push({ type: modMatch[1], cmid: idMatch ? Number(idMatch[1]) : null, title, url: href });
+          }
+          return result;
+        }),
+      { signal: ctx.signal }
+    ),
+});
 
 export function getCourseMaterials(courseId: number): Promise<ModuleLink[]> {
-  return cached(`lms:materials:${courseId}`, TTL.medium, () => getCourseMaterialsUncached(courseId));
+  return lmsMaterials(courseId);
 }
 
-async function getCourseMaterialsUncached(courseId: number): Promise<ModuleLink[]> {
-  const page = await openAuthenticatedPage(`${BASE_URL}/course/view.php?id=${courseId}`);
-  try {
-    return await page.evaluate(() => {
-      const anchors = Array.from(document.querySelectorAll('a[href*="/mod/"]'));
-      const seen = new Set<string>();
-      const result: Array<{ type: string; cmid: number | null; title: string; url: string }> = [];
-      for (const a of anchors) {
-        const href = (a as HTMLAnchorElement).href;
-        const modMatch = href.match(/\/mod\/([a-z]+)\/view\.php/);
-        if (!modMatch) continue;
-        const idMatch = href.match(/[?&]id=(\d+)/);
-        const title = a.textContent?.trim().replace(/\s+/g, " ") || "";
-        if (!title || seen.has(href)) continue;
-        seen.add(href);
-        result.push({ type: modMatch[1], cmid: idMatch ? Number(idMatch[1]) : null, title, url: href });
-      }
-      return result;
-    });
-  } finally {
-    await page.close();
-  }
-}
+const lmsAssignments = defineResource<number, Array<Record<string, string>>>({
+  name: "lms.assignments",
+  ttl: TTL.medium,
+  key: (courseId) => String(courseId),
+  load: (courseId, ctx) =>
+    withPage(
+      `${BASE_URL}/mod/assign/index.php?id=${courseId}`,
+      (page) => extractTable(page, "table.generaltable"),
+      { signal: ctx.signal }
+    ),
+});
 
 export function listAssignments(courseId: number): Promise<Array<Record<string, string>>> {
-  return cached(`lms:assignments:${courseId}`, TTL.medium, () => listAssignmentsUncached(courseId));
+  return lmsAssignments(courseId);
 }
 
-async function listAssignmentsUncached(courseId: number): Promise<Array<Record<string, string>>> {
-  const page = await openAuthenticatedPage(`${BASE_URL}/mod/assign/index.php?id=${courseId}`);
-  try {
-    return await extractTable(page, "table.generaltable");
-  } finally {
-    await page.close();
-  }
-}
+const lmsGrades = defineResource<number, Array<Record<string, string>>>({
+  name: "lms.grades",
+  ttl: TTL.medium,
+  key: (courseId) => String(courseId),
+  load: (courseId, ctx) =>
+    withPage(
+      `${BASE_URL}/grade/report/user/index.php?id=${courseId}`,
+      async (page) => {
+        const rows = await extractTable(page, "table.user-grade");
+        if (rows.length > 0) return rows;
+        return extractTable(page, "table.generaltable");
+      },
+      { signal: ctx.signal }
+    ),
+});
 
 export function getGrades(courseId: number): Promise<Array<Record<string, string>>> {
-  return cached(`lms:grades:${courseId}`, TTL.medium, () => getGradesUncached(courseId));
-}
-
-async function getGradesUncached(courseId: number): Promise<Array<Record<string, string>>> {
-  const page = await openAuthenticatedPage(`${BASE_URL}/grade/report/user/index.php?id=${courseId}`);
-  try {
-    const rows = await extractTable(page, "table.user-grade");
-    if (rows.length > 0) return rows;
-    return await extractTable(page, "table.generaltable");
-  } finally {
-    await page.close();
-  }
+  return lmsGrades(courseId);
 }
 
 /** Открыть произвольную страницу edu.hse.ru (относительный путь) — для случаев вне готовых тулов. */
-export async function openPage(relativePath: string): Promise<PageDump> {
+export function openPage(relativePath: string): Promise<PageDump> {
   const url = resolveScopedUrl(BASE_URL, relativePath);
-  const page = await openAuthenticatedPage(url);
-  try {
-    return await dumpPage(page);
-  } finally {
-    await page.close();
-  }
+  return withPage(url, (page) => dumpPage(page));
 }
