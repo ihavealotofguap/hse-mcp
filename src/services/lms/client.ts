@@ -32,7 +32,7 @@ interface MoodleAjaxResponse<T> {
  * авторизация через sesskey текущей сессии (не требует отдельного mobile webservice-токена).
  * Реверс-инжинирено 2026-09-15 на вызове дашборда /my/courses.php.
  */
-async function fetchMoodleAjax<T>(
+export async function fetchMoodleAjax<T>(
   page: Page,
   methodname: string,
   args: Record<string, unknown>
