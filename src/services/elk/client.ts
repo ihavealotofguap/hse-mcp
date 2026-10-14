@@ -1,6 +1,3 @@
-import type { Page } from "playwright"; // временно, удаляется в Task 5
-import { cached } from "../../cache.js"; // временно, удаляется в Task 5
-import { openAuthenticatedPage } from "../../auth/browser-session.js"; // временно, удаляется в Task 5
 import { getApiRequestContext, withPage } from "../../auth/browser-session.js";
 import { createBreaker } from "../../breaker.js";
 import { TTL } from "../../cache.js";
@@ -625,6 +622,21 @@ export function getAntiplagiatStatus(): Promise<ElkAntiplagiatStatus> {
 const SOP_URL =
   "https://lms.hse.ru/elk_login.php?role=student&elk_lms_url=https://lms.hse.ru/yii_index.php%3Fr=rt/hse-rt-student-event-list";
 
+const elkCourseEvaluation = defineResource<void, Array<Record<string, string>>>({
+  name: "elk.course-evaluation",
+  ttl: TTL.medium,
+  key: () => "me",
+  load: (_a, ctx) =>
+    withPage(
+      SOP_URL,
+      async (page) => {
+        await page.waitForSelector("table.event-table", { timeout: 10_000 }).catch(() => {});
+        return extractTable(page, "table.event-table");
+      },
+      { signal: ctx.signal }
+    ),
+});
+
 /**
  * Статус «Оцени свои курсы» / СОП (студенческая оценка преподавания) — периоды оценки и статус
  * заполнения анкеты по каждому. Реверс-инжинирено 2026-09-15: это отдельный от edu.hse.ru
@@ -633,20 +645,25 @@ const SOP_URL =
  * через extractTable.
  */
 export function getCourseEvaluationStatus(): Promise<Array<Record<string, string>>> {
-  return cached("elk:course-evaluation", TTL.medium, getCourseEvaluationStatusUncached);
-}
-
-async function getCourseEvaluationStatusUncached(): Promise<Array<Record<string, string>>> {
-  const page = await openAuthenticatedPage(SOP_URL);
-  try {
-    await page.waitForSelector("table.event-table", { timeout: 10_000 }).catch(() => {});
-    return await extractTable(page, "table.event-table");
-  } finally {
-    await page.close();
-  }
+  return elkCourseEvaluation();
 }
 
 const VKR_URL = "https://lms.hse.ru/elk_login.php?role=student&elk_lms_url=https://lms.hse.ru/%3Fap_list";
+
+const elkThesis = defineResource<void, Array<Record<string, string>>>({
+  name: "elk.thesis",
+  ttl: TTL.medium,
+  key: () => "me",
+  load: (_a, ctx) =>
+    withPage(
+      VKR_URL,
+      async (page) => {
+        await page.waitForSelector("table", { timeout: 10_000 }).catch(() => {});
+        return extractTable(page, "table");
+      },
+      { signal: ctx.signal }
+    ),
+});
 
 /**
  * Мои работы (ВКР/КР/Проект) — статус проверки выпускной квалификационной/курсовой работы:
@@ -656,23 +673,29 @@ const VKR_URL = "https://lms.hse.ru/elk_login.php?role=student&elk_lms_url=https
  * пустой массив (страница показывает только пояснение "Тема работы не занесена в систему АСАВ").
  */
 export function getThesisStatus(): Promise<Array<Record<string, string>>> {
-  return cached("elk:thesis", TTL.medium, getThesisStatusUncached);
-}
-
-async function getThesisStatusUncached(): Promise<Array<Record<string, string>>> {
-  const page = await openAuthenticatedPage(VKR_URL);
-  try {
-    await page.waitForSelector("table", { timeout: 10_000 }).catch(() => {});
-    return await extractTable(page, "table");
-  } finally {
-    await page.close();
-  }
+  return elkThesis();
 }
 
 const INTERNSHIP_LIST_URL =
   "https://lms.hse.ru/elk_login.php?role=student&elk_lms_url=https://lms.hse.ru/yii_index.php%3Fr=pr/request-student/demand-list";
 
 const EMPTY_TABLE_PLACEHOLDER = "Ничего не найдено.";
+
+const elkInternships = defineResource<void, Array<Record<string, string>>>({
+  name: "elk.internships",
+  ttl: TTL.medium,
+  key: () => "me",
+  load: (_a, ctx) =>
+    withPage(
+      INTERNSHIP_LIST_URL,
+      async (page) => {
+        await page.waitForSelector("table.theme_list_table", { timeout: 10_000 }).catch(() => {});
+        const rows = await extractTable(page, "table.theme_list_table");
+        return rows.filter((r) => !Object.values(r).includes(EMPTY_TABLE_PLACEHOLDER));
+      },
+      { signal: ctx.signal }
+    ),
+});
 
 /**
  * Список заявок на практику/стажировку («Модуль Практика» на lms.hse.ru, доступ через тот же
@@ -682,22 +705,18 @@ const EMPTY_TABLE_PLACEHOLDER = "Ничего не найдено.";
  * её, иначе пустой список практик выглядел бы как одна поддельная запись.
  */
 export function listInternships(): Promise<Array<Record<string, string>>> {
-  return cached("elk:internships", TTL.medium, listInternshipsUncached);
-}
-
-async function listInternshipsUncached(): Promise<Array<Record<string, string>>> {
-  const page = await openAuthenticatedPage(INTERNSHIP_LIST_URL);
-  try {
-    await page.waitForSelector("table.theme_list_table", { timeout: 10_000 }).catch(() => {});
-    const rows = await extractTable(page, "table.theme_list_table");
-    return rows.filter((r) => !Object.values(r).includes(EMPTY_TABLE_PLACEHOLDER));
-  } finally {
-    await page.close();
-  }
+  return elkInternships();
 }
 
 const PORTFOLIO_URL =
   "https://lms.hse.ru/elk_login.php?role=student&elk_lms_url=https://lms.hse.ru/index.php%3Fpage=portfolio";
+
+const elkPortfolio = defineResource<void, PageDump>({
+  name: "elk.portfolio",
+  ttl: TTL.long,
+  key: () => "me",
+  load: (_a, ctx) => withPage(PORTFOLIO_URL, (page) => dumpPage(page), { signal: ctx.signal }),
+});
 
 /**
  * Электронное портфолио студента (баллы за учёбу/науку/ДПО/практики/культурно-творческую и
@@ -709,20 +728,34 @@ const PORTFOLIO_URL =
  * `page_point=view_*`) — текстовый дамп через dumpPage, а не extractTable.
  */
 export function getPortfolio(): Promise<PageDump> {
-  return cached("elk:portfolio", TTL.long, getPortfolioUncached);
-}
-
-async function getPortfolioUncached(): Promise<PageDump> {
-  const page = await openAuthenticatedPage(PORTFOLIO_URL);
-  try {
-    return await dumpPage(page);
-  } finally {
-    await page.close();
-  }
+  return elkPortfolio();
 }
 
 const SCHOLARSHIP_URL =
   "https://lms.hse.ru/elk_login.php?role=student&elk_lms_url=https://lms.hse.ru/index.php%3Fpage=portfolio_scholarship";
+
+const elkScholarship = defineResource<void, unknown[]>({
+  name: "elk.scholarship-history",
+  ttl: TTL.medium,
+  key: () => "me",
+  load: (_a, ctx) =>
+    withPage(
+      SCHOLARSHIP_URL,
+      async (page) => {
+        const result = await page.evaluate(async () => {
+          const res = await fetch(`act.php?on=portfolio_scholarship&name=history_apps&_=${Date.now()}`, {
+            credentials: "include",
+          });
+          if (!res.ok) {
+            throw new Error(`lms.hse.ru act.php вернул ${res.status}`);
+          }
+          return (await res.json()) as { data: unknown[] };
+        });
+        return result.data;
+      },
+      { signal: ctx.signal }
+    ),
+});
 
 /**
  * История заявок на повышенную государственную академическую стипендию (портал lms.hse.ru,
@@ -734,47 +767,27 @@ const SCHOLARSHIP_URL =
  * не было (`{"data":[]}`), поэтому форма отдельной записи не типизирована.
  */
 export function getScholarshipHistory(): Promise<unknown[]> {
-  return cached("elk:scholarship-history", TTL.medium, getScholarshipHistoryUncached);
+  return elkScholarship();
 }
 
-async function getScholarshipHistoryUncached(): Promise<unknown[]> {
-  const page = await openAuthenticatedPage(SCHOLARSHIP_URL);
-  try {
-    const result = await page.evaluate(async () => {
-      const res = await fetch(`act.php?on=portfolio_scholarship&name=history_apps&_=${Date.now()}`, {
-        credentials: "include",
-      });
-      if (!res.ok) {
-        throw new Error(`lms.hse.ru act.php вернул ${res.status}`);
-      }
-      return (await res.json()) as { data: unknown[] };
-    });
-    return result.data;
-  } finally {
-    await page.close();
-  }
-}
-
-async function dumpAuthenticatedPage(url: string): Promise<PageDump> {
-  const page: Page = await openAuthenticatedPage(url);
-  try {
-    return await dumpPage(page);
-  } finally {
-    await page.close();
-  }
-}
+const elkProfilePage = defineResource<void, PageDump>({
+  name: "elk.profile-page",
+  ttl: TTL.long,
+  key: () => "me",
+  load: (_a, ctx) => withPage(`${BASE_URL}/profile`, (page) => dumpPage(page), { signal: ctx.signal }),
+});
 
 /**
  * Полная страница профиля (текст + ссылки) — общая информация и контакты. Для структурированной
  * академической карточки (рейтинг, GPA, группа, факультет) используйте getAcademicData().
  */
 export function getProfile(): Promise<PageDump> {
-  return cached("elk:profile-page", TTL.long, () => dumpAuthenticatedPage(`${BASE_URL}/profile`));
+  return elkProfilePage();
 }
 
 // pmo.hse.ru — домен хелпдеска (создание тикетов), на который ведут документированные ссылки
 // со страниц профиля/student-services, поэтому явно разрешён в дополнение к baseUrl.
 export function openPage(relativePath: string): Promise<PageDump> {
   const url = resolveScopedUrl(BASE_URL, relativePath, ["pmo.hse.ru"]);
-  return dumpAuthenticatedPage(url);
+  return withPage(url, (page) => dumpPage(page));
 }
