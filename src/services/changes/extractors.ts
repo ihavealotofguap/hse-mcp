@@ -4,7 +4,7 @@ import { endOfDay, isExamType, startOfDay } from "../digest/parse.js";
 import * as elk from "../elk/client.js";
 import * as lms from "../lms/client.js";
 import type { CourseOverview } from "../lms/client.js";
-import { canonicalAttrs, dedupeIds, isEmptyGrade, mskNaive, normText, sopNaive, utcMinute } from "./normalize.js";
+import { canonicalAttrs, dedupeIds, fingerprint, isEmptyGrade, mskNaive, normText, sopNaive, utcMinute } from "./normalize.js";
 import type { DiffFlags, Fact, Scope, SourceResult } from "./types.js";
 
 export const CALENDAR_LOOKBACK_DAYS = 180;
@@ -53,6 +53,30 @@ const orUndefined = (s: string): string | undefined => (s === "" ? undefined : s
 /** Элементы с нераспознанной датой пропускаются — но не молча: счётчик уходит в предупреждения. */
 const skippedWarning = (n: number, what: string): string[] => (n > 0 ? [`${what} без распознанной даты пропущено: ${n}`] : []);
 
+/**
+ * Пропущены все элементы непустого ответа — формат даты не распознан: это ошибка источника, а не
+ * «ок с нулём фактов» (иначе база источника обнулилась бы). Частичный пропуск остаётся предупреждением.
+ */
+function assertDatesParsed(total: number, kept: number): void {
+  if (total > 0 && kept === 0) throw new Error(`не удалось разобрать даты элементов: ${total} из ${total}`);
+}
+
+/**
+ * `dedupeIds` с детерминированным порядком входа: суффикс `#n` у настоящих дубликатов определяется
+ * содержимым (id, затем отпечаток attrs), а не позицией в ответе — перестановка ответа не даёт ложных событий.
+ */
+function stableDedupe(facts: Fact[]): Fact[] {
+  const keyed = facts.map((fact) => ({ fact, fp: fingerprint(fact.attrs) }));
+  keyed.sort((a, b) => (a.fact.id < b.fact.id ? -1 : a.fact.id > b.fact.id ? 1 : a.fp < b.fp ? -1 : a.fp > b.fp ? 1 : 0));
+  return dedupeIds(keyed.map((k) => k.fact));
+}
+
+/** Минута, предшествующая моменту `ГГГГ-ММ-ДДTЧЧ:ммZ`; при сбое разбора — сам момент. */
+function minuteBefore(utc: string): string {
+  const d = new Date(utc.replace("Z", ":00Z"));
+  return utcMinute(new Date(d.getTime() - 60_000)) ?? utc;
+}
+
 function lmsCalendar(deps: ClientDeps): SourceExtractor {
   return {
     source: "lms_calendar",
@@ -64,7 +88,7 @@ function lmsCalendar(deps: ClientDeps): SourceExtractor {
       const from = addDays(today, -CALENDAR_LOOKBACK_DAYS);
       const to = endOfDay(addDays(today, CALENDAR_HORIZON_DAYS));
       const res = await deps.listActionEvents(from, to, ctx.opts);
-      const facts = dedupeIds(
+      const facts = stableDedupe(
         res.events.flatMap((e): Fact[] => {
           const due = utcMinute(e.due);
           if (due === null) return [];
@@ -82,11 +106,16 @@ function lmsCalendar(deps: ClientDeps): SourceExtractor {
           ];
         })
       );
+      assertDatesParsed(res.events.length, facts.length);
       const lastDue = maxString(facts.map((f) => f.at as string));
       return {
         facts,
-        // Усечение отрезает самые поздние события — покрытие сужается до последнего загруженного.
-        coverage: { from: utcMinute(from), to: res.truncated ? (lastDue ?? utcMinute(from)) : utcMinute(to) },
+        // Усечение отрезает самые поздние события — покрытие сужается до минуты ПЕРЕД последним загруженным:
+        // событие с тем же сроком могло быть отрезано границей страницы и не должно стать ложным `added`.
+        coverage: {
+          from: utcMinute(from),
+          to: res.truncated ? (lastDue ? minuteBefore(lastDue) : utcMinute(from)) : utcMinute(to),
+        },
         truncated: res.truncated,
         warnings: [
           ...(res.truncated
@@ -125,7 +154,7 @@ function elkWindows(deps: ClientDeps): SourceExtractor {
           attrs: canonicalAttrs({ end: sopNaive(pick(row, /окончан|end/i)), status: pick(row, /статус|status/i) }),
         });
       }
-      return { facts: dedupeIds(facts), warnings };
+      return { facts: stableDedupe(facts), warnings };
     },
   };
 }
@@ -160,7 +189,7 @@ function elkSchedule(deps: ClientDeps): SourceExtractor {
       }
       // `from` — полночь локальная (МСК пользователя): границы покрытия — по локальным компонентам даты.
       return {
-        facts: dedupeIds(facts),
+        facts: stableDedupe(facts),
         coverage: { from: `${formatLocalDate(from, "-")}T00:00`, to: `${formatLocalDate(to, "-")}T23:59` },
       };
     },
@@ -174,7 +203,7 @@ function lmsMessages(deps: ClientDeps): SourceExtractor {
     flags: { emitChanged: false, emitRemoved: false, carryMissing: false },
     async run(ctx) {
       const messages = await deps.listMessages(INBOX_LMS_LIMIT, ctx.opts);
-      const facts = dedupeIds(
+      const facts = stableDedupe(
         messages.flatMap((m): Fact[] => {
           const at = utcMinute(m.time);
           if (at === null) return [];
@@ -192,6 +221,7 @@ function lmsMessages(deps: ClientDeps): SourceExtractor {
           ];
         })
       );
+      assertDatesParsed(messages.length, facts.length);
       // Выборка упёрлась в лимит — старше самого старого элемента ответа «новое» не судим.
       const full = messages.length >= INBOX_LMS_LIMIT;
       return {
@@ -210,16 +240,18 @@ function elkNotifications(deps: ClientDeps): SourceExtractor {
     flags: { emitChanged: false, emitRemoved: false, carryMissing: false },
     async run(ctx) {
       const res = await deps.getNotifications(INBOX_NOTIFICATIONS_LIMIT, ctx.opts);
-      const facts = dedupeIds(
+      const facts = stableDedupe(
         res.notifications.flatMap((n): Fact[] => {
           const raw = normText(n.date);
-          // Даты уведомлений приходят без времени (ГГГГ-ММ-ДД) — гранулярность покрытия сутки.
-          const at = /^\d{4}-\d{2}-\d{2}$/.test(raw) ? raw : utcMinute(raw);
+          // Даты уведомлений приходят без времени (ГГГГ-ММ-ДД) — гранулярность покрытия сутки; если время
+          // всё же есть (в том числе без пояса), берётся только дата: пояс неизвестен, сравнение по суткам.
+          const at = /^\d{4}-\d{2}-\d{2}(?!\d)/.test(raw) ? raw.slice(0, 10) : utcMinute(raw);
           if (at === null) return [];
           const title = normText(n.title);
           return [{ id: String(n.id), scope: "inbox", kind: "notification", title, attrs: canonicalAttrs({ title }), at }];
         })
       );
+      assertDatesParsed(res.notifications.length, facts.length);
       const full = res.notifications.length >= INBOX_NOTIFICATIONS_LIMIT || res.count > res.notifications.length;
       return {
         facts,
@@ -239,8 +271,10 @@ function elkClaims(deps: ClientDeps): SourceExtractor {
     async run(ctx) {
       const res = await deps.listRequests(CLAIMS_LIMIT, ctx.opts);
       const truncated = res.count > res.requests.length;
-      const facts = dedupeIds(
-        res.requests.map(
+      // Заявка без номера не имеет стабильного id (""/"#2" зависели бы от порядка) — пропускается.
+      const numbered = res.requests.filter((c) => normText(c.num) !== "");
+      const facts = stableDedupe(
+        numbered.map(
           (c): Fact => ({
             id: normText(c.num),
             scope: "claims",
@@ -251,10 +285,14 @@ function elkClaims(deps: ClientDeps): SourceExtractor {
           })
         )
       );
+      const unnumbered = res.requests.length - numbered.length;
       return {
         facts,
         truncated,
-        warnings: truncated ? ["список заявок усечён по лимиту — «пропало» не вычисляется"] : [],
+        warnings: [
+          ...(truncated ? ["список заявок усечён по лимиту: часть заявок не загружена"] : []),
+          ...(unnumbered > 0 ? [`заявок без номера пропущено: ${unnumbered}`] : []),
+        ],
       };
     },
   };
@@ -277,7 +315,7 @@ export function gradesExtractor(course: CourseOverview, deps: ClientDeps = realC
       // ошибка источника, а не пустая выдача. В Moodle строка «Итого за курс» с `td.column-grade` есть всегда.
       if (!table.found || !table.recognized) throw new Error("unsupported grade table");
       const courseName = normText(course.fullname);
-      const facts = dedupeIds(
+      const facts = stableDedupe(
         table.rows
           .filter((r) => !r.isCategory)
           .map((r): Fact => {
