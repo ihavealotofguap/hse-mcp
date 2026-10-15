@@ -87,21 +87,26 @@ export async function loadState(dir: string): Promise<LoadResult> {
   } catch {
     parsed = undefined;
   }
-  if (!isValidState(parsed) || parsed.version < 1) {
-    // Только невалидный JSON/схема считаются повреждением; прежние .corrupt не затираются.
-    try {
-      await retryIo(() => fs.renameSync(file, corruptName(file)));
-    } catch {
-      /* не удалось переместить — база всё равно стартует чистой */
-    }
-    return { kind: "corrupt", state: emptyState(), warning: "state.json повреждён: перемещён в .corrupt-*, начата чистая база" };
-  }
-  if (parsed.version > STATE_VERSION) {
+  // Версия проверяется до схемы: у более новой версии схема может быть другой, файл не трогаем.
+  if (isObj(parsed) && isNum(parsed.version) && parsed.version > STATE_VERSION) {
     return {
       kind: "newer",
       state: emptyState(),
       warning: `state.json создан более новой версией (${parsed.version} > ${STATE_VERSION}); файл не тронут, запись пропущена`,
     };
+  }
+  if (!isValidState(parsed) || parsed.version < 1) {
+    // Только невалидный JSON/схема считаются повреждением; прежние .corrupt не затираются.
+    try {
+      await retryIo(() => fs.renameSync(file, corruptName(file)));
+    } catch {
+      return {
+        kind: "corrupt",
+        state: emptyState(),
+        warning: "state.json повреждён, но не удалось переместить повреждённый файл; запись отложена",
+      };
+    }
+    return { kind: "corrupt", state: emptyState(), warning: "state.json повреждён: перемещён в .corrupt-*, начата чистая база" };
   }
   return { kind: "ok", state: parsed };
 }
@@ -181,6 +186,7 @@ async function withFileLock<T>(dir: string, fn: () => Promise<T>, waitMs: number
   // Метка владельца: чужую (перехваченную как устаревшую) блокировку при выходе не снимаем.
   const token = `${process.pid} ${Date.now()} ${crypto.randomBytes(6).toString("hex")}`;
   const deadline = Date.now() + waitMs;
+  const timeout = (): Error => new Error(`state.json занят другим процессом: блокировка не освободилась за ${waitMs / 1000} с`);
   let fd: number | null = null;
   while (fd === null) {
     try {
@@ -188,24 +194,29 @@ async function withFileLock<T>(dir: string, fn: () => Promise<T>, waitMs: number
     } catch (err) {
       const code = errCode(err);
       if (code !== "EEXIST" && !isBusy(code)) throw err;
+      let retrySoon = false;
       try {
-        if (Date.now() - fs.statSync(lock).mtimeMs > LOCK_STALE_MS) {
-          fs.unlinkSync(lock);
-          continue;
+        // Содержимое читается до stat и сверяется перед снятием: свежий чужой lock, появившийся
+        // между проверкой и unlink, не снимаем.
+        const content = fs.readFileSync(lock, "utf8");
+        const mtime = fs.statSync(lock).mtimeMs;
+        if (Date.now() - mtime > LOCK_STALE_MS) {
+          if (fs.readFileSync(lock, "utf8") === content && fs.statSync(lock).mtimeMs === mtime) fs.unlinkSync(lock);
+          retrySoon = true;
         }
       } catch (inner) {
         // Блокировка исчезла между проверками — пробуем снова; иная ошибка (занят файл) — ждём как обычно.
-        if (errCode(inner) === "ENOENT") continue;
+        if (errCode(inner) === "ENOENT") retrySoon = true;
       }
-      if (Date.now() > deadline) {
-        throw new Error(`state.json занят другим процессом: блокировка не освободилась за ${waitMs / 1000} с`);
-      }
-      await sleep(50 + Math.floor(Math.random() * 100));
+      if (Date.now() > deadline) throw timeout();
+      await sleep(retrySoon ? 10 + Math.floor(Math.random() * 10) : 50 + Math.floor(Math.random() * 100));
     }
   }
+  let tokenWritten = false;
   try {
     try {
       fs.writeSync(fd, token);
+      tokenWritten = true;
     } catch {
       /* содержимое блокировки справочное */
     }
@@ -217,7 +228,10 @@ async function withFileLock<T>(dir: string, fn: () => Promise<T>, waitMs: number
       /* уже закрыт */
     }
     try {
-      if (fs.readFileSync(lock, "utf8") === token) fs.unlinkSync(lock);
+      // Токен не записан — lock точно наш; иначе чужой (перехваченный) не снимаем. Повторы при EBUSY.
+      await retryIo(() => {
+        if (!tokenWritten || fs.readFileSync(lock, "utf8") === token) fs.unlinkSync(lock);
+      });
     } catch {
       /* уже снята или перехвачена */
     }
