@@ -7,6 +7,10 @@
  * Ключи имеют вид `<сервис>:<что-то>` (`elk:`, `lms:`, `istudy:`) — по префиксу сервиса
  * работает `clearCache`. Результат, лежащий в кэше, отдаётся одним и тем же объектом всем
  * вызывающим: тулы только сериализуют его в JSON, мутировать результат нельзя.
+ *
+ * Свежесть «на вызов»: `maxAgeMs` принимает запись/загрузку не старше N мс; это не сброс кэша
+ * (`clearCache` бьёт по всем доменам и запрещает запись идущим загрузкам), а требование одного
+ * вызова. Свежая загрузка пишется в кэш как обычно — остальные вызывающие получают её же.
  */
 
 export const TTL = {
@@ -23,10 +27,22 @@ const MAX_ENTRIES = 200;
 interface Entry {
   value: unknown;
   expiresAt: number;
+  /** Момент СТАРТА загрузки, давшей это значение. */
+  storedAt: number;
+}
+
+interface Inflight {
+  promise: Promise<unknown>;
+  startedAt: number;
+}
+
+export interface CachedOptions {
+  /** Принять запись/загрузку не старше N мс; 0 — «перечитай и сохрани». Не «не кэшируй». */
+  maxAgeMs?: number;
 }
 
 const store = new Map<string, Entry>();
-const inflight = new Map<string, Promise<unknown>>();
+const inflight = new Map<string, Inflight>();
 // Увеличивается при clearCache: вызов, начатый до очистки, не должен записать в кэш результат
 // уже после неё — иначе «сброс кэша» вернул бы устаревшие данные.
 let generation = 0;
@@ -46,27 +62,40 @@ function evictIfNeeded(): void {
 
 /**
  * Возвращает свежую запись из кэша или вычисляет через `fn`. Параллельные вызовы с одним ключом
- * делят одно вычисление. Ошибки не кэшируются.
+ * делят одно вычисление (если оно не старше `maxAgeMs`). Ошибки не кэшируются.
  */
-export function cached<T>(key: string, ttlMs: number, fn: () => Promise<T>): Promise<T> {
+export function cached<T>(key: string, ttlMs: number, fn: () => Promise<T>, opts: CachedOptions = {}): Promise<T> {
+  const now = Date.now();
+  const maxAge = opts.maxAgeMs;
+
   const hit = store.get(key);
-  if (hit && hit.expiresAt > Date.now()) return Promise.resolve(hit.value as T);
+  if (hit && hit.expiresAt > now && (maxAge === undefined || now - hit.storedAt <= maxAge)) {
+    return Promise.resolve(hit.value as T);
+  }
 
   const pending = inflight.get(key);
-  if (pending) return pending as Promise<T>;
+  if (pending && (maxAge === undefined || pending.startedAt >= now - maxAge)) {
+    return pending.promise as Promise<T>;
+  }
 
-  const startedAt = generation;
+  const startedAt = now;
+  const startedGeneration = generation;
   const promise: Promise<T> = (async () => {
     const value = await fn();
-    if (generation === startedAt) {
-      evictIfNeeded();
-      store.set(key, { value, expiresAt: Date.now() + ttlMs });
+    if (generation === startedGeneration) {
+      // Старая загрузка, завершившаяся позже новой, не затирает свежее значение.
+      const current = store.get(key);
+      if (!current || startedAt >= current.storedAt) {
+        evictIfNeeded();
+        store.set(key, { value, expiresAt: Date.now() + ttlMs, storedAt: startedAt });
+      }
     }
     return value;
   })().finally(() => {
-    if (inflight.get(key) === promise) inflight.delete(key);
+    const current = inflight.get(key);
+    if (current && current.promise === promise) inflight.delete(key);
   });
-  inflight.set(key, promise);
+  inflight.set(key, { promise, startedAt });
   return promise;
 }
 
