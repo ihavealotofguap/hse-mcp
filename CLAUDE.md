@@ -42,7 +42,7 @@ MCP-сервер на `@modelcontextprotocol/sdk` (stdio-транспорт). `s
   ВАЖНО: API отвечает только из внутренней сети ВШЭ (Wi-Fi `HSE.Student` или VPN сотрудника) —
   вне кампуса запросы редиректят на страницу с ограничением доступа.
 - **SmartLMS и ЕЛК** (`services/lms/`, `services/elk/`) — через общий Playwright-браузер
-  `src/auth/browser-session.ts` (`openAuthenticatedPage`), который проходит единый SSO ВШЭ
+  `src/auth/browser-session.ts` (через `withPage`), который проходит единый SSO ВШЭ
   (Keycloak, `saml.hse.ru`, realm `hse`) при первом обращении и переиспользует контекст/сессию
   между вызовами тулов (`storage/hse-session.json` — переживает перезапуск сервера). SmartLMS —
   Moodle; парсинг материалов/заданий/оценок опирается на стандартные Moodle URL-паттерны
