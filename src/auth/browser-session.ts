@@ -282,29 +282,6 @@ export async function withPage<T>(
 }
 
 /**
- * @deprecated Переходный экспорт на время миграции клиентов на `withPage`; удаляется в конце
- * миграции. Слот держится до закрытия страницы, закрывать её должен вызывающий.
- */
-export async function openAuthenticatedPage(targetUrl: string): Promise<Page> {
-  const release = await acquirePageSlot();
-  let page: Page | undefined;
-  try {
-    const context = await getContext();
-    page = await context.newPage();
-    page.once("close", release);
-    await page.goto(targetUrl, { waitUntil: "load" });
-    await ensureAuthenticated(page, context, targetUrl);
-    return page;
-  } catch (err) {
-    // Без этого страница осталась бы висеть открытой в общем контексте навсегда при любой
-    // ошибке навигации/логина — утечка ресурсов Playwright при повторяющихся сбоях.
-    await page?.close().catch(() => {});
-    release();
-    throw err;
-  }
-}
-
-/**
  * HTTP-клиент поверх общей браузерной сессии: делит cookies контекста, но не открывает страницу
  * (и потому не занимает слот лимитера). Для JSON-API, которым достаточно cookies + Bearer-токена.
  */
