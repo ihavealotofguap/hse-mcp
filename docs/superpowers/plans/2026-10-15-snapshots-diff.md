@@ -25,7 +25,8 @@
 - Права файла: `0o600`, но на Windows это не защита — реальная защита ACL профиля (§7).
 - Записывающих операций нет; `hse_changes_reset` требует `confirm: true` (§13).
 - Язык: комментарии, сообщения об ошибках и описания тулов — русские, по образцу кодовой базы; идентификаторы — английские.
-- Сборка (в worktree нет `node_modules`, он находится выше по дереву): `node C:\Users\alexk\hsemcp\node_modules\typescript\bin\tsc -p tsconfig.json` из корня worktree. Далее — «**сборка**».
+- Сборка (в worktree нет `node_modules`, он находится выше по дереву), из корня worktree: Git Bash — `node C:/Users/alexk/hsemcp/node_modules/typescript/bin/tsc -p tsconfig.json` (прямые слэши: в Git Bash обратные съедаются); PowerShell — та же запись либо `node C:\Users\alexk\hsemcp\node_modules\typescript\bin\tsc -p tsconfig.json`. Далее — «**сборка**». Во всех командах плана, предназначенных для Git Bash, пути пишутся с прямыми слэшами.
+- `ack` (П1): `ack`, больший наибольшего когда-либо выданного `seq` (`max(issued[*])` по всем областям), игнорируется целиком с предупреждением; иначе для каждой области вызова `seen = max(seen, min(ack, issued[scope] ?? 0))`. `issued` — карта по областям.
 
 ## Что вне плана (явно)
 
@@ -41,7 +42,7 @@
 
 | № | Место в спеке | Проблема | Поправка в плане |
 |---|---|---|---|
-| П1 | §7 `issued: число`, §10 «`ack` применяется ко всем областям вызова: `seen[scope] = max(seen[scope], ack)`» | Вызов `hse_changes({ scopes:["inbox"], ack: 10 })` после выдачи `deadlines` (до seq 10) пометил бы невыданные события `inbox` с seq ≤ 10 как просмотренные — молчаливая потеря. | `issued` — карта по областям `{ [scope]: seq }` (наибольший выданный `seq` области). `ack N` применяется как `seen[scope] = max(seen[scope], min(N, issued[scope] ?? 0))` для областей текущего вызова. |
+| П1 | §7 `issued: число`, §10 «`ack` применяется ко всем областям вызова: `seen[scope] = max(seen[scope], ack)`» | Вызов `hse_changes({ scopes:["inbox"], ack: 10 })` после выдачи `deadlines` (до seq 10) пометил бы невыданные события `inbox` с seq ≤ 10 как просмотренные — молчаливая потеря. | `issued` — карта по областям `{ [scope]: seq }` (наибольший выданный `seq` области). `ack N`, больший `max(issued[*])` по всем областям (наибольшего когда-либо выданного `seq`), игнорируется целиком с предупреждением; иначе для областей текущего вызова `seen[scope] = max(seen[scope], min(N, issued[scope] ?? 0))`. |
 | П2 | §5/§11: `to = today + 60 д` | `lms/client.ts` отфильтровывает события `due <= to` в `project`; если `to` — полночь, события последнего дня теряются. | `to = endOfDay(today + 60 д)`; `coverage.to` — тот же момент в UTC. |
 | П3 | §10 `since` | Не сказано, делается ли снимок и что с `ackSeq`. | Снимок и коммит выполняются как обычно; в ответе журнал за период; `ackSeq: null`, `issued` не меняется. |
 | П4 | §10 ответ | Для области `grades` источник `lms_courses` (список курсов) не описан. | `lms_courses` — отдельный источник области `grades` в `sources`; отказ даёт статус области `error`. |
@@ -54,7 +55,7 @@
 1. **Пустой ответ источника при непустой базе** (всё сдано, каникулы): ожидается `removed` по каждому элементу в покрытии, а не молчание и не ошибка — задача 6.
 2. **Курс без таблицы оценок или с чужой вёрсткой:** статус `error: unsupported grade table` только у этого курса; остальные курсы и области коммитятся — задача 9.
 3. **Дубликаты `id` в одном ответе** (два одинаковых занятия в одно время, одинаковые элементы оценок в одной категории): факт не теряется, получает суффикс `#2` — задачи 6 и 8.
-4. **`ack` с другим набором областей или больше выданного:** невыданные события не помечаются просмотренными; чужое `ack` игнорируется с предупреждением — задача 9.
+4. **`ack` с другим набором областей или больше выданного:** `ack` больше `max(issued)` по всем областям игнорируется целиком с предупреждением; `ack` в пределах выданного, но по другой области, срезается по `issued[scope]` — невыданные события не помечаются просмотренными — задача 9.
 5. **Чистый `storage/` (нет каталога `changes`), повреждённый JSON, файл новее, занят антивирусом/другим процессом:** нет падений, нет потери базы, нет ложного `.corrupt` при ошибке ввода-вывода — задача 7.
 
 ## Карта файлов
@@ -78,7 +79,7 @@
 | `src/services/changes/tools.ts` | создать | `hse_changes`, `hse_changes_reset` |
 | `src/index.ts` | изменить | `registerChangesTools(server)` |
 | `docs/requirements.md`, `CLAUDE.md`, `README.md`, `docs/recon.md` | изменить | Документация |
-| `docs/superpowers/specs/2026-10-15-snapshots-diff-design.md` | изменить | Поправки П1–П2 (задача 9), §18 (задача 12) |
+| `docs/superpowers/specs/2026-10-15-snapshots-diff-design.md` | изменить | Поправки П1–П5 (задача 9), §18 (задача 12) |
 
 ## Зависимости и параллельность
 
@@ -90,8 +91,8 @@ T0 ─┬─ T1 ─────────────────────�
             └── T8 (нужны T4, T5, T6) ─┴── T9 (T2, T6, T7, T8) ── T10 ── T11 ── T12
 ```
 
-- **Параллельно** (разные файлы): T1, T2, T3, T6 после T0. T7 стартует после T1 и T6.
-- **Строго последовательно:** T3 → T4 → T5 (один файл `lms/client.ts` у T4 и T5, семантика `maxAgeMs` у T3); T8 → T9 → T10 → T11 → T12.
+- **Порядок исполнения — строго последовательный: T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12** (после T0). Граф выше показывает только зависимости: T3 → T4 → T5 (один файл `lms/client.ts` у T4 и T5, семантика `maxAgeMs` у T3); T7 нужны T1 и T6; T8 нужны T4, T5, T6; T9 нужны T2, T6, T7, T8.
+- **Параллельность** (T1, T2, T3, T6 не делят файлов) возможна только в разных worktree со слиянием, но в этом плане не используется: в одном worktree `tsc -p` соседа компилирует недописанные файлы, а одновременные `git commit` упираются в `index.lock`.
 - Каждый шаг коммитится независимо; ветка собирается после каждой задачи.
 
 ---
@@ -99,7 +100,7 @@ T0 ─┬─ T1 ─────────────────────�
 ### Task 0: Подготовка и каркас проверок (без коммита)
 
 **Files:**
-- Create (вне репозитория): `$SCRATCH/verify-3/lib.mjs` — `$SCRATCH` — каталог scratchpad сессии исполнителя.
+- Create (вне репозитория): `$SCRATCH/verify-3/lib.mjs`. `$SCRATCH` — условное обозначение, а не переменная окружения (в PowerShell раскрылась бы в пустую строку): перед выполнением подставить абсолютный путь scratchpad основной сессии (прямые слэши); все задачи используют один и тот же каталог.
 
 **Interfaces:**
 - Produces: `lib.mjs` с `dist(rel)`, `sleep(ms)`, `check(cond, msg)`, `finish()`, `ROOT`, `NODE_MODULES`.
@@ -111,7 +112,7 @@ Expected: `snapshots-diff`, вывод `git status` пуст.
 
 - [ ] **Step 2: Базовая сборка**
 
-Run (из корня worktree): `node C:\Users\alexk\hsemcp\node_modules\typescript\bin\tsc -p tsconfig.json`
+Run (из корня worktree, Git Bash): `node C:/Users/alexk/hsemcp/node_modules/typescript/bin/tsc -p tsconfig.json`
 Expected: код возврата 0, без вывода.
 
 - [ ] **Step 3: Создать каркас проверок**
@@ -692,9 +693,10 @@ export function listMessages(limit = 50, opts?: ResourceCallOptions): Promise<Lm
 
 - [ ] **Step 3: Сборка** — Expected: код 0 (вызовы из `digest/sources.ts`, `tools.ts` без `opts` компилируются).
 
-- [ ] **Step 4: Проверка** `$SCRATCH/verify-3/t4-opts.mjs` — без сети: кэш засеивается напрямую, слоты лимитера заняты, поэтому «перезагрузка» повисает на ожидании слота (браузер не запускается).
+- [ ] **Step 4: Проверка** `$SCRATCH/verify-3/t4-opts.mjs` — без сети: кэш засеивается напрямую, слоты лимитера заняты, поэтому «перезагрузка» повисает на ожидании слота (браузер не запускается). В worktree нет `.env`, а загрузчик `elk.claims` читает `config.hseEmail` ещё до слота: без переменной он бросит исключение (`rejected`, а не `pending`) и проверка упадёт. Поэтому первой строкой скрипта задаётся заглушка (dotenv не перезаписывает уже заданную переменную).
 
 ```js
+process.env.HSE_EMAIL ??= "t4@example.invalid";
 import { dist, check, finish, sleep } from "./lib.mjs";
 const { cached, TTL } = await dist("cache.js");
 const { acquirePageSlot } = await dist("limiter.js");
@@ -717,8 +719,8 @@ await seed("lms:courses:all", []);
 await seed("lms:messages:inbox", []);
 await seed(calKey, { events: [], truncated: false });
 await seed("elk:schedule-week:2026-10-12", []);
-await sleep(120);
-await seed("elk:schedule-week:2026-10-19", []);   // вторая неделя «моложе» первой
+await seed("elk:schedule-week:2026-10-19", []);
+await sleep(120);   // все записи старше stale.maxAgeMs (20 мс), но моложе fresh.maxAgeMs (60 с)
 
 // занять все слоты страниц: любая перезагрузка встанет в очередь, а не откроет браузер
 const holds = [await acquirePageSlot(), await acquirePageSlot(), await acquirePageSlot()];
@@ -739,8 +741,13 @@ for (const [name, call] of cases) {
   check((await settle(call(stale))) === "pending", `${name}: maxAgeMs доходит до ресурса (перезагрузка ждёт слот)`);
 }
 check((await settle(elk.getSchedule(from, to, fresh))) === "resolved", "getSchedule: обе недели из кэша");
-check((await settle(elk.getSchedule(from, to, { maxAgeMs: 60 }))) === "pending",
-  "getSchedule: maxAgeMs доходит до КАЖДОЙ недели (старая неделя перезагружается)");
+// по одной неделе за вызов: перезагрузка каждой недели по отдельности доказывает, что opts дошёл до КАЖДОЙ
+const week1End = new Date(2026, 9, 18);    // вс 18.10 — только неделя 12.10
+const week2Start = new Date(2026, 9, 19);  // пн 19.10 — только неделя 19.10
+check((await settle(elk.getSchedule(from, week1End, stale))) === "pending",
+  "getSchedule: maxAgeMs доходит до недели 12.10 (перезагрузка ждёт слот)");
+check((await settle(elk.getSchedule(week2Start, to, stale))) === "pending",
+  "getSchedule: maxAgeMs доходит до недели 19.10 (перезагрузка ждёт слот)");
 holds.forEach((release) => release());
 finish();
 ```
@@ -927,8 +934,8 @@ Expected: `ALL PASSED`.
 
 - [ ] **Step 5: Проверка неизменности `getGrades`**
 
-Run: `git diff -U0 src/services/lms/client.ts | grep -nE "^[-+].*(lmsGrades|getGrades)"`
-Expected: пустой вывод (строки `getGrades`/`lmsGrades` не затронуты).
+Run (Git Bash): `git diff -U0 src/services/lms/client.ts | grep -nE "^-.*(lmsGrades|getGrades)"`
+Expected: пустой вывод (ни одной УДАЛЁННОЙ строки с `getGrades`/`lmsGrades`: существующий код не затронут). Добавленные строки (`^+`) не проверяются — комментарий к `listGradeItems` законно упоминает `getGrades`.
 
 - [ ] **Step 6: Коммит**
 
@@ -1075,9 +1082,9 @@ export interface State {
 export interface DiffFlags {
   /** По умолчанию true. */
   emitChanged?: boolean;
-  /** По умолчанию true. */
+  /** По умолчанию true; false у входящего, оценок и заявок (у заявок события только `added`/`changed`, §5). */
   emitRemoved?: boolean;
-  /** Переносить в новую базу факты, отсутствующие в ответе (по умолчанию true; для входящего и оценок — false). */
+  /** Переносить в новую базу факты, отсутствующие в ответе (по умолчанию true; для входящего и оценок — false; у заявок — по умолчанию). */
   carryMissing?: boolean;
   /** Склеивать `removed`+`added` с одинаковым `matchKey` в `moved`. */
   mergeMoves?: boolean;
@@ -1412,6 +1419,13 @@ r = run({
   facts: [F("m1", { subject: "A!" }), F("m3", { subject: "c" })], emitChanged: false, emitRemoved: false, carryMissing: false,
 });
 check(types(r) === "added:m3" && !r.baseline.facts.m2, "inbox: только added; m2 не перенесён");
+
+// claims: только added/changed (§5); пропажа молчит, факт переносится в базу (carryMissing по умолчанию)
+r = run({
+  baseline: base([F("c1", { state: "A" }), F("c2", { state: "B" })]),
+  facts: [F("c1", { state: "A2" }), F("c3", { state: "C" })], emitRemoved: false,
+});
+check(types(r) === "added:c3,changed:c1" && r.baseline.facts.c2, "claims: removed не порождается, c2 перенесён в базу");
 
 // grades
 const G = (id, grade) => F(id, { grade }, { scope: "grades", kind: "grade_item" });
@@ -1758,8 +1772,7 @@ let p = s.emptyState();
 p.journal = [old(1, "deadlines"), old(2, "deadlines"), old(3, "inbox")];
 p.seen = { deadlines: 2, inbox: 1 };
 s.pruneJournal(p, now);
-check(p.journal.map((e) => e.seq).join() === "1" || p.journal.length === 2, "возрастной срез: только seq ≤ min(seen)");
-check(p.journal.every((e) => e.seq > 1) === false && p.journal.some((e) => e.seq === 1) === true ? true : p.journal.length <= 3, "возрастной срез не трогает seq > min(seen)");
+check(p.journal.map((e) => e.seq).join() === "2,3", "возрастной срез: ушёл только seq ≤ min(seen)=1; seq 2 и 3 (старые, но > min(seen)) остались");
 p = s.emptyState();
 p.seen = { inbox: 0 };
 p.journal = Array.from({ length: 503 }, (_, i) => ({ ...old(i + 1, "inbox"), at: "2026-10-14T00:00:00Z" }));
@@ -1797,7 +1810,7 @@ finish();
 ```
 
 Run: `node $SCRATCH/verify-3/t7-store.mjs`
-Expected: `ALL PASSED`. (Если проверка `возрастной срез` в скрипте покажется неоднозначной, ориентир: событие `seq=3` области `inbox` с `seen.inbox = 1` НЕ срезается, `seq=1` срезается, `seq=2` не срезается, так как min(seen) = 1.)
+Expected: `ALL PASSED`.
 
 - [ ] **Step 4: Коммит**
 
@@ -1832,7 +1845,7 @@ export const INBOX_LMS_LIMIT = 200, INBOX_NOTIFICATIONS_LIMIT = 100, CLAIMS_LIMI
 - [ ] **Step 1: `extractors.ts`**
 
 ```ts
-import { addDays } from "../../date-utils.js";
+import { addDays, formatLocalDate } from "../../date-utils.js";
 import type { ResourceCallOptions } from "../../resource.js";
 import { endOfDay, isExamType, startOfDay } from "../digest/parse.js";
 import * as elk from "../elk/client.js";
@@ -1940,7 +1953,8 @@ function elkWindows(deps: ClientDeps): SourceExtractor {
       const warnings: string[] = [];
       const facts: Fact[] = [];
       for (const row of rows) {
-        const period = pick(row, /период|period|name/i) || normText(row["#"]);
+        // id окна — только период (§5); номер строки `#` нестабилен и в id не подставляется.
+        const period = pick(row, /период|period|name/i);
         if (!period) {
           warnings.push("строка СОП без периода пропущена");
           continue;
@@ -1986,11 +2000,11 @@ function elkSchedule(deps: ClientDeps): SourceExtractor {
           });
         }
       }
-      const toDate = mskNaive(`${addDays(from, SCHEDULE_HORIZON_DAYS).getFullYear()}-` +
-        `${String(to.getMonth() + 1).padStart(2, "0")}-${String(to.getDate()).padStart(2, "0")}`, "23:59");
-      const fromDate = mskNaive(`${from.getFullYear()}-${String(from.getMonth() + 1).padStart(2, "0")}-` +
-        `${String(from.getDate()).padStart(2, "0")}`, "00:00");
-      return { facts: dedupeIds(facts), coverage: { from: fromDate, to: toDate } };
+      // `from` — полночь локальная (МСК пользователя): границы покрытия — по локальным компонентам даты.
+      return {
+        facts: dedupeIds(facts),
+        coverage: { from: `${formatLocalDate(from, "-")}T00:00`, to: `${formatLocalDate(to, "-")}T23:59` },
+      };
     },
   };
 }
@@ -2054,7 +2068,8 @@ function elkClaims(deps: ClientDeps): SourceExtractor {
   return {
     source: "elk_claims",
     scope: "claims",
-    flags: {},
+    // §5: у заявок события только `added`/`changed`; пропавшая из ответа заявка — не событие.
+    flags: { emitRemoved: false },
     async run(ctx) {
       const res = await deps.listRequests(CLAIMS_LIMIT, ctx.opts);
       const truncated = res.count > res.requests.length;
@@ -2092,7 +2107,9 @@ export function gradesExtractor(course: CourseOverview, deps: ClientDeps = realC
     flags: { emitRemoved: false, carryMissing: false, silentEmptyGrade: true },
     async run(ctx) {
       const table = await deps.listGradeItems(course.id, ctx.opts);
-      if (!table.found || (table.rows.length > 0 && !table.recognized)) throw new Error("unsupported grade table");
+      // Нет таблицы или не найдены колонки (`th.column-itemname`/`td.column-grade`) — чужая вёрстка:
+      // ошибка источника, а не пустая выдача. В Moodle строка «Итого за курс» с `td.column-grade` есть всегда.
+      if (!table.found || !table.recognized) throw new Error("unsupported grade table");
       const courseName = normText(course.fullname);
       const facts = dedupeIds(
         table.rows
@@ -2110,28 +2127,15 @@ export function gradesExtractor(course: CourseOverview, deps: ClientDeps = realC
             };
           })
       );
-      return { facts, warnings: table.rows.length === 0 ? ["таблица оценок пуста"] : [] };
+      return { facts };
     },
   };
 }
 ```
 
-> Замечание исполнителю: вычисление `fromDate`/`toDate` в `elkSchedule` намеренно использует локальные компоненты даты (как `formatLocalDate`), потому что `from` — полночь **локальная** (МСК пользователя). Если исполнитель предпочитает, можно подключить `formatLocalDate(date, "-")` из `../../date-utils.js` и собрать `${formatLocalDate(from, "-")}T00:00` и `${formatLocalDate(to, "-")}T23:59` — результат тот же и код короче; этот вариант предпочтителен.
+- [ ] **Step 2: Сборка** — Expected: код 0.
 
-- [ ] **Step 2: Упростить покрытие расписания через `formatLocalDate`** (предпочтительный вариант из замечания)
-
-В `extractors.ts` импортировать `formatLocalDate` из `../../date-utils.js` и заменить расчёт `toDate`/`fromDate` на:
-
-```ts
-      return {
-        facts: dedupeIds(facts),
-        coverage: { from: `${formatLocalDate(from, "-")}T00:00`, to: `${formatLocalDate(to, "-")}T23:59` },
-      };
-```
-
-- [ ] **Step 3: Сборка** — Expected: код 0.
-
-- [ ] **Step 4: Проверка** `$SCRATCH/verify-3/t8-extractors.mjs` (подставные клиенты)
+- [ ] **Step 3: Проверка** `$SCRATCH/verify-3/t8-extractors.mjs` (подставные клиенты)
 
 ```js
 import { dist, check, finish } from "./lib.mjs";
@@ -2172,6 +2176,7 @@ const deps = {
   ] }; },
   listGradeItems: async (id) => {
     if (id === 2) return { found: false, recognized: false, rows: [] };
+    if (id === 3) return { found: true, recognized: false, rows: [] };   // таблица есть, колонки не найдены
     return { found: true, recognized: true, rows: [
       { name: "Категория", level: 1, path: [], isCategory: true, grade: null },
       { name: "Тест", level: 2, path: ["Категория"], isCategory: false, grade: "-" },
@@ -2215,13 +2220,17 @@ check(r.facts[0].attrs.grade === null && r.facts[1].attrs.grade === "8,0", "оц
 let failed = null;
 await gradesExtractor(course(2), deps).run(ctx).catch((e) => { failed = e.message; });
 check(failed === "unsupported grade table", "оценки: нет таблицы → unsupported grade table (Review Focus 2)");
+failed = null;
+await gradesExtractor(course(3), deps).run(ctx).catch((e) => { failed = e.message; });
+check(failed === "unsupported grade table", "оценки: таблица найдена, но колонки не распознаны (rows пуст) → unsupported grade table");
+check(ex.elk_claims.flags.emitRemoved === false, "заявки: emitRemoved: false (только added/changed, §5)");
 finish();
 ```
 
 Run: `node $SCRATCH/verify-3/t8-extractors.mjs`
 Expected: `ALL PASSED`.
 
-- [ ] **Step 5: Коммит**
+- [ ] **Step 4: Коммит**
 
 ```bash
 git add src/services/changes/extractors.ts
@@ -2249,7 +2258,8 @@ export interface ChangesResponse { takenAt: string; scopes: Partial<Record<Scope
 export function getChanges(opts?: ChangesOptions, overrides?: Partial<ChangesDeps>): Promise<ChangesResponse>
 export function resetChanges(opts: { scope?: Scope; confirm?: boolean }, overrides?: Partial<Pick<ChangesDeps, "dir" | "now">>): Promise<{ reset: Scope[]; removedBaselines: number; removedEvents: number; persisted: boolean }>
 ```
-- Алгоритм `ack` (П1): `seen[scope] = max(seen[scope], min(ack, issued[scope] ?? 0))` для областей текущего вызова; `ack`, превышающий `issued` всех областей вызова, даёт предупреждение; `seen[scope]` первого запуска области инициализируется `nextSeq − 1` до присвоения `seq` событиям.
+- Алгоритм `ack` (П1): `ack`, больший `max(issued[*])` по всем областям (наибольшего когда-либо выданного `seq`), игнорируется целиком с предупреждением; иначе для каждой области текущего вызова `seen[scope] = max(seen[scope], min(ack, issued[scope] ?? 0))`. `seen[scope]` первого запуска области инициализируется `nextSeq − 1` до присвоения `seq` событиям.
+- Предупреждение первого `loadState` (вне блокировки; `corrupt` перемещает файл в `.corrupt-*`) переносится в `warnings` ответа; повторный `loadState` под блокировкой видит уже `missing` и своего предупреждения не даёт.
 
 - [ ] **Step 1: `client.ts`**
 
@@ -2482,17 +2492,22 @@ function select(state: State, scopes: Scope[], sinceMs: number | null): Selectio
   };
 }
 
+/**
+ * `ack` больше наибольшего когда-либо выданного `seq` (`max(issued[*])` по всем областям) —
+ * игнорируется целиком с предупреждением; иначе для областей вызова
+ * `seen[scope] = max(seen[scope], min(ack, issued[scope] ?? 0))`: подтверждение, выданное по одной
+ * области, не помечает просмотренными невыданные события другой.
+ */
 function applyAck(draft: State, scopes: Scope[], ack: number, warnings: string[]): void {
-  let applied = false;
+  const issued = Object.values(draft.issued).filter((v): v is number => typeof v === "number");
+  const maxIssued = Math.max(0, ...issued);
+  if (ack > maxIssued) {
+    warnings.push(`ack ${ack} больше любого выданного seq (${maxIssued}) — игнорируется`);
+    return;
+  }
   for (const scope of scopes) {
     const ceiling = Math.min(ack, draft.issued[scope] ?? 0);
-    if (ceiling > (draft.seen[scope] ?? 0)) {
-      draft.seen[scope] = ceiling;
-      applied = true;
-    }
-  }
-  if (!applied && scopes.every((s) => ack > (draft.issued[s] ?? 0))) {
-    warnings.push(`ack ${ack} больше выданного по запрошенным областям — игнорируется`);
+    if (ceiling > (draft.seen[scope] ?? 0)) draft.seen[scope] = ceiling;
   }
 }
 
@@ -2513,11 +2528,14 @@ function reports(
   const out: Partial<Record<Scope, ScopeReport>> = {};
   for (const scope of scopes) {
     const own = gathered.filter((g) => g.scope === scope);
-    const states = own.map((g) => (g.status.status === "ok" ? (diffStatus.get(g.source) ?? "ok") : g.status.status));
+    // `lms_courses` — справочник курсов, а не данные области: в статус `grades` входит только отказом
+    // (иначе его вечное `ok` не даёт области получить статус `baseline`).
+    const counted = own.filter((g) => !(g.source === "lms_courses" && g.status.status === "ok"));
+    const states = counted.map((g) => (g.status.status === "ok" ? (diffStatus.get(g.source) ?? "ok") : g.status.status));
     let status: ScopeReport["status"];
-    if (states.length === 0 || states.every((s) => s === "error")) status = "error";
+    if (own.length === 0 || (states.length > 0 && states.every((s) => s === "error"))) status = "error";
     else if (states.some((s) => s === "error" || s === "skipped")) status = "partial";
-    else if (states.every((s) => s === "baseline")) status = "baseline";
+    else if (states.length > 0 && states.every((s) => s === "baseline")) status = "baseline";
     else status = "ok";
     const facts = own.reduce((n, g) => n + Object.keys(baselines[g.source]?.facts ?? {}).length, 0);
     const warnings = own.flatMap((g) => [
@@ -2526,7 +2544,7 @@ function reports(
     ]);
     out[scope] = { status, facts, warnings };
   }
-  return out;
+  return { scopes: out, sources };
 }
 
 /**
@@ -2541,19 +2559,29 @@ export async function getChanges(opts: ChangesOptions = {}, overrides: Partial<C
   const sinceMs = opts.since ? parseSince(opts.since, now) : null;
   const warnings: string[] = [];
 
+  const warn = (w: string | undefined): void => {
+    if (w && !warnings.includes(w)) warnings.push(w);
+  };
+
+  // Чтение до сбора нужно ради порядка обхода курсов (`baselinesAge`). У `loadState` есть побочный
+  // эффект (`corrupt` → файл переименован), поэтому его предупреждение переносится в ответ: повторное
+  // чтение под блокировкой увидит уже `missing`.
   const pre = await loadState(deps.dir);
+  warn(pre.warning);
   const gathered = await gather(scopes, opts, deps, now, pre.state);
 
   if (opts.signal?.aborted) {
+    const rep = reports(gathered, scopes, pre.state.baselines, new Map());
+    warn("вызов отменён до коммита");
     return {
-      takenAt, scopes: reports(gathered, scopes, pre.state.baselines, new Map()), sources: reports(gathered, scopes, pre.state.baselines, new Map()).sources,
-      changes: [], ackSeq: null, omitted: 0, gap: { lostEvents: 0 }, persisted: false, warnings: ["вызов отменён до коммита"],
+      takenAt, scopes: rep.scopes, sources: rep.sources,
+      changes: [], ackSeq: null, omitted: 0, gap: { lostEvents: 0 }, persisted: false, warnings,
     };
   }
 
   return withStateLock(deps.dir, async (): Promise<ChangesResponse> => {
     const load = await loadState(deps.dir);
-    if (load.warning) warnings.push(load.warning);
+    warn(load.warning);
     if (load.kind === "newer" || load.kind === "io-error") {
       const rep = reports(gathered.map((g) => ({ ...g, status: { ...g.status, status: "error" as const } })), scopes, {}, new Map());
       return { takenAt, scopes: rep.scopes, sources: rep.sources, changes: [], ackSeq: null, omitted: 0, gap: { lostEvents: 0 }, persisted: false, warnings };
@@ -2603,14 +2631,18 @@ export async function getChanges(opts: ChangesOptions = {}, overrides: Partial<C
       };
     }
     // Запись не удалась: база, курсор и nextSeq на диске прежние; новые события возвращаются без seq.
-    warnings.push(saved.error);
+    warn(saved.error);
     const before = select(base, scopes, sinceMs);
     const pending: ChangeItem[] = fresh
       .filter((e) => scopes.includes(e.scope))
       .map((e) => ({ ...toItem(e), seq: null }));
+    // Потолок ответа действует и здесь: остаток считается в `omitted`.
+    const merged = [...before.items, ...pending];
+    const capped = merged.slice(0, RESPONSE_EVENT_LIMIT);
     return {
-      takenAt, scopes: rep.scopes, sources: rep.sources, changes: [...before.items, ...pending],
-      ackSeq: before.ackSeq, omitted: before.omitted, gap: { lostEvents: before.lostEvents }, persisted: false, warnings,
+      takenAt, scopes: rep.scopes, sources: rep.sources, changes: capped,
+      ackSeq: before.ackSeq, omitted: before.omitted + (merged.length - capped.length),
+      gap: { lostEvents: before.lostEvents }, persisted: false, warnings,
     };
   });
 }
@@ -2670,7 +2702,9 @@ const dir = fs.mkdtempSync(path.join(os.tmpdir(), "t9-"));
 const fact = (id, attrs, extra = {}) => ({ id, scope: "deadlines", kind: "assignment", title: id, attrs, ...extra });
 let calendar = [fact("1", { due: "2026-10-20T10:00Z" }, { at: "2026-10-20T10:00Z" })];
 let inbox = [{ id: "m1", scope: "inbox", kind: "lms_message", title: "m1", attrs: { subject: "m1" }, at: "2026-10-14T10:00Z" }];
-let claimsFail = false;
+// Источник заявок падает с первого вызова: при первом запуске он не снял базу и получит её позже
+// (шаг 5); проверки шагов 1–4 от области claims не зависят.
+let claimsFail = true;
 const ex = (source, scope, flags, get) => ({ source, scope, flags, run: async () => get() });
 const single = () => [
   ex("lms_calendar", "deadlines", { detectOverdue: true }, () => ({ facts: calendar, coverage: { from: "2026-04-01T00:00Z", to: "2026-12-30T23:59Z" } })),
@@ -2678,7 +2712,9 @@ const single = () => [
   ex("elk_claims", "claims", {}, () => { if (claimsFail) throw new Error("ЕЛК недоступен"); return { facts: [] }; }),
 ];
 let T = new Date("2026-10-15T10:00:00Z");
-const base = { dir, now: () => T, single: single(), listCourses: async () => [], grades: () => { throw new Error("не нужен"); }, sourceTimeoutMs: 1000, gradesBudgetMs: 5000 };
+// gradesBudgetMs должен быть заметно больше резерва GRADES_COURSE_RESERVE_MS (15 с): иначе условие
+// «бюджет − резерв» истинно сразу и все курсы получают skipped.
+const base = { dir, now: () => T, single: single(), listCourses: async () => [], grades: () => { throw new Error("не нужен"); }, sourceTimeoutMs: 1000, gradesBudgetMs: 60_000 };
 const call = (o, over = {}) => getChanges(o, { ...base, ...over });
 
 // 1. первый запуск — baseline по источникам, событий нет
@@ -2708,12 +2744,15 @@ check(r.changes.every((c) => c.scope === "deadlines") && r.changes.length === 0,
 r = await call({ scopes: ["inbox"] });
 check(r.changes.length === 1 && r.changes[0].title === "m2", "ack одной области не подтвердил невыданное другой (П1)");
 r = await call({ scopes: ["inbox"], ack: 99999 });
-check(r.warnings.some((w) => /игнорируется/.test(w)) && (await call({ scopes: ["inbox"] })).changes.length === 1, "ack больше выданного игнорируется с предупреждением");
+check(r.warnings.some((w) => /игнорируется/.test(w)) && (await call({ scopes: ["inbox"] })).changes.length === 1,
+  "ack больше max(issued) игнорируется целиком с предупреждением (seen не двигается)");
+r = await call({ scopes: ["inbox"], ack: 2 });
+check(!r.warnings.some((w) => /игнорируется/.test(w)) && (await call({ scopes: ["inbox"] })).changes.length === 1,
+  "ack в пределах выданного, но меньше seq события: предупреждения нет, событие не подтверждено");
 r = await call({ scopes: ["inbox"], ack: firstAck });
 check((await call({ scopes: ["inbox"] })).changes.length === 0, "ack подтвердил inbox");
 
-// 5. частичный отказ источника: база прежняя, остальные коммитятся
-claimsFail = true;
+// 5. частичный отказ источника: база прежняя, остальные коммитятся (claimsFail = true с первого вызова)
 T = new Date("2026-10-17T10:00:00Z");
 r = await call({ scopes: ["claims", "deadlines"] });
 check(r.sources.elk_claims.status === "error" && /ЕЛК недоступен/.test(r.sources.elk_claims.error), "отказ источника — статус, не исключение");
@@ -2740,7 +2779,6 @@ r = await call({ scopes: ["deadlines"] });
 check(r.persisted && r.changes.some((c) => c.title === "3" && c.seq !== null), "следующий вызов вычисляет то же самое и записывает");
 
 // 8. сброс
-await check(true, "—");
 let refused = null;
 await resetChanges({ scope: "deadlines" }, { dir }).catch((e) => { refused = e.message; });
 check(/confirm/.test(refused ?? ""), "reset без confirm — отказ");
@@ -2766,12 +2804,16 @@ const g = (c) => ({
   },
 });
 const courses = [1, 2, 3, 4, 5, 6].map(course);
-r = await call({ scopes: ["grades"] }, { listCourses: async () => courses, grades: g });
+r = await call({ scopes: ["grades"] }, { listCourses: async () => courses, grades: g, gradesBudgetMs: 60_000 });
 check(maxActive <= 3, "оценки: пул не больше 3");
 check(r.sources["lms_grades:3"].status === "error" && /unsupported grade table/.test(r.sources["lms_grades:3"].error), "оценки: ошибка одного курса — статус этого источника");
 check(r.sources["lms_grades:1"].status === "ok" && r.scopes.grades.status === "partial", "оценки: остальные курсы закоммичены, область partial (Review Focus 2)");
 r = await call({ scopes: ["grades"] }, { listCourses: async () => courses, grades: g, gradesBudgetMs: 15_000 });
-check(Object.values(r.sources).filter((s) => s.status === "skipped").length === 6, "оценки: бюджет исчерпан до запуска → курсы skipped");
+check(Object.values(r.sources).filter((s) => s.status === "skipped").length === 6, "оценки: бюджет не больше резерва → все курсы skipped");
+// область, где источник-справочник lms_courses ok, а курсы впервые сняты, — baseline, а не ok
+const dirG = fs.mkdtempSync(path.join(os.tmpdir(), "t9g-"));
+r = await call({ scopes: ["grades"], courses: [1] }, { dir: dirG, listCourses: async () => courses, grades: g, gradesBudgetMs: 60_000 });
+check(r.scopes.grades.status === "baseline" && r.sources.lms_courses.status === "ok", "оценки: первый снимок курса → область baseline (lms_courses не мешает)");
 r = await call({ scopes: ["grades"], courses: ["нет такого"] }, { listCourses: async () => courses, grades: g });
 check(r.sources.lms_courses.status === "error" && r.scopes.grades.status === "error", "оценки: фильтр без совпадений → ошибка источника lms_courses");
 
@@ -2789,22 +2831,58 @@ const stNow = JSON.parse(fs.readFileSync(stateFile, "utf8"));
 fs.writeFileSync(stateFile, JSON.stringify({ ...stNow, version: 99 }));
 r = await call({ scopes: ["deadlines"] });
 check(!r.persisted && r.warnings.some((w) => /новее|более новой/.test(w)) && JSON.parse(fs.readFileSync(stateFile, "utf8")).version === 99, "version новее: статус error, файл не тронут");
+check(r.scopes.deadlines.status === "error", "version новее: статус области error");
+
+// 12. повреждённый файл: предупреждение первого чтения (вне блокировки) доходит до ответа
+fs.writeFileSync(stateFile, "{ не json");
+r = await call({ scopes: ["deadlines"] });
+check(r.persisted && r.warnings.some((w) => /повреждён/.test(w)), "corrupt: предупреждение в ответе, база начата заново и записана");
+check(fs.readdirSync(dir).some((f) => f.startsWith("state.json.corrupt-")), "corrupt: файл перемещён в .corrupt-*");
+
+// 13. потолок ответа 200 и omitted (Review: §15 п. 2); отдельный каталог и источник с управляемым числом фактов
+const dirB = fs.mkdtempSync(path.join(os.tmpdir(), "t9b-"));
+let bulkN = 0;
+const bulk = () => [ex("bulk", "deadlines", {}, () => ({ facts: Array.from({ length: bulkN }, (_, i) => fact(`b${i}`, { due: "x" })) }))];
+const callB = (o) => getChanges(o, { ...base, dir: dirB, single: bulk() });
+await callB({ scopes: ["deadlines"] });                       // база (пустая)
+bulkN = 205;
+r = await callB({ scopes: ["deadlines"] });
+check(r.changes.length === 200 && r.omitted === 5 && r.ackSeq === r.changes[199].seq, "потолок 200: omitted = 5, ackSeq — seq 200-го события");
+r = await callB({ scopes: ["deadlines"], ack: r.ackSeq });
+check(r.changes.length === 5 && r.omitted === 0, "после ack срезанный префикс выдан остатком (5 событий), ничего не потеряно");
+
+// 14. срез журнала по потолку 500 и gap.lostEvents: сообщается один раз
+const dirC = fs.mkdtempSync(path.join(os.tmpdir(), "t9c-"));
+bulkN = 0;
+const callC = (o) => getChanges(o, { ...base, dir: dirC, single: bulk() });
+await callC({ scopes: ["deadlines"] });                       // база (пустая), seen.deadlines = 0
+bulkN = 505;
+r = await callC({ scopes: ["deadlines"] });
+check(r.gap.lostEvents === 5 && r.changes.length === 200 && r.omitted === 300, "потолок журнала 500: срезано 5 невыданных → gap.lostEvents = 5, в ответе 200, omitted 300");
+r = await callC({ scopes: ["deadlines"] });
+check(r.gap.lostEvents === 0, "gap.lostEvents сообщается один раз (повтор — 0)");
 finish();
 ```
 
 Run: `node $SCRATCH/verify-3/t9-client.mjs`
 Expected: `ALL PASSED`.
 
-- [ ] **Step 4: Поправки спеки (П1–П5, П2)** — отредактировать `docs/superpowers/specs/2026-10-15-snapshots-diff-design.md`:
+- [ ] **Step 4: Поправки спеки (П1–П5)** — отредактировать `docs/superpowers/specs/2026-10-15-snapshots-diff-design.md`. Поправка П1 (`issued` — карта по областям) должна **полностью** вытеснить описание `issued` одним числом; точные фразы-цели (на момент написания плана — строки спеки):
 
-1. §7, блок схемы состояния: `issued` заменить на `issued: { [scope]: seq }` и добавить пояснение «наибольший выданный `seq` области».
-2. §10, абзац про `ack`: заменить «`ack` применяется ко всем областям текущего вызова: `seen[scope] = max(seen[scope], ack)`» на «для каждой области вызова: `seen[scope] = max(seen[scope], min(ack, issued[scope]))`; `ack`, превышающий `issued` всех областей вызова, игнорируется с предупреждением. Иначе `ack` после выдачи одной области подтвердил бы невыданные события другой».
-3. §10, `since`: добавить «снимок и коммит выполняются как обычно; `ackSeq: null`, `issued` не меняется».
-4. §10, ответ: добавить «источник `lms_courses` входит в область `grades`; его отказ даёт статус области `error`».
-5. §5/§11 п. 1: `to = endOfDay(today + 60 д)` (последний день целиком); `coverage.to` — тот же момент в UTC.
-6. §7: добавить «при `io-error` чтения и `version` новее — коммита нет; статусы областей `error`, `persisted: false`».
+   1. §7, схема состояния (стр. ~148): `{ version, rev, nextSeq, issued, lost: { [scope]: n },` → `issued: { [scope]: seq }` (наибольший выданный `seq` области).
+   2. §10, таблица параметров, строка `ack?` (стр. ~247): «`seq`, до которого события **получены**; сдвигает `seen` для областей вызова» → добавить «не выше выданного по области (`issued[scope]`)».
+   3. §10, «Порядок», шаг (1) (стр. ~249–250): «применить к `seen` (с ограничением `ack ≤ issued`; больше — игнорируется с предупреждением)» → «применить к `seen`: `ack`, больший наибольшего когда-либо выданного `seq` (`max(issued[*])` по всем областям), игнорируется целиком с предупреждением; иначе для каждой области вызова `seen[scope] = max(seen[scope], min(ack, issued[scope]))`».
+   4. §10, определение `issued` (стр. ~258–259): «`issued` — наибольший `seq`, когда-либо возвращённый в ответе; он записывается тем же коммитом (шаг 3) и ограничивает `ack`» → «`issued` — карта `{ [scope]: seq }`: наибольший `seq`, возвращённый в ответе по области; записывается тем же коммитом (шаг 3), ограничивает `ack` по области; `since` и `persisted: false` его не меняют».
+   5. §10, абзац про применение `ack` (стр. ~260–261): «`ack` применяется ко всем областям текущего вызова: `seen[scope] = max(seen[scope], ack)`; области вне вызова не затрагиваются» → «для каждой области вызова `seen[scope] = max(seen[scope], min(ack, issued[scope]))`; области вне вызова не затрагиваются. Иначе `ack` после выдачи одной области подтвердил бы невыданные события другой».
+   6. §15 п. 2 (стр. ~404): «`ack` (повтор без ack, ack > issued)» → «`ack` (повтор без ack; `ack` > `max(issued)` — игнорируется целиком; `ack` по другой области срезается по `issued[scope]`)».
+   7. §10, `since`: добавить «снимок и коммит выполняются как обычно; `ackSeq: null`, `issued` не меняется».
+   8. §10, ответ: добавить «источник `lms_courses` входит в область `grades`; его отказ даёт статус области `error`» и верхнеуровневое поле `warnings: string[]` (в пример JSON и в текст).
+   9. §5/§11 п. 1: `to = endOfDay(today + 60 д)` (последний день целиком); `coverage.to` — тот же момент в UTC.
+   10. §7: добавить «при `io-error` чтения и `version` новее — коммита нет; статусы областей `error`, `persisted: false`».
 
-- [ ] **Step 5: Сборка и коммит**
+   Проверка полноты (Git Bash): `grep -n "issued" docs/superpowers/specs/2026-10-15-snapshots-diff-design.md`. Expected: каждое вхождение описывает карту по областям, `issued[scope]` или `max(issued)`; нет «`ack ≤ issued`», «`seq`, когда-либо возвращённый в ответе» без «по области», «`max(seen[scope], ack)`», «ack > issued» без `max`.
+
+- [ ] **Step 5: Коммит**
 
 ```bash
 git add src/services/changes/client.ts docs/superpowers/specs/2026-10-15-snapshots-diff-design.md
@@ -2878,7 +2956,7 @@ export function registerChangesTools(server: McpServer): void {
         "«Пропало из календаря» не означает «сдано». Область grades дорогая (страница на курс, " +
         "десятки секунд) и берёт оценки только из журнала LMS. Возвращает JSON: changes, scopes " +
         "(статус по областям), sources (статус каждого источника; отказ одного не роняет вызов), " +
-        "ackSeq, omitted, gap, persisted.",
+        "ackSeq, omitted, gap, persisted, warnings.",
       inputSchema: {
         scopes: z
           .array(SCOPE)
@@ -2962,10 +3040,13 @@ finish();
 Run: `node $SCRATCH/verify-3/t10-tools.mjs`
 Expected: `ALL PASSED`. (`hse_changes_reset` с `confirm: false` отказывает до обращения к диску.)
 
-- [ ] **Step 6: Запуск сервера без падения** (регистрация не ломает остальное)
+- [ ] **Step 6: Модуль тулов загружается и подключён в `index.ts`**
 
-Run: `node -e "import('file:///C:/Users/alexk/hsemcp/.claude/worktrees/update/dist/services/changes/tools.js').then(()=>console.log('ok'))"`
+Run (Git Bash, из корня worktree): `node -e "import('file:///C:/Users/alexk/hsemcp/.claude/worktrees/update/dist/services/changes/tools.js').then(()=>console.log('ok'))"`
 Expected: `ok`.
+
+Run: `grep -n "registerChangesTools" dist/index.js`
+Expected: 2 строки (импорт и вызов). Сам `dist/index.js` не запускается: он открывает stdio-транспорт.
 
 - [ ] **Step 7: Коммит**
 
@@ -3086,7 +3167,10 @@ Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>"
 - [ ] **Step 5: Сверка**
 
 Run: `git diff --stat docs/ CLAUDE.md README.md`
-Expected: изменены только четыре файла из списка; в `CLAUDE.md` нет `TODO`; `grep -n "TBD\|TODO" docs/requirements.md CLAUDE.md README.md docs/recon.md` — без новых вхождений.
+Expected: изменены только четыре файла из списка.
+
+Run (Git Bash): `git diff -U0 docs/requirements.md CLAUDE.md README.md docs/recon.md | grep -nE "^\+.*(TBD|TODO)"`
+Expected: пустой вывод (ни одной добавленной строки с `TBD`/`TODO`; прежние вхождения не считаются).
 
 - [ ] **Step 6: Коммит**
 
@@ -3117,7 +3201,7 @@ Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>"
 2. **Сразу повторный `getChanges({})`**: `changes.length === 0` и **0 новых страниц** (критерий §15 п. 3).
 3. `getChanges({ scopes: ["grades"] })` холодный и повторный: время, число курсов, статусы источников (`error: unsupported grade table`, если есть), `skipped`.
 4. **Имитация** (помечается «имитация», не «вживую»): взять `state.json` временного каталога, удалить один факт `lms_calendar`, изменить `attrs.due` другого, у оценки выставить `attrs.grade` в `null` у элемента с оценкой, один факт расписания сдвинуть по `at`/`id`; повторный `getChanges` с теми же областями → ожидаемые события `added`, `changed`, `changed`, `moved`/`removed+added`.
-5. `ack`: `ackSeq` из шага 4 → следующий вызов с `ack` → 0 неподтверждённых; `ack` больше выданного → предупреждение.
+5. `ack`: `ackSeq` из шага 4 → следующий вызов с `ack` → 0 неподтверждённых; `ack` больше `max(issued)` → предупреждение, `ack` игнорируется целиком.
 6. Отмена: `AbortController`, `abort()` через 1 с после старта области `grades` → `persisted: false`, `rev` на диске не изменился.
 7. Регистрация: подставной `server` с `registerTool`, вызов обработчика `hse_changes` с `{}` — ответ парсится как JSON, без исключения.
 
@@ -3130,7 +3214,7 @@ Expected: выполняется без остановки по 403/429; фай�
 
 - [ ] **Step 4: Итоговая сборка и чистота**
 
-Run: `node C:\Users\alexk\hsemcp\node_modules\typescript\bin\tsc -p tsconfig.json` и `git status --short`
+Run (Git Bash): `node C:/Users/alexk/hsemcp/node_modules/typescript/bin/tsc -p tsconfig.json` и `git status --short`
 Expected: код 0; в `git status` только правка спеки; `storage/changes/` не отслеживается (`git check-ignore -v storage/changes/state.json` показывает правило из `.gitignore`).
 
 - [ ] **Step 5: Коммит**
@@ -3175,10 +3259,56 @@ Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>"
 
 ## Выбор способа исполнения
 
-**Рекомендация: subagent-driven (`superpowers:subagent-driven-development`) для задач 1–10 и 11; задачу 12 выполнять inline в основной сессии.**
+**Рекомендация: subagent-driven (`superpowers:subagent-driven-development`) для задач 1–10; задачи 11 и 12 выполнять inline в основной сессии.**
 
-- **Почему subagent-driven.** У задач общие интерфейсы (`ResourceCallOptions`, `Fact`/`SourceResult`/`State`, сигнатуры `store` и `extractors`), и ошибка в логике курсора или базы означает молчаливую потерю событий — цену этого ловит свежий ревьюер, а не автор. Задачи малы и независимо коммитятся, поэтому гейт «исполнитель → ревьюер» на каждой дёшев. Задачи 1, 2, 3 и 6 можно отдавать параллельным исполнителям (разные файлы).
+- **Почему subagent-driven.** У задач общие интерфейсы (`ResourceCallOptions`, `Fact`/`SourceResult`/`State`, сигнатуры `store` и `extractors`), и ошибка в логике курсора или базы означает молчаливую потерю событий — цену этого ловит свежий ревьюер, а не автор. Задачи малы и независимо коммитятся, поэтому гейт «исполнитель → ревьюер» на каждой дёшев. Исполнители идут строго по очереди (T1 … T12) в одном worktree: параллельный запуск в нём даёт ложные ошибки сборки и конфликты `index.lock`.
 - **Когда inline (`superpowers:executing-plans`).** Задача 11 (документация) и задача 12: живая проверка требует учётных данных пользователя и разрешения на доступ к аккаунту — субагенту это ранее было отклонено системой прав; исполнять в основной сессии, где пользователь присутствует.
 - **Что остаётся на решение пользователя до старта:** (1) принимает ли он поправки П1–П5 к спеке (особенно П1 — `issued` по областям); (2) три решения по умолчанию (§ «Что вне плана», (в)); (3) судьба дефекта `lms_get_grades` (здесь «чинится отдельно»); (4) нужно ли отдельное небольшое улучшение «статус "требуется 2FA"» в `istudy_get_report`/`istudy_get_exams` (спека §14; в №3 не входит). Решение «istudy вне №3» принято пользователем (MAX не используется) и пересмотра не требует.
 
 **Реализацию не начинать до явного одобрения пользователем плана и способа исполнения.**
+
+## Исправления после preflight
+
+Правки текста плана по отчёту preflight (`.superpowers/sdd/2026-10-15-snapshots-diff/preflight.md`). Код замечания → что изменено.
+
+**Blocking**
+
+- B1 → задача 9: `reports` возвращает `{ scopes, sources }`; ветка отмены берёт `rep.scopes`/`rep.sources`.
+- B2 → П1, Global Constraints, Review Focus 4, интерфейсы и `applyAck` задачи 9, тесты t9: `ack` больше `max(issued[*])` по всем областям игнорируется целиком с предупреждением; иначе `seen = max(seen, min(ack, issued[scope]))`; добавлена проверка «ack ≤ max(issued), но меньше seq события».
+- B3 → t9: `claimsFail = true` с первого вызова (область `claims` получает `baseline` на шаге 5).
+- B4 → t9: `gradesBudgetMs: 60_000` в `base` и в первом вызове оценок (бюджет должен превышать `GRADES_COURSE_RESERVE_MS` = 15 с); случай «бюджет ≤ резерва» остаётся проверкой `skipped`.
+- B5 → задача 8: у `elkWindows` убрана подмена `|| normText(row["#"])`; id окна — только период.
+- B6 → задача 4: первой строкой `t4-opts.mjs` — `process.env.HSE_EMAIL ??= "t4@example.invalid"` и пояснение.
+
+**Important**
+
+- I1 → задача 9, Step 4: десять пунктов правки спеки с точными фразами-целями (§7 схема, §10 таблица `ack?`, шаг (1), определение `issued`, абзац применения `ack`, §15 п. 2, `since`, `lms_courses`, `warnings`, П2, `io-error`/`newer`) и проверка полноты `grep issued` по спеке.
+- I2 → задача 8, задача 6 (тест): у заявок `flags: { emitRemoved: false }`; перенос отсутствующих — по умолчанию; проверки в t6 и t8.
+- I3 → задача 8: условие `!table.found || !table.recognized`; предупреждение «таблица оценок пуста» удалено как недостижимое; в t8 добавлен случай `found: true, recognized: false, rows: []`.
+- I4 → задача 9: предупреждение первого `loadState` переносится в `warnings` (с дедупликацией при повторе под блокировкой); добавлена проверка `corrupt` в t9.
+- I5 → задача 5, Step 5: `grep` только по удалённым строкам (`^-`), Git Bash.
+- I6 → задача 7: две пустые проверки среза журнала по возрасту заменены одной `join() === "2,3"`; примечание в Expected убрано.
+- I7 → Global Constraints, задачи 0, 10, 12 (и новые команды в 5, 9, 11): для Git Bash прямые слэши; в Global Constraints оба варианта (Git Bash / PowerShell) одной строкой.
+- I8 → «Зависимости и параллельность», «Выбор способа исполнения»: порядок строго последовательный T1…T12; параллельность — только в разных worktree и в плане не используется; граф зависимостей оставлен.
+- I9 → t9: добавлены проверки потолка 200 и `omitted` (205 событий → 200 + 5, остаток после `ack`) и `gap.lostEvents` (505 событий → потеряно 5, один раз).
+
+**Minor**
+
+- m1 → задача 9: при `persisted: false` объединённый список событий обрезается до 200, остаток входит в `omitted`.
+- m2 → задача 9: `lms_courses` со статусом `ok` не участвует в агрегации статуса области `grades` (добавлена проверка `baseline`); пустой список курсов даёт `ok`, а не `error`.
+- m3 → t9: пустая проверка `await check(true, "—")` удалена.
+- m4 → t4: проверка `getSchedule` разнесена на две недели по отдельности (вызовы на одну неделю с `maxAgeMs: 20`); засев недель без разнесения по времени.
+- m5 → задача 8: Step 1 сразу содержит вариант на `formatLocalDate`; прежние Step 2 и «Замечание исполнителю» убраны, шаги перенумерованы (Сборка — 2, Проверка — 3, Коммит — 4).
+- m6 → задача 10, Step 6: переименован в «Модуль тулов загружается и подключён в `index.ts`», добавлен `grep registerChangesTools dist/index.js` (2 строки).
+- m7 → задача 11, Step 5: `git diff -U0 … | grep -nE "^\+.*(TBD|TODO)"`, ожидается пусто.
+- m8 → «Карта файлов»: «Поправки П1–П5 (задача 9)».
+- m9 → задача 9, Step 4 (п. 8) и описание тула: `warnings: string[]` в ответе §10.
+- m11 → задача 0: `$SCRATCH` объяснён как условное обозначение с подстановкой абсолютного пути scratchpad основной сессии.
+
+**Не применено по решению**
+
+- m10 (атрибуция коммитов «из system-reminder»): трейлер `Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>` оставлен фиксированным по решению пользователя.
+
+**Попутно**
+
+- Заголовок «Выбор способа исполнения»: «задачи 1–10; задачи 11 и 12 — inline» (приведён в соответствие с пунктом «Когда inline» в том же разделе; ранее 11 числилась и в subagent-driven, и в inline).
