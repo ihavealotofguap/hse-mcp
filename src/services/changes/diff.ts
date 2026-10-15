@@ -1,4 +1,4 @@
-import { fingerprint, isEmptyGrade } from "./normalize.js";
+import { canonicalAttrs, dedupeIds, isEmptyGrade } from "./normalize.js";
 import type { Baseline, ChangeEvent, Coverage, DiffFlags, Fact, FieldChange, Scope } from "./types.js";
 
 export type RawEvent = Omit<ChangeEvent, "seq" | "at">;
@@ -10,7 +10,7 @@ export interface DiffInput extends DiffFlags {
   baseline: Baseline | null;
   facts: Fact[];
   coverage?: Coverage;
-  /** Выборка усечена: `removed` не вычисляется, отсутствующее переносится. */
+  /** Выборка усечена: `removed` не вычисляется; отсутствующее переносится в базу только при `carryMissing: true`. */
   truncated?: boolean;
   takenAt: Date;
 }
@@ -31,15 +31,21 @@ function intersect(a: Coverage | undefined, b: Coverage | undefined): Coverage {
   };
 }
 
+/** Момент UTC в формате `utcMinute`: `ГГГГ-ММ-ДДTЧЧ:ммZ`. */
+const UTC_MINUTE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}Z$/;
+
 /** Факт без оси (`at` не задан) считается внутри окна всегда. */
 const inCoverage = (at: string | undefined, c: Coverage): boolean =>
   at === undefined || ((c.from === null || at >= c.from) && (c.to === null || at <= c.to));
 
+/** Различия по канонических значениям (как в отпечатке): пустое, `null` и отсутствие ключа равны. */
 function fieldChanges(before: Record<string, string | null>, after: Record<string, string | null>): FieldChange[] {
-  const keys = [...new Set([...Object.keys(before), ...Object.keys(after)])].sort();
+  const was = canonicalAttrs(before);
+  const now = canonicalAttrs(after);
+  const keys = [...new Set([...Object.keys(was), ...Object.keys(now)])].sort();
   return keys
-    .filter((k) => (before[k] ?? null) !== (after[k] ?? null))
-    .map((k) => ({ field: k, from: before[k] ?? null, to: after[k] ?? null }));
+    .filter((k) => (was[k] ?? null) !== (now[k] ?? null))
+    .map((k) => ({ field: k, from: was[k] ?? null, to: now[k] ?? null }));
 }
 
 function mergeMoves(
@@ -100,8 +106,9 @@ export function diffSource(input: DiffInput): DiffOutput {
   const carryMissing = input.carryMissing ?? true;
   const takenAt = input.takenAt.toISOString();
 
+  // Повторы `id` получают суффикс `#n` (а не теряются) при любом вызывающем.
   const fresh = new Map<string, Fact>();
-  for (const f of input.facts) if (!fresh.has(f.id)) fresh.set(f.id, f);
+  for (const f of dedupeIds(input.facts)) fresh.set(f.id, f);
 
   const makeBaseline = (carried: Fact[]): Baseline => {
     const facts: Record<string, Fact> = {};
@@ -113,7 +120,7 @@ export function diffSource(input: DiffInput): DiffOutput {
   if (input.baseline === null) return { events: [], baseline: makeBaseline([]), status: "baseline" };
 
   const old = input.baseline;
-  const window = intersect(old.coverage, input.coverage);
+  const overlap = intersect(old.coverage, input.coverage);
   const base = { source: input.source, scope: input.scope };
   const make = (type: RawEvent["type"], f: Fact, extra: Partial<RawEvent> = {}): RawEvent => ({
     ...base,
@@ -131,15 +138,18 @@ export function diffSource(input: DiffInput): DiffOutput {
   for (const [id, f] of fresh) {
     const before = old.facts[id];
     if (!before) {
-      if (!inCoverage(f.at, window)) continue;
+      if (!inCoverage(f.at, overlap)) continue;
       if (input.silentEmptyGrade && isEmptyGrade(f.attrs.grade)) continue;
       events.push(make("added", f));
       continue;
     }
-    if (emitChanged && fingerprint(before.attrs) !== fingerprint(f.attrs)) {
-      events.push(make("changed", f, { fields: fieldChanges(before.attrs, f.attrs) }));
+    if (emitChanged) {
+      // `changed` без изменённых полей не бывает: сравнение — по каноническим значениям.
+      const fields = fieldChanges(before.attrs, f.attrs);
+      if (fields.length > 0) events.push(make("changed", f, { fields }));
     }
-    if (input.detectOverdue && f.attrs.due) {
+    // Только UTC `…Z`: наивная строка читалась бы `Date.parse` в поясе машины.
+    if (input.detectOverdue && f.attrs.due && UTC_MINUTE.test(f.attrs.due)) {
       const due = Date.parse(f.attrs.due);
       // Просрочка — ход часов: срок пересёк «сейчас» между снимками, а элемент всё ещё в источнике.
       if (!Number.isNaN(due) && prevMs < due && due <= nowMs) events.push(make("overdue", f, { cause: "clock" }));
@@ -151,7 +161,7 @@ export function diffSource(input: DiffInput): DiffOutput {
     if (fresh.has(id)) continue;
     // Ушёл ниже нового покрытия — окно сдвигается только вперёд, назад факт не вернётся: забываем.
     if (input.coverage?.from != null && before.at !== undefined && before.at < input.coverage.from) continue;
-    if (emitRemoved && !input.truncated && inCoverage(before.at, window)) {
+    if (emitRemoved && !input.truncated && inCoverage(before.at, overlap)) {
       events.push(make("removed", before));
       continue;
     }

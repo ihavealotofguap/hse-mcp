@@ -99,7 +99,7 @@ export interface DiffFlags {
   carryMissing?: boolean;
   /** Склеивать `removed`+`added` с одинаковым `matchKey` в `moved`. */
   mergeMoves?: boolean;
-  /** Порождать `overdue` по `attrs.due`. */
+  /** Порождать `overdue` по `attrs.due`; срок должен быть UTC в виде `ГГГГ-ММ-ДДTЧЧ:ммZ`, иначе пропускается. */
   detectOverdue?: boolean;
   /** Новый элемент с пустой оценкой — не событие. */
   silentEmptyGrade?: boolean;
