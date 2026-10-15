@@ -1,4 +1,5 @@
 import { addDays } from "../../date-utils.js";
+import { runSource as runGenericSource } from "../../run-source.js";
 import { endOfDay, sortItems, startOfDay, toLocalIso } from "./parse.js";
 import { realCollectors, type Collectors } from "./sources.js";
 import type { CollectorResult, CourseFilter, DateRange, DigestItem, DigestResult, SourceStatus } from "./types.js";
@@ -31,35 +32,10 @@ interface SourceRun {
   status: SourceStatus;
 }
 
-function withTimeout<T>(promise: Promise<T>, ms: number, name: string): Promise<T> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const timeout = new Promise<never>((_, reject) => {
-    timer = setTimeout(() => reject(new Error(`источник ${name} не ответил за ${ms / 1000} с`)), ms);
-  });
-  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
-}
-
 /** Запускает коллектор; никогда не бросает — отказ превращается в статус источника. */
 async function runSource(name: string, fn: () => Promise<CollectorResult>, timeoutMs: number): Promise<SourceRun> {
-  const started = Date.now();
-  try {
-    const result = await withTimeout(fn(), timeoutMs, name);
-    return {
-      name,
-      items: result.items,
-      status: {
-        status: "ok",
-        ms: Date.now() - started,
-        ...(result.warnings?.length ? { warnings: result.warnings } : {}),
-      },
-    };
-  } catch (err) {
-    return {
-      name,
-      items: [],
-      status: { status: "error", error: err instanceof Error ? err.message : String(err), ms: Date.now() - started },
-    };
-  }
+  const out = await runGenericSource(name, fn, timeoutMs);
+  return { name, items: out.value?.items ?? [], status: out.status };
 }
 
 function keep(item: DigestItem, plan: DigestPlan): boolean {

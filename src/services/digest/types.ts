@@ -1,3 +1,6 @@
+import type { SourceStatus } from "../../run-source.js";
+export type { SourceStatus };
+
 /** Тип элемента сводки. */
 export type ItemKind =
   | "lesson"
@@ -34,14 +37,6 @@ export interface DigestItem {
   url?: string;
   /** Нераспознанные/сопутствующие поля источника. */
   raw?: Record<string, unknown>;
-}
-
-export interface SourceStatus {
-  status: "ok" | "error" | "skipped";
-  error?: string;
-  /** Нефатальные замечания источника. */
-  warnings?: string[];
-  ms: number;
 }
 
 export interface DigestResult {
