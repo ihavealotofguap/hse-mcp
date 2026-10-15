@@ -1,7 +1,7 @@
 import type { Page } from "playwright";
 import { withPage } from "../../auth/browser-session.js";
 import { TTL } from "../../cache.js";
-import { dumpPage, extractTable, type PageDump } from "../../dom-utils.js";
+import { dumpPage, extractGradeTable, extractTable, type GradeTable, type PageDump } from "../../dom-utils.js";
 import { formatLocalDate } from "../../date-utils.js";
 import { defineResource, type ResourceCallOptions } from "../../resource.js";
 import { resolveScopedUrl } from "../../url-utils.js";
@@ -478,6 +478,27 @@ const lmsGrades = defineResource<number, Array<Record<string, string>>>({
 
 export function getGrades(courseId: number): Promise<Array<Record<string, string>>> {
   return lmsGrades(courseId);
+}
+
+const lmsGradeItems = defineResource<number, GradeTable>({
+  name: "lms.grade-items",
+  ttl: TTL.medium,
+  key: (courseId) => String(courseId),
+  load: (courseId, ctx) =>
+    withPage(
+      `${BASE_URL}/grade/report/user/index.php?id=${courseId}`,
+      (page) => extractGradeTable(page),
+      { signal: ctx.signal }
+    ),
+});
+
+/**
+ * Структурированный журнал оценок курса (имя элемента, путь категорий, оценка) — для снимков
+ * `hse_changes`. Отдельно от `getGrades`: тот отдаёт сырые строки `extractTable` с ключами,
+ * сдвинутыми относительно заголовков, и в №3 не меняется (обратная совместимость).
+ */
+export function listGradeItems(courseId: number, opts?: ResourceCallOptions): Promise<GradeTable> {
+  return lmsGradeItems(courseId, opts);
 }
 
 /** Открыть произвольную страницу edu.hse.ru (относительный путь) — для случаев вне готовых тулов. */
