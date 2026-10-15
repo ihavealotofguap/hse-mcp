@@ -25,6 +25,9 @@ const DEFAULT_MAX_AGE_MS = 60_000;
 const GRADES_POOL = 3;
 /** Не запускать новый курс, если до конца бюджета области осталось меньше этого резерва. */
 const GRADES_COURSE_RESERVE_MS = 15_000;
+/** Сколько последних `ackSeq` помнит `State.issues`. */
+const ISSUES_MAX_ENTRIES = 50;
+const STALE_SNAPSHOT = "снимок устарел: база новее";
 
 export interface ChangesOptions {
   scopes?: Scope[];
@@ -234,22 +237,120 @@ function select(state: State, scopes: Scope[], sinceMs: number | null): Selectio
 }
 
 /**
- * `ack` больше наибольшего когда-либо выданного `seq` (`max(issued[*])` по всем областям) —
- * игнорируется целиком с предупреждением; иначе для областей вызова
- * `seen[scope] = max(seen[scope], min(ack, issued[scope] ?? 0))`: подтверждение, выданное по одной
- * области, не помечает просмотренными невыданные события другой.
+ * `ack` — `ackSeq` полученного ответа. Больше наибольшего когда-либо выданного `seq`
+ * (`max(issued[*])` по всем областям) или не совпадающий ни с одним из последних `ackSeq` (`issues`)
+ * игнорируется целиком с предупреждением. Иначе сдвигаются только области того ответа, входящие в этот
+ * вызов: `seen[scope] = max(seen[scope], min(ack, issued[scope] ?? 0))`. Так `ackSeq` ответа по одной
+ * области не подтверждает события другой, выданные в ответе, который не дошёл.
  */
-function applyAck(draft: State, scopes: Scope[], ack: number, warnings: string[]): void {
+function applyAck(draft: State, scopes: Scope[], ack: number, warn: (w: string) => void): void {
   const issued = Object.values(draft.issued).filter((v): v is number => typeof v === "number");
   const maxIssued = Math.max(0, ...issued);
   if (ack > maxIssued) {
-    warnings.push(`ack ${ack} больше любого выданного seq (${maxIssued}) — игнорируется`);
+    warn(`ack ${ack} больше любого выданного seq (${maxIssued}) — игнорируется`);
     return;
   }
-  for (const scope of scopes) {
+  const answered = draft.issues?.[String(ack)];
+  if (!answered) {
+    warn(`ack ${ack} не совпадает ни с одним из последних ${ISSUES_MAX_ENTRIES} ackSeq — игнорируется`);
+    return;
+  }
+  for (const scope of scopes.filter((s) => answered.includes(s))) {
     const ceiling = Math.min(ack, draft.issued[scope] ?? 0);
     if (ceiling > (draft.seen[scope] ?? 0)) draft.seen[scope] = ceiling;
   }
+}
+
+/**
+ * Запоминает области ответа с этим `ackSeq`. Тот же `ackSeq` у второго ответа (повтор без `ack`) —
+ * пересечение областей: клиент мог получить любой из двух ответов, подтверждать можно только общие.
+ * Хранятся последние `ISSUES_MAX_ENTRIES` по величине `ackSeq`.
+ */
+function recordIssue(draft: State, ackSeq: number, scopes: Scope[]): void {
+  const issues = (draft.issues ??= {});
+  const key = String(ackSeq);
+  const prev = issues[key];
+  issues[key] = prev ? scopes.filter((s) => prev.includes(s)) : [...scopes];
+  const keys = Object.keys(issues).map(Number).sort((a, b) => a - b);
+  for (const k of keys.slice(0, Math.max(0, keys.length - ISSUES_MAX_ENTRIES))) delete issues[String(k)];
+}
+
+interface Computed {
+  draft: State;
+  /** Новые события этого снимка (с `seq` черновика). */
+  fresh: ChangeEvent[];
+  /** Собранное с поправкой: устаревшие относительно базы снимки — `skipped`. */
+  committed: Gathered[];
+  diffStatus: Map<string, "baseline" | "ok">;
+  chosen: Selection;
+}
+
+/** Черновик коммита от базы `base`: ack, diff по источникам, срезы, выбор ответа, `issued`/`issues`. */
+function compute(
+  base: State,
+  gathered: Gathered[],
+  scopes: Scope[],
+  opts: ChangesOptions,
+  now: Date,
+  sinceMs: number | null,
+  warn: (w: string) => void
+): Computed {
+  const takenAt = now.toISOString();
+  const draft: State = structuredClone(base);
+  if (opts.ack !== undefined) applyAck(draft, scopes, opts.ack, warn);
+
+  const diffStatus = new Map<string, "baseline" | "ok">();
+  const fresh: ChangeEvent[] = [];
+  const committed: Gathered[] = [];
+  for (const g of gathered) {
+    const prev = draft.baselines[g.source];
+    if (!g.result) {
+      committed.push(g);
+      continue;
+    }
+    // Параллельный вызов снял позже, а закоммитил раньше: diff старого снимка от более новой базы дал
+    // бы ложные `changed` туда-обратно и откатил бы `takenAt` (повторный `overdue`). База не трогается.
+    if (prev && prev.takenAt > takenAt) {
+      committed.push({ ...g, status: { status: "skipped", error: STALE_SNAPSHOT, ms: g.status.ms }, result: null });
+      continue;
+    }
+    committed.push(g);
+    // Первый запуск области: курсор ставится на текущую границу — события этого снимка будут новыми.
+    if (draft.seen[g.scope] === undefined) draft.seen[g.scope] = draft.nextSeq - 1;
+    const d = diffSource({
+      source: g.source, scope: g.scope, baseline: prev ?? null,
+      facts: g.result.facts, coverage: g.result.coverage, truncated: g.result.truncated, takenAt: now, ...g.flags,
+    });
+    draft.baselines[g.source] = d.baseline;
+    diffStatus.set(g.source, d.status);
+    for (const raw of d.events) {
+      const ev: ChangeEvent = { ...raw, seq: draft.nextSeq++, at: takenAt };
+      draft.journal.push(ev);
+      fresh.push(ev);
+    }
+  }
+  pruneJournal(draft, now);
+  pruneGradeBaselines(draft, now);
+
+  const chosen = select(draft, scopes, sinceMs);
+  if (sinceMs === null) {
+    for (const it of chosen.items) {
+      const s = it.scope;
+      draft.issued[s] = Math.max(draft.issued[s] ?? 0, it.seq as number);
+    }
+    if (chosen.ackSeq !== null) recordIssue(draft, chosen.ackSeq, scopes);
+  }
+  for (const s of scopes) draft.lost[s] = 0;
+  draft.rev = base.rev + 1;
+  return { draft, fresh, committed, diffStatus, chosen };
+}
+
+/** Код ошибки блокировки без путей: сообщение `fs` содержит путь к профилю пользователя. */
+function lockFailure(err: unknown): string {
+  const message = err instanceof Error ? err.message : "";
+  if (message.startsWith("state.json занят")) return `${message}; запись пропущена`;
+  const code = (err as NodeJS.ErrnoException | undefined)?.code;
+  return `не удалось заблокировать state.json (${code ?? (err instanceof Error ? err.name : "ошибка")}); запись пропущена`;
 }
 
 function reports(
@@ -304,96 +405,79 @@ export async function getChanges(opts: ChangesOptions = {}, overrides: Partial<C
     if (w && !warnings.includes(w)) warnings.push(w);
   };
 
-  // Чтение до сбора нужно ради порядка обхода курсов (`baselinesAge`). У `loadState` есть побочный
-  // эффект (`corrupt` → файл переименован), поэтому его предупреждение переносится в ответ: повторное
-  // чтение под блокировкой увидит уже `missing`.
-  const pre = await loadState(deps.dir);
-  warn(pre.warning);
-  const gathered = await gather(scopes, opts, deps, now, pre.state);
-
-  if (opts.signal?.aborted) {
-    const rep = reports(gathered, scopes, pre.state.baselines, new Map());
+  const empty = (rep: ReturnType<typeof reports>): ChangesResponse => ({
+    takenAt, scopes: rep.scopes, sources: rep.sources,
+    changes: [], ackSeq: null, omitted: 0, gap: { lostEvents: 0 }, persisted: false, warnings,
+  });
+  const cancelled = (gathered: Gathered[], baselines: State["baselines"]): ChangesResponse => {
     warn("вызов отменён до коммита");
-    return {
-      takenAt, scopes: rep.scopes, sources: rep.sources,
-      changes: [], ackSeq: null, omitted: 0, gap: { lostEvents: 0 }, persisted: false, warnings,
-    };
-  }
-
-  return withStateLock(deps.dir, async (): Promise<ChangesResponse> => {
-    const load = await loadState(deps.dir);
-    warn(load.warning);
-    if (load.kind === "newer" || load.kind === "io-error") {
-      const rep = reports(gathered.map((g) => ({ ...g, status: { ...g.status, status: "error" as const } })), scopes, {}, new Map());
-      return { takenAt, scopes: rep.scopes, sources: rep.sources, changes: [], ackSeq: null, omitted: 0, gap: { lostEvents: 0 }, persisted: false, warnings };
-    }
-
-    // `corrupt` с неудавшимся карантином: файл остался на месте, `saveState(…, null)` отклонит запись
-    // по `rev` — ответ уйдёт с `persisted: false`, сам `kind` здесь не различается.
-    const base = load.state;
-    const draft: State = structuredClone(base);
-    if (opts.ack !== undefined) applyAck(draft, scopes, opts.ack, warnings);
-
-    const diffStatus = new Map<string, "baseline" | "ok">();
-    const fresh: ChangeEvent[] = [];
-    for (const g of gathered) {
-      if (!g.result) continue;
-      // Первый запуск области: курсор ставится на текущую границу — события этого снимка будут новыми.
-      if (draft.seen[g.scope] === undefined) draft.seen[g.scope] = draft.nextSeq - 1;
-      const d = diffSource({
-        source: g.source, scope: g.scope, baseline: draft.baselines[g.source] ?? null,
-        facts: g.result.facts, coverage: g.result.coverage, truncated: g.result.truncated, takenAt: now, ...g.flags,
-      });
-      draft.baselines[g.source] = d.baseline;
-      diffStatus.set(g.source, d.status);
-      for (const raw of d.events) {
-        const ev: ChangeEvent = { ...raw, seq: draft.nextSeq++, at: takenAt };
-        draft.journal.push(ev);
-        fresh.push(ev);
-      }
-    }
-    pruneJournal(draft, now);
-    pruneGradeBaselines(draft, now);
-
-    const chosen = select(draft, scopes, sinceMs);
-    if (sinceMs === null) {
-      for (const it of chosen.items) {
-        const s = it.scope;
-        draft.issued[s] = Math.max(draft.issued[s] ?? 0, it.seq as number);
-      }
-    }
-    for (const s of scopes) draft.lost[s] = 0;
-    draft.rev = base.rev + 1;
-
-    const saved = await saveState(deps.dir, draft, load.kind === "ok" ? base.rev : null);
-    const rep = reports(gathered, scopes, draft.baselines, diffStatus);
-    if (saved.ok) {
-      return {
-        takenAt, scopes: rep.scopes, sources: rep.sources, changes: chosen.items, ackSeq: chosen.ackSeq,
-        omitted: chosen.omitted, gap: { lostEvents: chosen.lostEvents }, persisted: true, warnings,
-      };
-    }
-    // Запись не удалась: база, курсор и nextSeq на диске прежние; новые события возвращаются без seq.
-    warn(saved.error);
+    return empty(reports(gathered, scopes, baselines, new Map()));
+  };
+  /** Ответ без записи: база, курсор и nextSeq на диске прежние; новые события — без seq. */
+  const unsaved = (base: State, c: Computed): ChangesResponse => {
+    // `ackSeq` — из прежнего состояния; если такого `ackSeq` нет в `issues`, следующий ack будет
+    // проигнорирован — события повторятся, но не потеряются.
     const before = select(base, scopes, sinceMs);
-    const pending: ChangeItem[] = fresh
+    const pending: ChangeItem[] = c.fresh
       .filter((e) => scopes.includes(e.scope))
       .map((e) => ({ ...toItem(e), seq: null }));
     // Потолок ответа действует и здесь: остаток считается в `omitted`.
     const merged = [...before.items, ...pending];
     const capped = merged.slice(0, RESPONSE_EVENT_LIMIT);
+    const rep = reports(c.committed, scopes, c.draft.baselines, c.diffStatus);
     return {
       takenAt, scopes: rep.scopes, sources: rep.sources, changes: capped,
       ackSeq: before.ackSeq, omitted: before.omitted + (merged.length - capped.length),
       gap: { lostEvents: before.lostEvents }, persisted: false, warnings,
     };
-  });
+  };
+
+  // Чтение до сбора нужно ради порядка обхода курсов (`baselinesAge`). У `loadState` есть побочный
+  // эффект (`corrupt` → файл переименован), поэтому его предупреждение переносится в ответ: повторное
+  // чтение под блокировкой увидит уже `missing`.
+  const pre = await loadState(deps.dir);
+  warn(pre.warning);
+  // Файл более новой версии сам не изменится — запись заведомо пропущена, источники не опрашиваются.
+  if (pre.kind === "newer") return empty(reports([], scopes, {}, new Map()));
+  const gathered = await gather(scopes, opts, deps, now, pre.state);
+  if (opts.signal?.aborted) return cancelled(gathered, pre.state.baselines);
+
+  try {
+    return await withStateLock(deps.dir, async (): Promise<ChangesResponse> => {
+      const load = await loadState(deps.dir);
+      warn(load.warning);
+      if (load.kind === "newer" || load.kind === "io-error") {
+        return empty(reports(gathered.map((g) => ({ ...g, status: { ...g.status, status: "error" as const } })), scopes, {}, new Map()));
+      }
+      // `corrupt` с неудавшимся карантином: файл остался на месте, `saveState(…, null)` отклонит запись
+      // по `rev` — ответ уйдёт с `persisted: false`, сам `kind` здесь не различается.
+      const c = compute(load.state, gathered, scopes, opts, now, sinceMs, warn);
+      // Отмена во время ожидания блокировки: не писать после отмены.
+      if (opts.signal?.aborted) return cancelled(c.committed, load.state.baselines);
+      const saved = await saveState(deps.dir, c.draft, load.kind === "ok" ? load.state.rev : null);
+      if (!saved.ok) {
+        warn(saved.error);
+        return unsaved(load.state, c);
+      }
+      const rep = reports(c.committed, scopes, c.draft.baselines, c.diffStatus);
+      return {
+        takenAt, scopes: rep.scopes, sources: rep.sources, changes: c.chosen.items, ackSeq: c.chosen.ackSeq,
+        omitted: c.chosen.omitted, gap: { lostEvents: c.chosen.lostEvents }, persisted: true, warnings,
+      };
+    });
+  } catch (err) {
+    // Блокировка не получена (другой процесс держит её дольше ожидания): тул не бросает — ответ как
+    // при ошибке записи, от базы, прочитанной до сбора.
+    warn(lockFailure(err));
+    if (opts.signal?.aborted) return cancelled(gathered, pre.state.baselines);
+    return unsaved(pre.state, compute(pre.state, gathered, scopes, opts, now, sinceMs, warn));
+  }
 }
 
 /** Стирает базы и события области (или всего). `nextSeq` не сбрасывается; `seen` ставится в `nextSeq − 1`. */
 export async function resetChanges(
   opts: { scope?: Scope; confirm?: boolean },
-  overrides: Partial<Pick<ChangesDeps, "dir" | "now">> = {}
+  overrides: Partial<Pick<ChangesDeps, "dir">> = {}
 ): Promise<{ reset: Scope[]; removedBaselines: number; removedEvents: number; persisted: boolean }> {
   if (opts.confirm !== true) {
     throw new Error("hse_changes_reset требует confirm: true — будут стёрты накопленные базы и журнал событий");

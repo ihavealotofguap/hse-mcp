@@ -81,6 +81,11 @@ export interface State {
   nextSeq: number;
   /** Наибольший `seq`, выданный в ответе, по областям (ограничивает `ack`). */
   issued: Partial<Record<Scope, number>>;
+  /**
+   * Области ответов по их `ackSeq` (последние записи): `ack` сдвигает `seen` только областей ответа,
+   * который клиент получил. Необязательно — файлы без поля читаются как прежде.
+   */
+  issues?: Record<string, Scope[]>;
   /** Невыданные события, срезанные потолком журнала; сообщаются в `gap` один раз. */
   lost: Partial<Record<Scope, number>>;
   baselines: Record<string, Baseline>;

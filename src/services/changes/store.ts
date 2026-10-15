@@ -45,6 +45,8 @@ function isValidState(x: unknown): x is State {
   return (
     isNum(x.version) && isNum(x.rev) && isNum(x.nextSeq) &&
     isObj(x.issued) && isObj(x.lost) && isObj(x.seen) && isObj(x.baselines) &&
+    (x.issues === undefined ||
+      (isObj(x.issues) && Object.values(x.issues).every((v) => Array.isArray(v) && v.every((s) => typeof s === "string")))) &&
     Object.values(x.baselines).every((b) => isObj(b) && typeof b.takenAt === "string" && isObj(b.facts)) &&
     Array.isArray(x.journal) &&
     x.journal.every((e) => isObj(e) && isNum(e.seq) && typeof e.at === "string" && typeof e.scope === "string")
