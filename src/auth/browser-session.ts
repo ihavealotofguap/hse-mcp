@@ -1,16 +1,15 @@
 import fs from "node:fs";
 import path from "node:path";
 import { AsyncLocalStorage } from "node:async_hooks";
-import { fileURLToPath } from "node:url";
 import { chromium, type APIRequestContext, type Browser, type BrowserContext, type Page } from "playwright";
 import { config } from "../config.js";
 import { waitForRenderedBody } from "../dom-utils.js";
 import { acquirePageSlot, LEASE_GRACE_MS } from "../limiter.js";
+import { projectRoot } from "../project-root.js";
 
-// Считаем от расположения самого файла, а не process.cwd() — хосты вроде Claude
-// Desktop запускают stdio-сервер с произвольным (иногда непишущим, напр.
+// Корень проекта берём из общего хелпера (от расположения файла, а не process.cwd()) — хосты вроде
+// Claude Desktop запускают stdio-сервер с произвольным (иногда непишущим, напр.
 // C:\WINDOWS\system32) cwd, и mkdir там падает с EPERM.
-const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 const STORAGE_DIR = path.join(projectRoot, "storage");
 const STORAGE_STATE_PATH = path.join(STORAGE_DIR, "hse-session.json");
 const KEYCLOAK_HOST = "saml.hse.ru";
