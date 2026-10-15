@@ -100,15 +100,28 @@ function invalidateToken(usedToken: string): void {
   if (tokenEntry?.token === usedToken) tokenEntry = null;
 }
 
+/** Путь без query: в сообщения об ошибках не должны попадать email, поисковые строки и т.п. */
+const pathOnly = (apiPath: string): string => apiPath.split("?")[0] ?? apiPath;
+
 type DirectResult<T> = { ok: true; body: T } | { ok: false; status: number; error?: string };
 
 async function requestDirect<T>(apiPath: string, token: string, signal: AbortSignal): Promise<DirectResult<T>> {
   await acquireRequestTurn(signal);
   const api = await getApiRequestContext();
-  const res = await api.get(`${BASE_URL}${apiPath}`, {
-    headers: { Authorization: `Bearer ${token}` },
-    timeout: API_TIMEOUT_MS,
-  });
+  let res: Awaited<ReturnType<typeof api.get>>;
+  try {
+    res = await api.get(`${BASE_URL}${apiPath}`, {
+      headers: { Authorization: `Bearer ${token}` },
+      timeout: API_TIMEOUT_MS,
+    });
+  } catch (err) {
+    if (signal.aborted) throw signal.reason ?? err;
+    // Сообщение Playwright дописывает «Call log:» с полным URL, query и всеми заголовками
+    // (Authorization, cookie) — оставляем только первую строку, без query.
+    const raw = err instanceof Error ? err.message : String(err);
+    const firstLine = (raw.split("\n")[0] ?? "").replace(/\?\S*/g, "").trim();
+    throw new Error(`lk.hse.ru API ${pathOnly(apiPath)}: ${firstLine || "запрос не выполнен"}`);
+  }
   if (!res.ok()) return { ok: false, status: res.status() };
   try {
     return { ok: true, body: (await res.json()) as T };
@@ -133,7 +146,7 @@ function fetchElkApiViaPage<T>(apiPath: string, signal: AbortSignal): Promise<T>
           headers: token ? { Authorization: `Bearer ${token}` } : {},
         });
         if (!res.ok) {
-          throw new Error(`lk.hse.ru API ${path} вернул ${res.status}`);
+          throw new Error(`lk.hse.ru API ${path.split("?")[0]} вернул ${res.status}`);
         }
         return res.json();
       }, apiPath) as Promise<T>;
@@ -167,7 +180,7 @@ async function fetchElkApiUncached<T>(apiPath: string, signal: AbortSignal): Pro
     }
     lastFailure = describeFailure(result);
     const authFailure = result.status === 401 || result.status === 403 || result.error !== undefined;
-    if (!authFailure) throw new Error(`lk.hse.ru API ${apiPath} вернул ${result.status}`);
+    if (!authFailure) throw new Error(`lk.hse.ru API ${pathOnly(apiPath)} вернул ${result.status}`);
     if (result.status !== 403) invalidateToken(token);
   }
 
@@ -229,14 +242,19 @@ const elkScheduleWeek = defineResource<Date, ElkScheduleDay[]>({
 
 /** Расписание студента через ЕЛК — работает из любой сети (в отличие от ruz_*). */
 export async function getSchedule(from: Date, to: Date): Promise<ElkScheduleDay[]> {
+  if (Number.isNaN(from.getTime()) || Number.isNaN(to.getTime())) {
+    throw new Error("Некорректная дата в диапазоне расписания (Invalid Date)");
+  }
   const fromKey = formatLocalDate(from, "-");
   const toKey = formatLocalDate(to, "-");
   if (fromKey > toKey) return [];
 
   const weeks: Date[] = [];
-  for (let m = mondayOf(from); formatLocalDate(m, "-") <= toKey; m = addDays(m, 7)) weeks.push(m);
-  if (weeks.length > MAX_SCHEDULE_WEEKS) {
-    throw new Error(`Диапазон расписания (${weeks.length} недель) больше ${MAX_SCHEDULE_WEEKS} недель — сузьте период`);
+  for (let m = mondayOf(from); formatLocalDate(m, "-") <= toKey; m = addDays(m, 7)) {
+    weeks.push(m);
+    if (weeks.length > MAX_SCHEDULE_WEEKS) {
+      throw new Error(`Диапазон расписания больше ${MAX_SCHEDULE_WEEKS} недель — сузьте период`);
+    }
   }
   const chunks = await Promise.all(weeks.map((m) => elkScheduleWeek(m)));
   return chunks.flat().filter((day) => day.date >= fromKey && day.date <= toKey);
