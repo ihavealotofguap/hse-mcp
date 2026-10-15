@@ -137,15 +137,11 @@ function elkWindows(deps: ClientDeps): SourceExtractor {
     flags: {},
     async run(ctx) {
       const rows = await deps.getCourseEvaluationStatus(ctx.opts);
-      const warnings: string[] = [];
       const facts: Fact[] = [];
       for (const row of rows) {
         // id окна — только период (§5); номер строки `#` нестабилен и в id не подставляется.
         const period = pick(row, /период|period|name/i);
-        if (!period) {
-          warnings.push("строка СОП без периода пропущена");
-          continue;
-        }
+        if (!period) continue;
         facts.push({
           id: period,
           scope: "deadlines",
@@ -154,7 +150,16 @@ function elkWindows(deps: ClientDeps): SourceExtractor {
           attrs: canonicalAttrs({ end: sopNaive(pick(row, /окончан|end/i)), status: pick(row, /статус|status/i) }),
         });
       }
-      return { facts: stableDedupe(facts), warnings };
+      // Без периода нет стабильного id. Пропущены все строки непустого ответа — колонка не распознана:
+      // ошибка источника, а не «ок с нулём фактов» (иначе база окон обнулилась бы массовым `removed`).
+      const skipped = rows.length - facts.length;
+      if (rows.length > 0 && facts.length === 0) {
+        throw new Error(`не удалось найти период в строках СОП: ${rows.length} из ${rows.length}`);
+      }
+      return {
+        facts: stableDedupe(facts),
+        warnings: skipped > 0 ? [`строк СОП без периода пропущено: ${skipped}`] : [],
+      };
     },
   };
 }
@@ -243,8 +248,9 @@ function elkNotifications(deps: ClientDeps): SourceExtractor {
       const facts = stableDedupe(
         res.notifications.flatMap((n): Fact[] => {
           const raw = normText(n.date);
-          // Даты уведомлений приходят без времени (ГГГГ-ММ-ДД) — гранулярность покрытия сутки; если время
-          // всё же есть (в том числе без пояса), берётся только дата: пояс неизвестен, сравнение по суткам.
+          // Даты уведомлений приходят без времени (ГГГГ-ММ-ДД) — гранулярность покрытия сутки. Любая строка,
+          // начинающаяся с даты, сводится к этой дате как записана — и без пояса, и с поясом (`…Z`, `…+03:00`),
+          // без перевода в UTC: сравнение по суткам. `utcMinute` — только для строк иного вида.
           const at = /^\d{4}-\d{2}-\d{2}(?!\d)/.test(raw) ? raw.slice(0, 10) : utcMinute(raw);
           if (at === null) return [];
           const title = normText(n.title);
