@@ -120,6 +120,12 @@ export function diffSource(input: DiffInput): DiffOutput {
   if (input.baseline === null) return { events: [], baseline: makeBaseline([]), status: "baseline" };
 
   const old = input.baseline;
+  // Пустой ответ над непустой базой у источника без переноса отсутствующего (входящее, оценки) — скорее
+  // сбой, чем «всё исчезло»: база переносится целиком, событий нет. Иначе база стёрлась бы, а следующий
+  // нормальный ответ дал бы массовые `added`. `removed` у таких источников и так не выпускается.
+  if (!carryMissing && fresh.size === 0 && Object.keys(old.facts).length > 0) {
+    return { events: [], baseline: { takenAt, ...(old.coverage ? { coverage: old.coverage } : {}), facts: old.facts }, status: "ok" };
+  }
   const overlap = intersect(old.coverage, input.coverage);
   const base = { source: input.source, scope: input.scope };
   const make = (type: RawEvent["type"], f: Fact, extra: Partial<RawEvent> = {}): RawEvent => ({

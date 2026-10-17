@@ -640,7 +640,13 @@ export function getAntiplagiatStatus(): Promise<ElkAntiplagiatStatus> {
 const SOP_URL =
   "https://lms.hse.ru/elk_login.php?role=student&elk_lms_url=https://lms.hse.ru/yii_index.php%3Fr=rt/hse-rt-student-event-list";
 
-const elkCourseEvaluation = defineResource<void, Array<Record<string, string>>>({
+/** Таблица СОП с признаком наличия: `found: false` — таблица не отрисовалась (сбой рендера или SSO-моста). */
+export interface CourseEvaluationTable {
+  found: boolean;
+  rows: Array<Record<string, string>>;
+}
+
+const elkCourseEvaluation = defineResource<void, CourseEvaluationTable>({
   name: "elk.course-evaluation",
   ttl: TTL.medium,
   key: () => "me",
@@ -649,7 +655,8 @@ const elkCourseEvaluation = defineResource<void, Array<Record<string, string>>>(
       SOP_URL,
       async (page) => {
         await page.waitForSelector("table.event-table", { timeout: 10_000 }).catch(() => {});
-        return extractTable(page, "table.event-table");
+        const found = (await page.$("table.event-table")) !== null;
+        return { found, rows: await extractTable(page, "table.event-table") };
       },
       { signal: ctx.signal }
     ),
@@ -663,7 +670,18 @@ const elkCourseEvaluation = defineResource<void, Array<Record<string, string>>>(
  * через extractTable.
  */
 export function getCourseEvaluationStatus(opts?: ResourceCallOptions): Promise<Array<Record<string, string>>> {
-  return elkCourseEvaluation(undefined, opts);
+  return elkCourseEvaluation(undefined, opts).then((t) => t.rows);
+}
+
+/**
+ * То же с признаком наличия таблицы — для снимков (`hse_changes`), где «таблицы нет» должно быть
+ * отказом источника, а не «окон нет». Закэшированное «таблицы нет» на веру не принимается: страница
+ * перечитывается один раз.
+ */
+export async function getCourseEvaluationTable(opts: ResourceCallOptions = {}): Promise<CourseEvaluationTable> {
+  const first = await elkCourseEvaluation(undefined, opts);
+  if (first.found || opts.maxAgeMs === 0) return first;
+  return elkCourseEvaluation(undefined, { ...opts, maxAgeMs: 0 });
 }
 
 const VKR_URL = "https://lms.hse.ru/elk_login.php?role=student&elk_lms_url=https://lms.hse.ru/%3Fap_list";

@@ -31,7 +31,7 @@ export interface ClientDeps {
   listActionEvents: typeof lms.listActionEvents;
   listMessages: typeof lms.listMessages;
   listGradeItems: typeof lms.listGradeItems;
-  getCourseEvaluationStatus: typeof elk.getCourseEvaluationStatus;
+  getCourseEvaluationTable: typeof elk.getCourseEvaluationTable;
   getSchedule: typeof elk.getSchedule;
   getNotifications: typeof elk.getNotifications;
   listRequests: typeof elk.listRequests;
@@ -41,7 +41,7 @@ export const realClients: ClientDeps = {
   listActionEvents: lms.listActionEvents,
   listMessages: lms.listMessages,
   listGradeItems: lms.listGradeItems,
-  getCourseEvaluationStatus: elk.getCourseEvaluationStatus,
+  getCourseEvaluationTable: elk.getCourseEvaluationTable,
   getSchedule: elk.getSchedule,
   getNotifications: elk.getNotifications,
   listRequests: elk.listRequests,
@@ -136,7 +136,11 @@ function elkWindows(deps: ClientDeps): SourceExtractor {
     scope: "deadlines",
     flags: {},
     async run(ctx) {
-      const rows = await deps.getCourseEvaluationStatus(ctx.opts);
+      const table = await deps.getCourseEvaluationTable(ctx.opts);
+      // Таблица не отрисовалась (таймаут рендера, SSO-мост не туда) — отказ источника, а не «окон нет»:
+      // у окон нет оси покрытия, и пустой ответ дал бы `removed` по каждому окну.
+      if (!table.found) throw new Error("таблица окон СОП не найдена на странице (сбой загрузки или входа)");
+      const rows = table.rows;
       const facts: Fact[] = [];
       for (const row of rows) {
         // id окна — только период (§5); номер строки `#` нестабилен и в id не подставляется.
@@ -174,10 +178,14 @@ function elkSchedule(deps: ClientDeps): SourceExtractor {
       const to = addDays(from, SCHEDULE_HORIZON_DAYS);
       const days = await deps.getSchedule(from, to, ctx.opts);
       const facts: Fact[] = [];
+      let skipped = 0;
       for (const day of days) {
         for (const l of day.lessons ?? []) {
           const begin = mskNaive(day.date, l.begin_time);
-          if (begin === null) continue;
+          if (begin === null) {
+            skipped++;
+            continue;
+          }
           const end = mskNaive(day.date, l.end_time);
           const name = normText(l.name);
           const type = normText(l.lesson_type);
@@ -196,6 +204,7 @@ function elkSchedule(deps: ClientDeps): SourceExtractor {
       return {
         facts: stableDedupe(facts),
         coverage: { from: `${formatLocalDate(from, "-")}T00:00`, to: `${formatLocalDate(to, "-")}T23:59` },
+        warnings: skippedWarning(skipped, "занятий расписания ЕЛК"),
       };
     },
   };
