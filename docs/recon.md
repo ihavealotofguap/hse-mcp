@@ -195,6 +195,7 @@
 
 - [x] **istudy: вход без MAX, API переехал.** SSO-цепочка с профиля ЕЛК проходит
       (`lk.hse.ru/profile` → `istudy.hse.ru/auth` → `/token` → `/dashboard`), экрана входа и MAX нет;
+      проверено по действующей сессии ЕЛК, вход без существующей сессии не проверялся;
       ответы 200: `/api/sso/auth`, `/api/user`, `/api/user/active-role`, `/api/student/profiles`,
       `POST /api/student/profile?studentId=<id>` (раньше `GET /api/student/<id>/profile`);
       `report-info`, `rating`, `exams-by-period` на `/dashboard` не запрашивались.
@@ -206,7 +207,7 @@
       телефона, эндпоинты после подтверждения.
 - [x] **Пресс-релиз НИУ ВШЭ (2026-09-28)** о переводе «ЯУчусь» на авторизацию через MAX с
       двухфакторной аутентификацией — согласуется с HTTP 412 выше; что «ЯУчусь» = `istudy.hse.ru`,
-      прямого источника нет. Вход без существующей сессии не проверялся.
+      прямого источника нет.
 - [x] **Журнал оценок LMS (`grade/report/user`)**: `table.user-grade`, имя элемента в
       `th.column-itemname.levelN`, колонки по классам `column-*`; существующий `extractTable`
       сдвигает ключи на одну позицию и теряет имя (дефект `lms_get_grades` — чинится отдельно;
