@@ -1,9 +1,9 @@
 import type { Page } from "playwright";
 import { withPage } from "../../auth/browser-session.js";
 import { TTL } from "../../cache.js";
-import { dumpPage, extractTable, type PageDump } from "../../dom-utils.js";
+import { dumpPage, extractGradeTable, extractTable, type GradeTable, type PageDump } from "../../dom-utils.js";
 import { formatLocalDate } from "../../date-utils.js";
-import { defineResource } from "../../resource.js";
+import { defineResource, type ResourceCallOptions } from "../../resource.js";
 import { resolveScopedUrl } from "../../url-utils.js";
 
 const BASE_URL = "https://edu.hse.ru";
@@ -158,8 +158,8 @@ const lmsCourses = defineResource<void, CourseOverview[]>({
  * ссылок со страницы: даёт прогресс прохождения, даты начала/окончания и категорию, которых нет
  * в простой ссылке на курс. classification: "all" — все курсы, включая скрытые из вида.
  */
-export function listCourses(): Promise<CourseOverview[]> {
-  return lmsCourses();
+export function listCourses(opts?: ResourceCallOptions): Promise<CourseOverview[]> {
+  return lmsCourses(undefined, opts);
 }
 
 interface RawActionEvent {
@@ -281,8 +281,8 @@ const lmsCalendar = defineResource<CalendarArgs, LmsActionEventsResult, LmsActio
  * просроченное несданное приходит с `overdue: true` и `actionable: false` (сдача закрыта) —
  * поэтому по `actionable` фильтровать нельзя. Ключ кэша: дата начала + корзина правой границы.
  */
-export function listActionEvents(from: Date, to: Date): Promise<LmsActionEventsResult> {
-  return lmsCalendar({ from, to });
+export function listActionEvents(from: Date, to: Date, opts?: ResourceCallOptions): Promise<LmsActionEventsResult> {
+  return lmsCalendar({ from, to }, opts);
 }
 
 interface RawMailPerson {
@@ -353,8 +353,8 @@ const lmsMessages = defineResource<number, RawMailMessageSummary[], LmsMessageSu
  * (см. src/services/mail/). Реверс-инжинирено 2026-09-15 через тот же внутренний AJAX-сервис
  * Moodle (fetchMoodleAjax), метод local_mail_search_messages с ролями to/cc/bcc — это входящие.
  */
-export function listMessages(limit = 50): Promise<LmsMessageSummary[]> {
-  return lmsMessages(limit);
+export function listMessages(limit = 50, opts?: ResourceCallOptions): Promise<LmsMessageSummary[]> {
+  return lmsMessages(limit, opts);
 }
 
 interface RawMailAttachment {
@@ -478,6 +478,27 @@ const lmsGrades = defineResource<number, Array<Record<string, string>>>({
 
 export function getGrades(courseId: number): Promise<Array<Record<string, string>>> {
   return lmsGrades(courseId);
+}
+
+const lmsGradeItems = defineResource<number, GradeTable>({
+  name: "lms.grade-items",
+  ttl: TTL.medium,
+  key: (courseId) => String(courseId),
+  load: (courseId, ctx) =>
+    withPage(
+      `${BASE_URL}/grade/report/user/index.php?id=${courseId}`,
+      (page) => extractGradeTable(page),
+      { signal: ctx.signal }
+    ),
+});
+
+/**
+ * Структурированный журнал оценок курса (имя элемента, путь категорий, оценка) — для снимков
+ * `hse_changes`. Отдельно от `getGrades`: тот отдаёт сырые строки `extractTable` с ключами,
+ * сдвинутыми относительно заголовков, и в №3 не меняется (обратная совместимость).
+ */
+export function listGradeItems(courseId: number, opts?: ResourceCallOptions): Promise<GradeTable> {
+  return lmsGradeItems(courseId, opts);
 }
 
 /** Открыть произвольную страницу edu.hse.ru (относительный путь) — для случаев вне готовых тулов. */

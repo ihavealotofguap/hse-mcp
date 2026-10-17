@@ -36,6 +36,64 @@ export async function extractTable(page: Page, selector: string): Promise<Array<
   }, selector);
 }
 
+export interface GradeItemRow {
+  /** Текст `th.column-itemname`. */
+  name: string;
+  /** N из класса `levelN` (0, если класса нет). */
+  level: number;
+  /** Имена категорий-предков (уровень строго меньше уровня строки). */
+  path: string[];
+  /** Нет ячейки `td.column-grade` — строка категории. */
+  isCategory: boolean;
+  /** Текст `td.column-grade`; `null` у категории. */
+  grade: string | null;
+}
+
+export interface GradeTable {
+  /** `table.user-grade` найден на странице. */
+  found: boolean;
+  /** Хотя бы в одной строке есть и `th.column-itemname`, и `td.column-grade`. */
+  recognized: boolean;
+  rows: GradeItemRow[];
+}
+
+/**
+ * Отчёт об оценках Moodle (`grade/report/user`): имя элемента лежит в `<th class="column-itemname
+ * levelN">`, а не в `<td>`, поэтому `extractTable` (читает только `td` по индексу заголовков)
+ * сдвигает ключи колонок и теряет имя. Здесь имя — из `th`, путь категорий — из `levelN`, оценка —
+ * из `td.column-grade` (по классу, не по индексу). Подтверждено вживую 2026-10-15 на 5 курсах.
+ */
+export async function extractGradeTable(page: Page, selector = "table.user-grade"): Promise<GradeTable> {
+  return page.evaluate((sel) => {
+    const table = document.querySelector(sel);
+    if (!table) return { found: false, recognized: false, rows: [] };
+    const clean = (s: string | null | undefined) => (s ?? "").replace(/\s+/g, " ").trim();
+    const stack: string[] = [];
+    const rows: Array<{ name: string; level: number; path: string[]; isCategory: boolean; grade: string | null }> = [];
+    let sawName = false;
+    let sawGrade = false;
+    for (const tr of Array.from(table.querySelectorAll("tbody tr"))) {
+      const th = tr.querySelector("th.column-itemname");
+      if (!th) continue;
+      sawName = true;
+      const levelClass = Array.from(th.classList).find((c) => /^level\d+$/.test(c));
+      const level = levelClass ? Number(levelClass.slice(5)) : 0;
+      const name = clean(th.textContent);
+      const gradeCell = tr.querySelector("td.column-grade");
+      const path = stack.slice(0, level).filter((x) => x !== undefined);
+      if (!gradeCell) {
+        stack.length = level;
+        stack[level] = name;
+        rows.push({ name, level, path, isCategory: true, grade: null });
+        continue;
+      }
+      sawGrade = true;
+      rows.push({ name, level, path, isCategory: false, grade: clean(gradeCell.textContent) });
+    }
+    return { found: true, recognized: sawName && sawGrade, rows };
+  }, selector);
+}
+
 /** Ждёт, пока SPA-страница отрендерит основной контент. Возвращает false при таймауте вместо
  * молчаливого проглатывания — вызывающий код решает, критично ли это для его сценария. */
 export async function waitForRenderedBody(page: Page, timeoutMs = 8_000): Promise<boolean> {

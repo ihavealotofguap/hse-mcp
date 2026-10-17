@@ -5,7 +5,7 @@ import { config } from "../../config.js";
 import { dumpPage, extractTable, type PageDump } from "../../dom-utils.js";
 import { addDays, formatLocalDate } from "../../date-utils.js";
 import { acquireRequestTurn } from "../../limiter.js";
-import { defineResource, type LoadContext } from "../../resource.js";
+import { defineResource, type LoadContext, type ResourceCallOptions } from "../../resource.js";
 import { resolveScopedUrl } from "../../url-utils.js";
 
 const BASE_URL = "https://lk.hse.ru";
@@ -241,7 +241,7 @@ const elkScheduleWeek = defineResource<Date, ElkScheduleDay[]>({
 });
 
 /** Расписание студента через ЕЛК — работает из любой сети (в отличие от ruz_*). */
-export async function getSchedule(from: Date, to: Date): Promise<ElkScheduleDay[]> {
+export async function getSchedule(from: Date, to: Date, opts?: ResourceCallOptions): Promise<ElkScheduleDay[]> {
   if (Number.isNaN(from.getTime()) || Number.isNaN(to.getTime())) {
     throw new Error("Некорректная дата в диапазоне расписания (Invalid Date)");
   }
@@ -256,7 +256,7 @@ export async function getSchedule(from: Date, to: Date): Promise<ElkScheduleDay[
       throw new Error(`Диапазон расписания больше ${MAX_SCHEDULE_WEEKS} недель — сузьте период`);
     }
   }
-  const chunks = await Promise.all(weeks.map((m) => elkScheduleWeek(m)));
+  const chunks = await Promise.all(weeks.map((m) => elkScheduleWeek(m, opts)));
   return chunks.flat().filter((day) => day.date >= fromKey && day.date <= toKey);
 }
 
@@ -449,8 +449,8 @@ const elkClaims = defineResource<number, { data: RawClaim[]; count: number }, { 
  * большинства elk_* эндпоинтов требует username (email) явным query-параметром, а не берёт его
  * из токена.
  */
-export function listRequests(limit = 500): Promise<{ count: number; requests: ElkClaim[] }> {
-  return elkClaims(limit);
+export function listRequests(limit = 500, opts?: ResourceCallOptions): Promise<{ count: number; requests: ElkClaim[] }> {
+  return elkClaims(limit, opts);
 }
 
 const elkTasks = defineResource<number, { count: number; data: unknown[] }>({
@@ -605,8 +605,8 @@ const elkNotifications = defineResource<
  * `GET /api/notifications?is_no_read=false&offset=0&limit=<n>`, тот же Bearer-токен.
  * `is_no_read=false` — включая уже прочитанные (иначе список часто пуст).
  */
-export function getNotifications(limit = 20): Promise<{ count: number; notifications: ElkNotification[] }> {
-  return elkNotifications(limit);
+export function getNotifications(limit = 20, opts?: ResourceCallOptions): Promise<{ count: number; notifications: ElkNotification[] }> {
+  return elkNotifications(limit, opts);
 }
 
 export interface ElkAntiplagiatStatus {
@@ -640,7 +640,13 @@ export function getAntiplagiatStatus(): Promise<ElkAntiplagiatStatus> {
 const SOP_URL =
   "https://lms.hse.ru/elk_login.php?role=student&elk_lms_url=https://lms.hse.ru/yii_index.php%3Fr=rt/hse-rt-student-event-list";
 
-const elkCourseEvaluation = defineResource<void, Array<Record<string, string>>>({
+/** Таблица СОП с признаком наличия: `found: false` — таблица не отрисовалась (сбой рендера или SSO-моста). */
+export interface CourseEvaluationTable {
+  found: boolean;
+  rows: Array<Record<string, string>>;
+}
+
+const elkCourseEvaluation = defineResource<void, CourseEvaluationTable>({
   name: "elk.course-evaluation",
   ttl: TTL.medium,
   key: () => "me",
@@ -649,7 +655,8 @@ const elkCourseEvaluation = defineResource<void, Array<Record<string, string>>>(
       SOP_URL,
       async (page) => {
         await page.waitForSelector("table.event-table", { timeout: 10_000 }).catch(() => {});
-        return extractTable(page, "table.event-table");
+        const found = (await page.$("table.event-table")) !== null;
+        return { found, rows: await extractTable(page, "table.event-table") };
       },
       { signal: ctx.signal }
     ),
@@ -662,8 +669,19 @@ const elkCourseEvaluation = defineResource<void, Array<Record<string, string>>>(
  * /elk_login.php. Данные — обычная HTML-таблица `table.event-table` (thead/tbody), извлекается
  * через extractTable.
  */
-export function getCourseEvaluationStatus(): Promise<Array<Record<string, string>>> {
-  return elkCourseEvaluation();
+export function getCourseEvaluationStatus(opts?: ResourceCallOptions): Promise<Array<Record<string, string>>> {
+  return elkCourseEvaluation(undefined, opts).then((t) => t.rows);
+}
+
+/**
+ * То же с признаком наличия таблицы — для снимков (`hse_changes`), где «таблицы нет» должно быть
+ * отказом источника, а не «окон нет». Закэшированное «таблицы нет» на веру не принимается: страница
+ * перечитывается один раз.
+ */
+export async function getCourseEvaluationTable(opts: ResourceCallOptions = {}): Promise<CourseEvaluationTable> {
+  const first = await elkCourseEvaluation(undefined, opts);
+  if (first.found || opts.maxAgeMs === 0) return first;
+  return elkCourseEvaluation(undefined, { ...opts, maxAgeMs: 0 });
 }
 
 const VKR_URL = "https://lms.hse.ru/elk_login.php?role=student&elk_lms_url=https://lms.hse.ru/%3Fap_list";

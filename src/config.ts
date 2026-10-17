@@ -1,11 +1,10 @@
 import { config as loadDotenv } from "dotenv";
-import { fileURLToPath } from "node:url";
 import path from "node:path";
+import { projectRoot } from "./project-root.js";
 
 // Ищем .env рядом с проектом, а не в process.cwd() — иначе при запуске сервера
 // сторонним хостом (Claude Desktop и т.п.) с произвольной рабочей директорией
 // файл просто не найдётся.
-const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 loadDotenv({ path: path.join(projectRoot, ".env") });
 
 function required(name: string): string {

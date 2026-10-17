@@ -17,6 +17,8 @@ export interface LoadContext {
 
 export interface ResourceCallOptions {
   signal?: AbortSignal;
+  /** Принять данные не старше N мс (0 — перечитать и сохранить); см. `cached`. */
+  maxAgeMs?: number;
 }
 
 export interface ResourceDef<A, Raw, R = Raw> {
@@ -105,11 +107,16 @@ export function defineResource<A, Raw, R = Raw>(
       return Promise.reject(opts.signal.reason ?? new Error("операция отменена"));
     }
     const key = prefix + def.key(args);
-    const shared = cached<Raw>(key, def.ttl, async () => {
-      const raw = deepFreeze(await loadWithDeadline(def, args, deadlineMs));
-      for (const name of def.invalidates ?? []) invalidateResource(name);
-      return raw;
-    });
+    const shared = cached<Raw>(
+      key,
+      def.ttl,
+      async () => {
+        const raw = deepFreeze(await loadWithDeadline(def, args, deadlineMs));
+        for (const name of def.invalidates ?? []) invalidateResource(name);
+        return raw;
+      },
+      { maxAgeMs: opts.maxAgeMs }
+    );
     const projected = shared.then((raw) => (def.project ? def.project(raw, args) : (raw as unknown as R)));
     return detach(projected, opts.signal);
   };
