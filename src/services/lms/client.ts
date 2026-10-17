@@ -349,8 +349,7 @@ const lmsMessages = defineResource<number, RawMailMessageSummary[], LmsMessageSu
 
 /**
  * Внутренняя почта SmartLMS (плагин local_mail, edu.hse.ru/local/mail/) — переписка с
- * преподавателями внутри курсов, полностью отдельная от корпоративной почты Яндекс 360
- * (см. src/services/mail/). Реверс-инжинирено 2026-09-15 через тот же внутренний AJAX-сервис
+ * преподавателями внутри курсов. Реверс-инжинирено 2026-09-15 через тот же внутренний AJAX-сервис
  * Moodle (fetchMoodleAjax), метод local_mail_search_messages с ролями to/cc/bcc — это входящие.
  */
 export function listMessages(limit = 50, opts?: ResourceCallOptions): Promise<LmsMessageSummary[]> {

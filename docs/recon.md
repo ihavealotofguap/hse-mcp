@@ -366,8 +366,8 @@
 - [x] **Внутренняя почта SmartLMS (`local_mail`) — новый источник данных, ранее не известный**
       (разведано вживую через Playwright MCP 2026-09-15, кликами по интерфейсу
       `edu.hse.ru/my/courses.php` → иконка «письма» с непрочитанным счётчиком →
-      `edu.hse.ru/local/mail/view.php?t=inbox`). Это ОТДЕЛЬНАЯ от корпоративной почты (Яндекс 360,
-      `src/services/mail/`) система переписки с преподавателями внутри курсов — плагин Moodle
+      `edu.hse.ru/local/mail/view.php?t=inbox`). Это система переписки с преподавателями внутри курсов
+      (корпоративная почта ВШЭ исключена из проекта) — плагин Moodle
       `local_mail`, тоже через внутренний AJAX (`fetchMoodleAjax`). Методы:
       `local_mail_search_messages` (query `{roles:["to","cc","bcc"],deleted:false}`, limit) —
       список входящих (id/тема/курс/отправитель/время/прочитано/вложения); `local_mail_get_message`

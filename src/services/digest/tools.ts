@@ -8,7 +8,7 @@ const RESULT_NOTE =
   "overdue, unread, source, ...), отсортированный: просроченные несданные первыми, затем по " +
   "времени, затем без даты; sources — статус каждого источника (ok/error/skipped, текст " +
   "ошибки, warnings). Если источник недоступен (например, РУЗ вне сети ВШЭ), сводка всё " +
-  "равно возвращается — смотрите sources. Корпоративная почта (mail_*) в сводку не входит.";
+  "равно возвращается — смотрите sources.";
 
 export function registerDigestTools(server: McpServer): void {
   server.registerTool(

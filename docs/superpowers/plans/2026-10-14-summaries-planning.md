@@ -1,5 +1,7 @@
 # Сводки и планирование (`my_today` / `my_week` / `my_deadlines`) — план реализации
 
+*Примечание от 2026-10-18: корпоративная почта ВШЭ (`mail_*`, IMAP/SMTP, `HSE_MAIL_APP_PASSWORD`) исключена из проекта и удалена из кода; упоминания о ней ниже исторические и не обновлялись.*
+
 *Исторический документ: план писался до живых замеров; итоговое поведение (календарь без fallback, таймаут 40 с, просроченные видны всегда) — в спецификации.*
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
