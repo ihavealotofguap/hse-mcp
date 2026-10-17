@@ -113,6 +113,31 @@ export async function loadState(dir: string): Promise<LoadResult> {
   return { kind: "ok", state: parsed };
 }
 
+/**
+ * Удаляет карантинные копии `state.json.corrupt-*` (в них те же темы и названия, что в состоянии) и
+ * оставшиеся после аварийного завершения `state.json.<pid>.tmp`. Вызывать под `withStateLock`: тогда
+ * чужой записи во временный файл идти не может. Возвращает число удалённых файлов.
+ */
+export async function removeLeftoverFiles(dir: string): Promise<number> {
+  let names: string[];
+  try {
+    names = fs.readdirSync(dir);
+  } catch {
+    return 0;
+  }
+  let removed = 0;
+  for (const name of names) {
+    if (!/^state\.json\.corrupt-/.test(name) && !/^state\.json\.[^.]+\.tmp$/.test(name)) continue;
+    try {
+      await retryIo(() => fs.unlinkSync(path.join(dir, name)));
+      removed++;
+    } catch {
+      /* исчез или занят: повторный reset удалит */
+    }
+  }
+  return removed;
+}
+
 /** `rev` на диске: `null` — файла нет, `-1` — файл есть, но не разбирается (не совпадёт ни с каким ожидаемым). */
 async function readRevOnDisk(file: string): Promise<number | null> {
   let text: string;

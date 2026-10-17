@@ -47,7 +47,10 @@ export function registerChangesTools(server: McpServer): void {
           .max(64)
           .refine(isSince, 'Ожидается "7d", "12h" или дата ISO')
           .optional()
-          .describe('Журнал за период ("7d", "12h" или дата ISO) вместо неподтверждённого; курсор не двигается.'),
+          .describe(
+            'Журнал за период ("7d", "12h" или дата ISO) вместо неподтверждённого; since сам курсор не ' +
+              "двигает (ack в том же вызове двигает)."
+          ),
         ack: z
           .number()
           .int()
@@ -72,7 +75,9 @@ export function registerChangesTools(server: McpServer): void {
       title: "Сбросить накопленные изменения",
       description:
         "Стирает локальные базы снимков и журнал событий области (или всех областей), после чего " +
-        "следующий hse_changes создаёт базу заново. Меняет только локальный файл. Требует confirm: true.",
+        "следующий hse_changes создаёт базу заново. Полный сброс (без scope) удаляет и копии " +
+        "повреждённого файла (state.json.corrupt-*) и оставшиеся временные файлы. Меняет только " +
+        "локальные файлы. Требует confirm: true.",
       inputSchema: {
         scope: SCOPE.optional().describe("Область; без неё — все."),
         confirm: z.boolean().describe("Должно быть true: подтверждение стирания."),

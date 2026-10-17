@@ -6,7 +6,15 @@ import * as lms from "../lms/client.js";
 import type { CourseOverview } from "../lms/client.js";
 import { diffSource } from "./diff.js";
 import { gradesExtractor, singleExtractors, type ExtractContext, type SourceExtractor } from "./extractors.js";
-import { defaultStateDir, loadState, pruneGradeBaselines, pruneJournal, saveState, withStateLock } from "./store.js";
+import {
+  defaultStateDir,
+  loadState,
+  pruneGradeBaselines,
+  pruneJournal,
+  removeLeftoverFiles,
+  saveState,
+  withStateLock,
+} from "./store.js";
 import {
   DEFAULT_SCOPES,
   SCOPES,
@@ -445,8 +453,12 @@ export async function getChanges(opts: ChangesOptions = {}, overrides: Partial<C
   const gathered = await gather(scopes, opts, deps, now, pre.state);
   if (opts.signal?.aborted) return cancelled(gathered, pre.state.baselines);
 
+  // Отличает отказ получения блокировки от исключения внутри цикла коммита: второе — ошибка кода или
+  // данных, а не «блокировка занята», и пробрасывается как есть.
+  let locked = false;
   try {
     return await withStateLock(deps.dir, async (): Promise<ChangesResponse> => {
+      locked = true;
       const load = await loadState(deps.dir);
       warn(load.warning);
       if (load.kind === "newer" || load.kind === "io-error") {
@@ -469,6 +481,7 @@ export async function getChanges(opts: ChangesOptions = {}, overrides: Partial<C
       };
     });
   } catch (err) {
+    if (locked) throw err;
     // Блокировка не получена (другой процесс держит её дольше ожидания): тул не бросает — ответ как
     // при ошибке записи, от базы, прочитанной до сбора.
     warn(lockFailure(err));
@@ -477,11 +490,14 @@ export async function getChanges(opts: ChangesOptions = {}, overrides: Partial<C
   }
 }
 
-/** Стирает базы и события области (или всего). `nextSeq` не сбрасывается; `seen` ставится в `nextSeq − 1`. */
+/**
+ * Стирает базы и события области (или всего). `nextSeq` не сбрасывается; `seen` ставится в `nextSeq − 1`.
+ * Полный сброс (без `scope`) удаляет и копии `state.json.corrupt-*` и оставшиеся `*.tmp`.
+ */
 export async function resetChanges(
   opts: { scope?: Scope; confirm?: boolean },
   overrides: Partial<Pick<ChangesDeps, "dir">> = {}
-): Promise<{ reset: Scope[]; removedBaselines: number; removedEvents: number; persisted: boolean }> {
+): Promise<{ reset: Scope[]; removedBaselines: number; removedEvents: number; removedFiles: number; persisted: boolean }> {
   if (opts.confirm !== true) {
     throw new Error("hse_changes_reset требует confirm: true — будут стёрты накопленные базы и журнал событий");
   }
@@ -512,6 +528,7 @@ export async function resetChanges(
     draft.rev = base.rev + 1;
     const saved = await saveState(dir, draft, load.kind === "ok" ? base.rev : null);
     if (!saved.ok) throw new Error(saved.error);
-    return { reset: targets, removedBaselines, removedEvents: before - draft.journal.length, persisted: true };
+    const removedFiles = opts.scope ? 0 : await removeLeftoverFiles(dir);
+    return { reset: targets, removedBaselines, removedEvents: before - draft.journal.length, removedFiles, persisted: true };
   });
 }
