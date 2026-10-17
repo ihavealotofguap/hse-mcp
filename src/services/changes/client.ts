@@ -59,7 +59,7 @@ const realDeps = (): ChangesDeps => ({
 });
 
 export interface ChangeItem {
-  /** `null` — событие не записано на диск (`persisted: false`). */
+  /** `null` — ответ не записан (`persisted: false`): у событий нет подтверждаемого номера. */
   seq: number | null;
   at: string;
   scope: Scope;
@@ -88,7 +88,10 @@ export interface ChangesResponse {
   scopes: Partial<Record<Scope, ScopeReport>>;
   sources: Record<string, SourceReport>;
   changes: ChangeItem[];
-  /** Значение для `ack` следующего вызова; `null` — подтверждать нечего (в том числе при `since`). */
+  /**
+   * Значение для `ack` следующего вызова; `null` — подтверждать нечего или нельзя: при `since` и при
+   * `persisted: false` (события повторятся в следующем вызове).
+   */
   ackSeq: number | null;
   omitted: number;
   gap: { lostEvents: number };
@@ -413,21 +416,21 @@ export async function getChanges(opts: ChangesOptions = {}, overrides: Partial<C
     warn("вызов отменён до коммита");
     return empty(reports(gathered, scopes, baselines, new Map()));
   };
-  /** Ответ без записи: база, курсор и nextSeq на диске прежние; новые события — без seq. */
+  /**
+   * Ответ без записи: база, курсор и nextSeq на диске прежние. `ackSeq: null` и `seq: null` у всех
+   * событий: `issues` этого ответа не записан, а тот же номер мог быть `ackSeq` записанного ответа с
+   * другими областями — ack по нему подтвердил бы чужие события. Цена — один повтор событий.
+   */
   const unsaved = (base: State, c: Computed): ChangesResponse => {
-    // `ackSeq` — из прежнего состояния; если такого `ackSeq` нет в `issues`, следующий ack будет
-    // проигнорирован — события повторятся, но не потеряются.
     const before = select(base, scopes, sinceMs);
-    const pending: ChangeItem[] = c.fresh
-      .filter((e) => scopes.includes(e.scope))
-      .map((e) => ({ ...toItem(e), seq: null }));
+    const pending = c.fresh.filter((e) => scopes.includes(e.scope)).map(toItem);
     // Потолок ответа действует и здесь: остаток считается в `omitted`.
-    const merged = [...before.items, ...pending];
+    const merged = [...before.items, ...pending].map((it): ChangeItem => ({ ...it, seq: null }));
     const capped = merged.slice(0, RESPONSE_EVENT_LIMIT);
     const rep = reports(c.committed, scopes, c.draft.baselines, c.diffStatus);
     return {
       takenAt, scopes: rep.scopes, sources: rep.sources, changes: capped,
-      ackSeq: before.ackSeq, omitted: before.omitted + (merged.length - capped.length),
+      ackSeq: null, omitted: before.omitted + (merged.length - capped.length),
       gap: { lostEvents: before.lostEvents }, persisted: false, warnings,
     };
   };
