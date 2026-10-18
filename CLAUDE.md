@@ -130,7 +130,8 @@ MCP-сервер на `@modelcontextprotocol/sdk` (stdio-транспорт). `s
 `src/dom-utils.ts` — переиспользуемые Playwright-утилиты для сервисов LMS/ЕЛК: `extractTable`
 (HTML-таблица thead/tbody → массив объектов), `extractGradeTable` (журнал оценок Moodle
 `table.user-grade`: имя из `th.column-itemname`, колонки по классам `column-*`; `extractTable` для
-него непригоден — сдвигает ключи, дефект `lms_get_grades` чинится отдельно) и `dumpPage`
+него непригоден — сдвигает ключи; на нём построен `lms_get_grades` через `lms.grade-items`,
+нераспознанная таблица курса даёт ошибку `unsupported grade table`) и `dumpPage`
 (универсальный снимок страницы: текст + ссылки — для порталов с неизвестной вёрсткой).
 
 ## Добавление нового сервиса

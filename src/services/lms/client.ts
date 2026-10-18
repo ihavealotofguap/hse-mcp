@@ -1,7 +1,14 @@
 import type { Page } from "playwright";
 import { withPage } from "../../auth/browser-session.js";
 import { TTL } from "../../cache.js";
-import { dumpPage, extractGradeTable, extractTable, type GradeTable, type PageDump } from "../../dom-utils.js";
+import {
+  dumpPage,
+  extractGradeTable,
+  extractTable,
+  type GradeItemRow,
+  type GradeTable,
+  type PageDump,
+} from "../../dom-utils.js";
 import { formatLocalDate } from "../../date-utils.js";
 import { defineResource, type ResourceCallOptions } from "../../resource.js";
 import { resolveScopedUrl } from "../../url-utils.js";
@@ -459,26 +466,6 @@ export function listAssignments(courseId: number): Promise<Array<Record<string, 
   return lmsAssignments(courseId);
 }
 
-const lmsGrades = defineResource<number, Array<Record<string, string>>>({
-  name: "lms.grades",
-  ttl: TTL.medium,
-  key: (courseId) => String(courseId),
-  load: (courseId, ctx) =>
-    withPage(
-      `${BASE_URL}/grade/report/user/index.php?id=${courseId}`,
-      async (page) => {
-        const rows = await extractTable(page, "table.user-grade");
-        if (rows.length > 0) return rows;
-        return extractTable(page, "table.generaltable");
-      },
-      { signal: ctx.signal }
-    ),
-});
-
-export function getGrades(courseId: number): Promise<Array<Record<string, string>>> {
-  return lmsGrades(courseId);
-}
-
 const lmsGradeItems = defineResource<number, GradeTable>({
   name: "lms.grade-items",
   ttl: TTL.medium,
@@ -493,11 +480,28 @@ const lmsGradeItems = defineResource<number, GradeTable>({
 
 /**
  * Структурированный журнал оценок курса (имя элемента, путь категорий, оценка) — для снимков
- * `hse_changes`. Отдельно от `getGrades`: тот отдаёт сырые строки `extractTable` с ключами,
- * сдвинутыми относительно заголовков, и в №3 не меняется (обратная совместимость).
+ * `hse_changes` и тула `lms_get_grades` (через `getGrades`). Возвращает таблицу как есть, включая
+ * `found`/`recognized`: что делать с нераспознанной вёрсткой, решает вызывающий.
  */
 export function listGradeItems(courseId: number, opts?: ResourceCallOptions): Promise<GradeTable> {
   return lmsGradeItems(courseId, opts);
+}
+
+export interface GradeReport {
+  items: GradeItemRow[];
+}
+
+/** Таблица оценок → ответ тула; нераспознанная вёрстка — ошибка, а не пустой список. */
+export function toGradeReport(courseId: number, table: GradeTable): GradeReport {
+  if (!table.found || !table.recognized) {
+    throw new Error(`Таблица оценок курса ${courseId} не распознана (unsupported grade table)`);
+  }
+  return { items: table.rows };
+}
+
+/** Оценки студента по курсу: элементы журнала с названием, путём категорий и оценкой. */
+export async function getGrades(courseId: number, opts?: ResourceCallOptions): Promise<GradeReport> {
+  return toGradeReport(courseId, await listGradeItems(courseId, opts));
 }
 
 /** Открыть произвольную страницу edu.hse.ru (относительный путь) — для случаев вне готовых тулов. */

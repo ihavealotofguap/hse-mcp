@@ -31,7 +31,7 @@ claude mcp add hsemcp -- node C:/Users/alexk/hsemcp/dist/index.js
 | SmartLMS | `lms_list_courses` | Список курсов |
 | SmartLMS | `lms_get_course_materials` | Элементы курса (файлы, задания, тесты и т.п.) |
 | SmartLMS | `lms_list_assignments` | Задания курса со сроками |
-| SmartLMS | `lms_get_grades` | Оценки по курсу |
+| SmartLMS | `lms_get_grades` | Оценки по курсу: строки журнала с названием, путём категорий и оценкой; ошибка, если вёрстка журнала курса не распознана |
 | SmartLMS | `lms_open_page` | Открыть произвольную страницу edu.hse.ru |
 | ЕЛК | `elk_get_schedule` | Расписание через API ЕЛК — работает из любой сети |
 | ЕЛК | `elk_get_user_info` | Структурированные данные аккаунта (ФИО, email, роли) |
