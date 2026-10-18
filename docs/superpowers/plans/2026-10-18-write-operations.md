@@ -506,7 +506,35 @@ export const deleteAdapter: WriteAdapter<DeleteArgs, DeleteObserved>;
 - [ ] **Step 4: `README.md`, раздел «Тулы записи — что нужно знать»:** сухой прогон по умолчанию; `confirm` и `previewToken` обязательны; сохранение у части заданий **сразу отправляет** работу, у справки заказ **необратим**; не добавлять тулы записи в автоматически разрешённые в клиенте (защита опирается на запрос разрешения на каждый вызов); файлы только из папки «исходящих»; исход `unknown` — сверить результат вручную, не повторять.
 - [ ] **Step 5: `README.md`, раздел «Границы применимости»:** селекторы и тексты Moodle/ЕЛК проверены на одном аккаунте и одном семестре; онлайн-текст не поддерживается; заданий с отдельным шагом «Отправить на оценку» и с `submissiondraft` не наблюдалось (тулы в таких случаях отказывают, а не угадывают); заказ справки проверен на форме одной справки; правила ВШЭ об автоматизированном доступе к SmartLMS/ЕЛК **не проверялись**, пользователь отвечает за их соблюдение сам.
 - [ ] **Step 6: `CLAUDE.md`:** строку «Тестов и линтера в проекте нет» заменить на «Тестового фреймворка и линтера нет; чистая логика проверяется скриптами `scripts/verify/*.mjs` (`node:assert`, без зависимостей)»; убрать личный путь из команды подключения.
-- [ ] **Step 7:** `npm run build` — код 0; все `scripts/verify/*.mjs` — `OK`; приложить вывод. **Commit** (`Docs: prepare project for use by another student`).
+- [ ] **Step 7: Убрать корпоративную почту из документов** (решение владельца: «почту исключить»). В `docs/` убрать упоминания корпоративной почты ВШЭ (IMAP/SMTP, Yandex 360, `mail_*`, `HSE_MAIL_*`) — примечания «от 2026-10-18» в шапках старых спек и планов, строки таблиц решений и пункты про неё; оставить по одной нейтральной фразе об исключении в `CLAUDE.md` и `docs/requirements.md`. Внутренняя почта SmartLMS (`local_mail`, `lms_list_messages`, `lms_get_message`) — другая система, она **остаётся**. Проверка: `grep -rEI "IMAP|SMTP|Yandex|HSE_MAIL|mail_(list|read|search|send)" docs src` ничего не выводит, кроме фраз об исключении; приложить вывод.
+- [ ] **Step 8:** `npm run build` — код 0; все `scripts/verify/*.mjs` — `OK`; приложить вывод. **Commit** (`Docs: prepare project for use by another student`).
+
+---
+
+### Task 20: Хранение учётных данных (выполняется ПЕРЕД Task 18; ворота: спека `2026-10-18-credential-storage-design.md` одобрена владельцем)
+
+**Files:**
+- Create: `src/credentials.ts`, `src/fs-secure.ts`, `src/cli/credentials.ts`, `scripts/verify/credentials.mjs`, `SECURITY.md`
+- Modify: `src/config.ts`, `package.json`, `.env.example`, `src/auth/browser-session.ts` (`saveStorageState`), `src/services/writes/token.ts` (`loadOrCreateKey`), `README.md`
+
+**Interfaces:**
+- Produces (`src/credentials.ts`):
+  `type CredentialSource = "env" | "keychain" | "dotenv" | "none"`;
+  `interface KeyStore { getPassword(account: string): string | null; setPassword(account: string, password: string): void; deletePassword(account: string): boolean }`;
+  `const KEYCHAIN_SERVICE = "hsemcp"`;
+  `loadKeyStore(): Promise<KeyStore | null>` (динамический `import("@napi-rs/keyring")`, `new Entry(KEYCHAIN_SERVICE, account)` внутри; на Linux `{ linux: { store: "secret-service" } }`; любая ошибка → `null`);
+  `lookupPassword(args: { env: NodeJS.ProcessEnv; dotenv: Record<string, string>; account: string; store: KeyStore | null }): { password: string | null; source: CredentialSource }` — чистая функция, приоритет env → `store` → `dotenv`;
+  `dotenvPermissionWarning(file: string, platform?: NodeJS.Platform): string | null` — только POSIX, `mode & 0o077`.
+- Produces (`src/fs-secure.ts`): `restrictFile(path: string): void` — POSIX `chmod 0o600`; `win32` — `execFileSync("icacls", [path, "/inheritance:r", "/grant:r", \`${USERNAME}:(F)\`])` в `try/catch`, ошибки глотаются без вывода путей.
+- `config.ts`: `hsePassword` остаётся **синхронным геттером**; хранилище загружается один раз через top-level `await loadKeyStore()` при импорте модуля; `.env` разбирается отдельно (`dotenv.parse`), в `process.env` по-прежнему попадает как раньше; при `source === "dotenv"` один раз пишется предупреждение без значения (текст — в спеке §2).
+- `src/cli/credentials.ts`: подкоманды `set`, `clear`, `status`; пароль читается без эха; печатает только источник; `package.json`: `"credentials:set": "node dist/cli/credentials.js set"` и аналогично `clear`, `status`; `optionalDependencies: { "@napi-rs/keyring": "^2.1.1" }`.
+
+- [ ] **Step 1: Написать `scripts/verify/credentials.mjs`** (постоянный, без сети и без реального хранилища): `lookupPassword` — env побеждает хранилище и `.env`; хранилище побеждает `.env`; `store: null` → `.env`; нигде нет → `{ password: null, source: "none" }`; поле `source` совпадает с источником; `dotenvPermissionWarning(file, "linux")` на файле с режимом `0o644` → строка без пути-секрета и без значений, на `0o600` → `null`, на `"win32"` → `null`; `restrictFile` на временном файле при POSIX → режим `0o600` (на Windows — печать `SKIP`); вывод `status`-функции CLI и предупреждения не содержат подстроки подставного пароля (`"s3cret-test-value"`) и подставного email.
+- [ ] **Step 2:** `npm run build && node scripts/verify/credentials.mjs` до реализации — провал.
+- [ ] **Step 3: Реализовать** модули; подключить `restrictFile` после записи `hse-session.json` и ключа `storage/writes/key`; обновить `.env.example` (комментарий: «безопаснее хранить пароль в системном хранилище: npm run credentials:set; `HSE_PASSWORD` необязателен») и создать `SECURITY.md` по спеке §2.
+- [ ] **Step 4:** сборка и скрипт — все `OK`; `npm ci` без `@napi-rs/keyring` (имитация: `npm ci --omit=optional`) — проект собирается и `lookupPassword` откатывается на `.env`.
+- [ ] **Step 5: README** — раздел «Учётные данные»: порядок источников, команды `credentials:*`, предупреждение про `.env`, `icacls` для Windows, оговорка про Linux/Secret Service, что делать при утечке. **Commit** (`Credentials: OS keychain support, restricted file permissions, SECURITY.md`).
+- [ ] **Step 6: живая проверка — только с владельцем** (спека §4): `credentials:set`, вход без `HSE_PASSWORD` в `.env`, `credentials:status` → `keychain`, `credentials:clear`; результаты — в спеку.
 
 ---
 
