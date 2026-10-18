@@ -30,7 +30,7 @@
 
 ## 4. Проверка
 
-Постоянный скрипт `scripts/verify/credentials.mjs` (без сети и без реального хранилища, подставной `KeyStore`): приоритет env → хранилище → `.env`; хранилище `null` → откат на `.env`; источник сообщается верно; предупреждение и вывод `status` не содержат значения пароля и email; `restrictFile` на POSIX даёт `0o600` (на Windows — `SKIP`). Живая проверка — только с владельцем и с его разрешением: `credentials:set` → вход через `hsemcp` без `HSE_PASSWORD` в `.env` → `credentials:status` показывает `keychain` → `credentials:clear` (запись и удаление затрагивают Credential Manager владельца).
+Постоянный тест `test/credentials.test.mjs` (`node:test`, `npm test`; без сети и без реального хранилища, подставной `KeyStore`): приоритет env → хранилище → `.env`; хранилище `null` → откат на `.env`; источник сообщается верно; предупреждение и вывод `status` не содержат значения пароля и email; `restrictFile` на POSIX даёт `0o600` (на Windows — `t.skip()`). Живая проверка — только с владельцем и с его разрешением: `credentials:set` → вход через `hsemcp` без `HSE_PASSWORD` в `.env` → `credentials:status` показывает `keychain` → `credentials:clear` (запись и удаление затрагивают Credential Manager владельца).
 
 ## 5. Допущения (не проверено)
 

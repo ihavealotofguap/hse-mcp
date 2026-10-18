@@ -12,9 +12,9 @@
 
 ## Global Constraints
 
-- **Тестового фреймворка и линтера в проекте нет — не добавлять** (ни зависимостей, ни раннера, ни конфигов). Проверки двух видов: **постоянные скрипты чистой логики** (Tasks 1, 3, 4, 5, 6, 7, 11) — обычные `.mjs` на `node:assert` в `scripts/verify/`, коммитятся с задачей, чтобы их мог повторить любой пользователь проекта; **одноразовые скрипты** с Chromium, заглушками страниц и живыми данными (остальные задачи) — в каталоге scratchpad сессии, не коммитятся. Плюс `npm run build` (ожидание: код выхода 0, ошибок TS нет).
+- **Линтера в проекте нет; тесты разрешены** (решение владельца, смягчено 2026-10-18): только встроенный раннер `node:test` + `node:assert/strict`, **без новых зависимостей и конфигов**. Проверки двух видов: **постоянные тесты чистой логики** (Tasks 1, 3, 4, 5, 6, 7, 10, 11, 20) — файлы `test/<имя>.test.mjs`, коммитятся с задачей и запускаются `npm test` (= `npm run build && node --test "test/*.test.mjs"`); **одноразовые скрипты** `verify-N.mjs` с Chromium, заглушками страниц и живыми данными (остальные задачи) — в каталоге scratchpad сессии, не коммитятся. Красный → зелёный обязателен для чистой логики: тест пишется и падает **до** реализации. Плюс `npm run build` (ожидание: код выхода 0, ошибок TS нет).
 - Комментарии, сообщения ошибок и описания тулов — по-русски, в стиле соседнего кода; импорты с суффиксом `.js`; тело тула — `runTool((signal) => …, extra.signal)` из `src/mcp-utils.ts`.
-- Учётные данные только из `.env` проекта в `process.env` (у владельца — `C:\Users\alexk\hsemcp\.env`; одноразовые скрипты с живыми данными перед импортом `dist/` вызывают `dotenv.config({ path: <путь к .env> })`); постоянные скрипты `scripts/verify/` **не читают учётные данные, не ходят в сеть и не содержат личных путей**; в вывод, журнал, stderr, коммиты — ничего персонального: ни текста и имён файлов, ни ФИО, email, токенов, cookie, URL с query, id курсов/заданий/заявок.
+- Учётные данные только из `.env` проекта в `process.env` (у владельца — `C:\Users\alexk\hsemcp\.env`; одноразовые скрипты с живыми данными перед импортом `dist/` вызывают `dotenv.config({ path: <путь к .env> })`); постоянные тесты `test/` **не читают учётные данные, не ходят в сеть и не содержат личных путей**; в вывод, журнал, stderr, коммиты — ничего персонального: ни текста и имён файлов, ни ФИО, email, токенов, cookie, URL с query, id курсов/заданий/заявок.
 - **Проект будет передан другому пользователю (одногруппнику):** ничего, что работает только у владельца — личных путей, названий его курсов, его идентификаторов — не коммитить; код при неожиданном состоянии страницы **отказывает**, а не угадывает; документы описывают установку с нуля (Task 18).
 - **Живая запись — только в присутствии владельца и с его явным разрешением на каждую операцию; сначала сухой прогон.** Клиент Claude Code блокирует клики по кнопкам записи как «реальные транзакции» — это ожидаемо, обходить нельзя: остановиться и спросить владельца.
 - `previewToken = "<issuedAtSec>.<hmac>"`, HMAC-SHA256 с ключом 32 байта из `storage/writes/key`; срок жизни 15 минут; `tokenId` и `targetId` — первые 12 hex-символов HMAC.
@@ -25,6 +25,8 @@
 - Онлайн-текст в v1 не поддерживается (параметр `text` → отказ до записи).
 - Аннотации тулов записи: `{ readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true }`.
 - Одноимённый файл в файловом менеджере Moodle — только «Перезаписать», «Переименовать» не нажимается никогда.
+- **Тулы записи — opt-in (решение владельца 2026-10-18):** регистрируются в `tools.ts` только при `HSE_ENABLE_WRITES=true` (геттер `config.writesEnabled`: значение ровно `true`, без учёта регистра и пробелов; всё остальное, включая отсутствие, — выключено). Без флага тулы записи в `tools/list` нет, а читающие тулы работают как раньше. Флаг читается при старте процесса.
+- **Публичный репозиторий (решение владельца 2026-10-18):** лицензия MIT (`LICENSE`, `"license": "MIT"` в `package.json`, держатель — «hsemcp contributors», без личных имён); `docs/recon.md` — **только локально**, в репозиторий и историю не попадает (`.gitignore`, `git rm --cached`, исключение из истории в Task 19); в README обязателен дисклеймер (Task 18). Предупреждения о нагрузке на порталы ВШЭ в README **не добавлять** (прямое указание владельца).
 - Коммиты: ветка `worktree-4`, сообщение на английском, в конце `Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>`.
 
 ## Review Focus
@@ -55,13 +57,15 @@
 | `src/url-utils.ts`, `lms/client.ts`, `elk/client.ts` | усиление `*_open_page` |
 | `src/config.ts`, `.env.example` | `outboxDir` / `HSE_OUTBOX_DIR` |
 | `src/services/elk/certificate.ts`, `elk/tools.ts` | `elk_order_certificate` (фаза C, за воротами) |
-| `scripts/verify/*.mjs` (новые) | постоянные проверки чистой логики: `resource`, `fs-lock`, `token`, `journal`, `outbox`, `runner`, `open-page` |
+| `test/*.test.mjs` (новые), `package.json` (`"test"`) | постоянные тесты чистой логики (`node:test`): `resource`, `fs-lock`, `token`, `journal`, `outbox`, `runner`, `open-page`, `tools-gating`, `credentials` |
+| `src/config.ts` (`writesEnabled`), `.env.example` | opt-in `HSE_ENABLE_WRITES`: без него тулы записи не регистрируются |
+| `LICENSE`, `.gitignore` | лицензия MIT; `docs/recon.md` исключён из репозитория (остаётся только локально) |
 
 ## Среда для проверок
 
-Скрипты `verify-<N>.mjs` в тексте задач — это либо **постоянные** скрипты в `scripts/verify/`, либо одноразовые в каталоге scratchpad сессии. Соответствие постоянных: `verify-1` → `scripts/verify/resource.mjs`, `verify-3` → `fs-lock.mjs`, `verify-4` → `token.mjs`, `verify-5` → `journal.mjs`, `verify-6` → `outbox.mjs`, `verify-7` → `runner.mjs`, `verify-11` → `open-page.mjs`; их файл добавляется в коммит Step 5 своей задачи (`git add scripts/verify/<имя>.mjs`). Остальные `verify-N` (2, 8, 9, 10, 14, 15, 16) — одноразовые.
+Файлы `verify-<N>.mjs` в тексте задач — это либо **постоянные тесты** в `test/` (формат `node:test`), либо одноразовые скрипты в каталоге scratchpad сессии. Соответствие постоянных: `verify-1` → `test/resource.test.mjs`, `verify-3` → `fs-lock.test.mjs`, `verify-4` → `token.test.mjs`, `verify-5` → `journal.test.mjs`, `verify-6` → `outbox.test.mjs`, `verify-7` → `runner.test.mjs`, `verify-10` → `tools-gating.test.mjs`, `verify-11` → `open-page.test.mjs`; файл добавляется в коммит Step 5 своей задачи (`git add test/<имя>.test.mjs`). Остальные `verify-N` (2, 8, 9, 14, 15, 16) — одноразовые.
 
-Оба вида скриптов импортируют собранные модули без личных путей: `const m = await import(new URL("../../dist/resource.js", import.meta.url).href)` (для постоянных; одноразовые, лежащие вне репозитория, берут корень репозитория из аргумента или `process.env.HSEMCP_ROOT`), печатают `OK <что проверено>` на каждое утверждение, при первом провале — `throw`. Запуск: `npm run build && node scripts/verify/<имя>.mjs` (или путь к одноразовому), ожидание — все `OK` и код выхода 0. Временные каталоги (`os.tmpdir()`) скрипты создают и убирают сами.
+Оба вида импортируют собранные модули без личных путей: `const m = await import(new URL("../dist/resource.js", import.meta.url).href)` (для постоянных; одноразовые, лежащие вне репозитория, берут корень репозитория из аргумента или `process.env.HSEMCP_ROOT`). Постоянные оформляются как `test("…", () => { assert… })` (`import test from "node:test"`, `import assert from "node:assert/strict"`); одноразовые печатают `OK <что проверено>` и при первом провале бросают. Запуск: `npm test` или `npm run build && node --test test/<имя>.test.mjs`, ожидание — `fail 0` и код выхода 0; для одноразового — `node <путь>`, все `OK`. Тесты, которым нужна `HSE_WRITES_DIR`, задают её до импорта модуля. Временные каталоги (`os.tmpdir()`) создают и убирают сами.
 
 ## Процесс исполнения (навыки superpowers)
 
@@ -78,7 +82,7 @@
 | `finishing-a-development-branch` | после Task 13 (и Task 16, если фаза C выполнена) — Task 17 | сборка чистая, итоговое ревью пройдено → предложить владельцу варианты завершения ветки; слияние и push — только по его слову |
 | `dispatching-parallel-agents` | только для **читающих** независимых работ | например, параллельное ревью разных файлов; не для реализаторов (общий `dist/`, общий worktree) |
 | `executing-plans` | не используется | альтернатива `subagent-driven-development`, владелец выбрал последнюю |
-| `test-driven-development` | **применяется в облегчённом виде** | тестового фреймворка и линтера в проекте нет (решение владельца, `CLAUDE.md`), поэтому без раннера и зависимостей; дисциплину «сначала проверка, затем код» сохраняют шаги 1–2 каждой задачи — скрипт пишется и падает **до** реализации, а скрипты чистой логики остаются в `scripts/verify/` как повторяемая регрессионная проверка для следующего пользователя |
+| `test-driven-development` | **применяется для чистой логики** | правило смягчено владельцем 2026-10-18: тесты разрешены, раннер — встроенный `node:test` (зависимостей нет), линтера по-прежнему нет. Для чистой логики (Tasks 1, 3–7, 10, 11, 20) красный → зелёный обязателен: тест пишется в `test/<имя>.test.mjs` и падает **до** реализации, затем остаётся в репозитории как регрессионный. Браузерные части (Tasks 2, 8, 9, 14, 15) проверяются одноразовыми скриптами на заглушках страниц и живой проверкой с владельцем — их TDD-цикл не навязывается |
 | `brainstorming`, `writing-plans` | уже выполнены | спека одобрена 2026-10-18; при росте объёма — остановиться и вернуться к владельцу |
 
 Остальные навыки списка (`writing-skills`, `skill-creator`, `build-mcp-*`) к этой работе не относятся.
@@ -98,8 +102,8 @@
 ### Task 1: `resource.ts` — режим «не кэшировать», `commit()`, `invalidates` до загрузки
 
 **Files:**
-- Create: `src/commit.ts`
-- Modify: `src/resource.ts`
+- Create: `src/commit.ts`, `test/resource.test.mjs`
+- Modify: `src/resource.ts`, `package.json` (скрипт `"test": "npm run build && node --test \"test/*.test.mjs\""`; других изменений нет)
 
 **Interfaces:**
 - Produces:
@@ -113,17 +117,17 @@
 3. `ctx.commit(deadlineMs?)`: гасит исходный дедлайн загрузки и взводит новый (`deadlineMs ?? COMMIT_DEADLINE_MS` от момента вызова; повторный вызов взводит заново); по его истечении вызов отклоняется `${def.name} не уложился в N с после точки невозврата` и `ctx.signal` срабатывает. После `commit()` `opts.signal` вызывающего (`detach`) игнорируется — вызов дожидается конца загрузки.
 4. `invalidates` для `cache: false` выполняется в `finally` **только если был вызван `commit()`** (при любом исходе загрузки).
 
-- [ ] **Step 1: Написать `scripts/verify/resource.mjs`** (постоянный; утверждения):
+- [ ] **Step 1: Написать `test/resource.test.mjs`** (постоянный, `node:test`; утверждения):
   `defineResource({ name:"t.a", ttl:1000, key:()=>"k", load, invalidates:["no.such"] })` → вызов реджектится, `load.calls === 0`;
   два параллельных вызова `cache:false`-ресурса → `load.calls === 2`; два последовательных с `maxAgeMs` → `load.calls === 4` (не кэшируется);
   `cache:false` + `invalidates:["t.read"]`: загрузчик вызывает `ctx.commit()` и бросает → `invalidateResource("t.read")` сработал (шпион на `listResources`-ресурсе: следующий вызов `t.read` снова вызывает `load`); загрузчик бросает **до** `commit()` → `t.read` остался в кэше;
   `commit(50)` после «долгой» работы 200 мс → отклонение с текстом «после точки невозврата»; без `commit()` с `deadlineMs: 50` и работой 200 мс → отклонение «не уложился»;
   `AbortController.abort()` вызывающего **после** `commit()` → вызов всё равно резолвится значением загрузчика; **до** `commit()` → реджектится причиной отмены;
   прежний кэшируемый ресурс: два параллельных вызова → `load.calls === 1`, результат заморожен (`Object.isFrozen`).
-- [ ] **Step 2:** `npm run build && node scripts/verify/resource.mjs`. Ожидание до реализации: провал на первом утверждении.
+- [ ] **Step 2:** `npm run build && node --test test/resource.test.mjs`. Ожидание до реализации: красный (тест падает на первом утверждении).
 - [ ] **Step 3: Реализовать** в `src/resource.ts`: общий объект состояния вызова `{ committed: boolean }`; `loadWithDeadline` принимает `ctx` с `commit` и управляет таймером; `detach(promise, signal, state)` игнорирует abort при `state.committed`; разрешение имён — функция `resolveInvalidates(names): void` (бросает), вызывается в начале замыкания вызова.
-- [ ] **Step 4:** `npm run build && node scripts/verify/resource.mjs`. Ожидание: все `OK`.
-- [ ] **Step 5: Commit** — `git add src/commit.ts src/resource.ts scripts/verify/resource.mjs && git commit` (`Resources: cache:false mode, commit() point of no return, resolve invalidates before load`).
+- [ ] **Step 4:** `npm run build && node --test test/resource.test.mjs`. Ожидание: `fail 0`.
+- [ ] **Step 5: Commit** — `git add src/commit.ts src/resource.ts test/resource.test.mjs && git commit` (`Resources: cache:false mode, commit() point of no return, resolve invalidates before load`).
 
 ---
 
@@ -148,7 +152,7 @@
   `acquirePageSlot` из `limiter.js`: `release.extendLease` существует и `release()` идемпотентен.
 - [ ] **Step 2:** `npm run build && node …/verify-2.mjs` до реализации — провал (`commit` не функция).
 - [ ] **Step 3: Реализовать** `PageSlotRelease` в `limiter.ts` (хранить `lease` в замыкании, `extendLease` пересоздаёт таймер) и `commit` в `withPage` (таймер `commitTimer`, очистка в `finally`).
-- [ ] **Step 4:** сборка и скрипт — все `OK`.
+- [ ] **Step 4:** `npm test` — `fail 0`.
 - [ ] **Step 5: Commit** (`withPage: commit() point of no return, lease extension`).
 
 ---
@@ -163,11 +167,11 @@
 - Produces: `sleep(ms)`, `errCode(err)`, `isBusy(code)`, `retryIo<T>(op: () => T): Promise<T>`, `withFileLock<T>(lockPath: string, fn: () => Promise<T>, opts?: { waitMs?: number }): Promise<T>` (внутрипроцессный мьютекс **на путь** + lock-файл `wx`, устаревшая блокировка > 30 с снимается, чужая не снимается — логика из `withFileLock`/`withStateLock`), `writeFileAtomic(file: string, text: string): Promise<void>` (tmp `<file>.<pid>.tmp` + `rename` с `retryIo`, режим `0o600`, `tmp` удаляется при ошибке).
 - `changes/store.ts`: `withStateLock(dir, fn, opts)` теперь вызывает `withFileLock(path.join(dir, "state.json.lock"), fn, opts)`; его экспортируемые сигнатуры и поведение не меняются. `saveState` остаётся как есть (использует `retryIo`/`errCode`/`isBusy` из нового модуля).
 
-- [ ] **Step 1: Написать `scripts/verify/fs-lock.mjs`** (постоянный): в `os.tmpdir()`: 20 параллельных `withFileLock(lock, …)` инкрементируют счётчик-файл (чтение → +1 → `writeFileAtomic`) → итог `20`; устаревшая блокировка (создать lock-файл и `fs.utimesSync` на 31 с назад) → вызов проходит; после `writeFileAtomic` рядом нет `*.tmp`; через `changes/store.js`: `withStateLock(dir, …)` ×10 с `loadState`/`saveState` не ломает `state.json` (повторно читается, `rev` не регрессирует).
-- [ ] **Step 2:** запуск до реализации — провал (модуль не найден).
+- [ ] **Step 1: Написать `test/fs-lock.test.mjs`** (постоянный): в `os.tmpdir()`: 20 параллельных `withFileLock(lock, …)` инкрементируют счётчик-файл (чтение → +1 → `writeFileAtomic`) → итог `20`; устаревшая блокировка (создать lock-файл и `fs.utimesSync` на 31 с назад) → вызов проходит; после `writeFileAtomic` рядом нет `*.tmp`; через `changes/store.js`: `withStateLock(dir, …)` ×10 с `loadState`/`saveState` не ломает `state.json` (повторно читается, `rev` не регрессирует).
+- [ ] **Step 2:** запуск до реализации — красный (модуль не найден).
 - [ ] **Step 3: Реализовать** вынос; поведение `store.ts` не менять. Если вынос ломает хоть одно утверждение про `changes` — вернуть `store.ts` к исходному, скопировать код в `fs-lock.ts` и записать долг в `CLAUDE.md` (спека §4.2).
-- [ ] **Step 4:** сборка и скрипт — все `OK`.
-- [ ] **Step 5: Commit** (`Extract file lock and atomic write into src/fs-lock.ts`), включая `scripts/verify/fs-lock.mjs`.
+- [ ] **Step 4:** `npm test` — `fail 0`.
+- [ ] **Step 5: Commit** (`Extract file lock and atomic write into src/fs-lock.ts`), включая `test/fs-lock.test.mjs`.
 
 ---
 
@@ -193,7 +197,7 @@
   `targetIdOf(key: Buffer, op: string, target: string): string`.
   Каноническая форма: JSON с отсортированными ключами; `files` сортируются по `name`.
 
-- [ ] **Step 1: Написать `scripts/verify/token.mjs`** (постоянный):
+- [ ] **Step 1: Написать `test/token.test.mjs`** (постоянный):
   `verify(sign(p))` → `ok`, `tokenId` из 12 hex и `=== tokenIdOf(token)`;
   смена любого из `op`, `target`, `mode`, имени/sha256 файла, `state` → `mismatch`;
   токен для `op: "lms_submit_assignment"` с payload `op: "lms_delete_submission"` → `mismatch`;
@@ -201,10 +205,10 @@
   два `signPreview` с разным `now` дают разные токены;
   `loadOrCreateKey(tmp)` создаёт файл из 64 hex-символов, второй вызов возвращает равный `Buffer`;
   `targetIdOf` детерминирован, 12 hex, различается по `op` и по `target`.
-- [ ] **Step 2:** запуск до реализации — провал.
+- [ ] **Step 2:** запуск до реализации — красный.
 - [ ] **Step 3: Реализовать** `types.ts` и `token.ts` (сравнение хеша — `crypto.timingSafeEqual`).
-- [ ] **Step 4:** сборка и скрипт — все `OK`.
-- [ ] **Step 5: Commit** (`Writes: shared types and HMAC previewToken`), включая `scripts/verify/token.mjs`.
+- [ ] **Step 4:** `npm test` — `fail 0`.
+- [ ] **Step 5: Commit** (`Writes: shared types and HMAC previewToken`), включая `test/token.test.mjs`.
 
 ---
 
@@ -222,11 +226,11 @@
   `latestByToken(tokenId: string, dir?: string): Promise<JournalEntry | undefined>`;
   `findUnresolvedByTarget(targetId: string, dir?: string, exceptTokenId?: string): Promise<JournalEntry[]>` (по каждому `tokenId` берётся последняя запись; «не разрешено» = `stage` не `verified` либо `outcome === "unknown"`).
 
-- [ ] **Step 1: Написать `scripts/verify/journal.mjs`** (постоянный; каталог — временный, через `HSE_WRITES_DIR`): запись `sending` затем `verified/confirmed` одного токена → `latestByToken` вернул `verified`; `sending` без исхода и `verified/unknown` → в `findUnresolvedByTarget`, `confirmed` — нет, `exceptTokenId` исключает; 201 запись → в файле 200, старейшая срезана; запись с `at` 91 день назад срезается; запись, в которую передали лишнее поле (`text`, `name`), в файле **не** содержит его (ключи JSON ⊆ `at, op, tokenId, targetId, stage, outcome, durationMs, errorClass`); 10 параллельных `recordJournal` → 10 записей, файл валиден; повреждённый JSON → не падает, начинается пустой журнал (старый файл переименован `journal.json.corrupt-<ts>`).
-- [ ] **Step 2:** запуск до реализации — провал.
+- [ ] **Step 1: Написать `test/journal.test.mjs`** (постоянный, `node:test`; каталог — временный, через `HSE_WRITES_DIR`): запись `sending` затем `verified/confirmed` одного токена → `latestByToken` вернул `verified`; `sending` без исхода и `verified/unknown` → в `findUnresolvedByTarget`, `confirmed` — нет, `exceptTokenId` исключает; 201 запись → в файле 200, старейшая срезана; запись с `at` 91 день назад срезается; запись, в которую передали лишнее поле (`text`, `name`), в файле **не** содержит его (ключи JSON ⊆ `at, op, tokenId, targetId, stage, outcome, durationMs, errorClass`); 10 параллельных `recordJournal` → 10 записей, файл валиден; повреждённый JSON → не падает, начинается пустой журнал (старый файл переименован `journal.json.corrupt-<ts>`).
+- [ ] **Step 2:** запуск до реализации — красный.
 - [ ] **Step 3: Реализовать** `journal.ts`.
-- [ ] **Step 4:** сборка и скрипт — все `OK`.
-- [ ] **Step 5: Commit** (`Writes: journal`), включая `scripts/verify/journal.mjs`.
+- [ ] **Step 4:** `npm test` — `fail 0`.
+- [ ] **Step 5: Commit** (`Writes: journal`), включая `test/journal.test.mjs`.
 
 ---
 
@@ -243,11 +247,11 @@
   `resolveOutboxFiles(names: string[], opts?: { dir?: string; maxFiles?: number; maxBytes?: number }): Promise<OutboxFile[]>` — `maxFiles` по умолчанию 10. Отказ (`Error`, текст **без имён файлов**, только «файл №N» и причина): пустой список, больше `maxFiles`, дубликаты имён, имя пустое/`.`/`..`/содержит `/`, `\`, `:`, `realpath` вне папки (симлинк/junction), не обычный файл, размер 0, размер больше `maxBytes`.
 - `.env.example`: закомментированная необязательная `HSE_OUTBOX_DIR`.
 
-- [ ] **Step 1: Написать `scripts/verify/outbox.mjs`** (постоянный) (временная папка с файлами `a.txt` (5 байт), `empty.txt` (0 байт), `big.bin` (2 Кбайт), подпапка `sub/`, симлинк/junction на внешний файл — если создать нельзя без прав, утверждение пропускается с пометкой `SKIP`): корректные имена → `OutboxFile[]` с верным `size` и `sha256` (сверить с `crypto`); `["..\\x"]`, `["../x"]`, `["C:\\x.txt"]`, `["a/b.txt"]`, `["a:b"]`, `[""]`, `["."]`, `["sub"]`, `["empty.txt"]`, `["missing.txt"]`, `["a.txt","a.txt"]`, 11 имён, `maxBytes: 1024` и `big.bin`, симлинк наружу — каждый отказ бросает, и `err.message` **не содержит** подстроки из имени файла.
-- [ ] **Step 2:** запуск до реализации — провал.
+- [ ] **Step 1: Написать `test/outbox.test.mjs`** (постоянный) (временная папка с файлами `a.txt` (5 байт), `empty.txt` (0 байт), `big.bin` (2 Кбайт), подпапка `sub/`, симлинк/junction на внешний файл — если создать нельзя без прав, тест пропускается через `t.skip()`): корректные имена → `OutboxFile[]` с верным `size` и `sha256` (сверить с `crypto`); `["..\\x"]`, `["../x"]`, `["C:\\x.txt"]`, `["a/b.txt"]`, `["a:b"]`, `[""]`, `["."]`, `["sub"]`, `["empty.txt"]`, `["missing.txt"]`, `["a.txt","a.txt"]`, 11 имён, `maxBytes: 1024` и `big.bin`, симлинк наружу — каждый отказ бросает, и `err.message` **не содержит** подстроки из имени файла.
+- [ ] **Step 2:** запуск до реализации — красный.
 - [ ] **Step 3: Реализовать** `outbox.ts` и геттер `outboxDir`; дописать `.env.example`.
-- [ ] **Step 4:** сборка и скрипт — все `OK`.
-- [ ] **Step 5: Commit** (`Writes: outbox folder validation, HSE_OUTBOX_DIR`), включая `scripts/verify/outbox.mjs`.
+- [ ] **Step 4:** `npm test` — `fail 0`.
+- [ ] **Step 5: Commit** (`Writes: outbox folder validation, HSE_OUTBOX_DIR`), включая `test/outbox.test.mjs`.
 
 ---
 
@@ -291,7 +295,7 @@ export function classifyError(err: unknown): ErrorClass;
 7. Исключение из `execute` **до** первого `commitPoint` → пробросить (`isError`, ничего не отправлено, журнал не трогается). **После** → не пробрасывать: `outcome: "unknown"`, `errorClass: classifyError(err)` в журнал, ответ `stage: "sent"`, `sent: true`, предупреждение «повторять отправку без проверки запрещено».
 8. После `execute`: `recordJournal` стадия `verified` с `outcome`, `durationMs`.
 
-- [ ] **Step 1: Написать `scripts/verify/runner.mjs`** (постоянный, без сети и браузера) с фейковым адаптером (в памяти; счётчики `observe`/`execute`/`verifyOnly`; «система» — переменная; `execute` вызывает `await ctx.commitPoint({ signal, commit(){} })`; `invalidates: ["t.read"]` с зарегистрированным ресурсом-шпионом; журнал и ключ — во временном каталоге через `process.env.HSE_WRITES_DIR`, заданный скриптом до импорта):
+- [ ] **Step 1: Написать `test/runner.test.mjs`** (постоянный, без сети и браузера) с фейковым адаптером (в памяти; счётчики `observe`/`execute`/`verifyOnly`; «система» — переменная; `execute` вызывает `await ctx.commitPoint({ signal, commit(){} })`; `invalidates: ["t.read"]` с зарегистрированным ресурсом-шпионом; журнал и ключ — во временном каталоге через `process.env.HSE_WRITES_DIR`, заданный скриптом до импорта):
   a. сухой прогон → `previewToken`, `execute.calls === 0`, журнал пуст; `confirm` без токена → бросает, `observe` не доходит до `execute`; confirm с токеном от другого payload (изменено `args`) → бросает, `execute.calls === 0`;
   b. счастливый путь → `outcome: "confirmed"`, `sent: true`; журнал: `sending`, затем `verified`/`confirmed`; `t.read` сброшен;
   c. тот же токен ещё раз → ответ из журнала, `execute.calls` остаётся 1;
@@ -302,10 +306,10 @@ export function classifyError(err: unknown): ErrorClass;
   h. после (d) новый сухой прогон той же цели → `priorUnknown: true`; запись без `acknowledgeUnknown` → бросает; с `acknowledgeUnknown: true` → проходит;
   i. токен просрочен (выпустить напрямую `signPreview(key, p, new Date(Date.now() - 16 * 60_000))`) → бросает «просрочен»;
   j. файл журнала: ключи записей ⊆ разрешённых, строка `target` из `targetOf` в файле **не встречается**.
-- [ ] **Step 2:** запуск до реализации — провал.
+- [ ] **Step 2:** запуск до реализации — красный.
 - [ ] **Step 3: Реализовать** `runner.ts`, `runExclusive`, `classifyError` (`AbortError`/сообщения «не уложил» → `timeout`; `отменен` → `cancelled`; `net::`/`ERR_`/`fetch` → `network`; 401/вход → `auth`; иначе `other`).
-- [ ] **Step 4:** сборка и скрипт — все `OK`.
-- [ ] **Step 5: Commit** (`Writes: protocol runner defineWrite`), включая `scripts/verify/runner.mjs`.
+- [ ] **Step 4:** `npm test` — `fail 0`.
+- [ ] **Step 5: Commit** (`Writes: protocol runner defineWrite`), включая `test/runner.test.mjs`.
 
 ---
 
@@ -342,9 +346,9 @@ export const deleteAdapter: WriteAdapter<DeleteArgs, DeleteObserved>;
 Предусловия `observe` для `submit` (отказ до записи, сообщения без имён файлов): задан `text` → «онлайн-текст в v1 не поддерживается»; `files` пуст при `mode: "submit"` → «отправка без файлов не поддерживается»; `closed` не `null` → причина из `closed.reason`; не `canAdd` и не `canEdit` → «нельзя добавить или править ответ»; форма не «только файл»; число файлов (существующие + новые, уникальные по имени) > `maxFiles`; файл > `maxBytes`. `payloadOf.state` — sha256 от JSON `{state, files}`. `describe` показывает владельцу: заголовок, срок, состояние, что будет заменено/добавлено (имена, размеры), предупреждения: «сохранение может сразу отправить работу на оценку (у проверенных заданий отдельного шага нет)», «форма правки открывалась и не сохранялась». Для `delete`: `observe` требует `canDelete`; `describe` — состояние, имена и размеры файлов, предупреждение о необратимости удаления содержимого в системе; `state` — тот же отпечаток.
 
 - [ ] **Step 1: Написать `verify-8.mjs`** — разбор на сохранённых HTML-фрагментах: функции разбора вынести так, чтобы их можно было вызвать на `page.setContent(html)` (Chromium); фрагменты собираются в скрипте из подписей спеки §17 (строки таблицы статуса с классами, кнопки, `fileuploadsubmission`, подпись лимитов). Утверждения: `none` без классов с кнопкой «Добавить…» → `canAdd`; `submissionstatussubmitted` + «Редактировать»/«Удалить» → `canEdit`/`canDelete`, `state: "submitted"`; без кнопок + «вне сайта» → `closed.reason: "offsite"`; «просрочено на: 12 дн.» → `overdue`; лимиты «5 Мбайт … 20» → `maxBytes: 5*1024*1024`, `maxFiles: 20`; форма без `.filemanager` → `fileOnly: false`. Отдельно, на живых данных (только чтение, **с владельцем**, Task 13): `submitAdapter.observe` для `cmid` тестового задания даёт `state: "none"`, `describe` не пустой.
-- [ ] **Step 2:** запуск до реализации — провал.
+- [ ] **Step 2:** запуск до реализации — красный.
 - [ ] **Step 3: Реализовать** читающую часть; `execute`/`verifyOnly` пока бросают «не реализовано» (адаптеры не регистрируются в тулах до Task 10).
-- [ ] **Step 4:** сборка и скрипт — все `OK`.
+- [ ] **Step 4:** `npm test` — `fail 0`.
 - [ ] **Step 5: Commit** (`LMS: read assignment status and edit form, dry-run adapters`).
 
 ---
@@ -363,9 +367,9 @@ export const deleteAdapter: WriteAdapter<DeleteArgs, DeleteObserved>;
 `delete.execute`: `withPage(view.php?id=<cmid>)` → один клик `button:has-text("Удалить ответ")` → проверить URL содержит `action=removesubmissionconfirm` и на странице «Вы уверены, что хотите удалить представленный ответ» → `commitPoint` → один клик `button:has-text("Продолжить")` → дождаться `action=view` → `readAssignmentView`: `state === "none"` и `canAdd` → `confirmed`; явная ошибка и состояние не изменилось → `rejected`; иначе `unknown`. `verifyOnly` — то же чтение.
 
 - [ ] **Step 1: Написать `verify-9.mjs`** — без записи в реальную систему: подставить `page`-двойник (Playwright `page.route` отдаёт HTML-заготовки для `view.php`, `editsubmission`, `removesubmissionconfirm`, а POST «Сохранить»/«Продолжить» меняет состояние заготовки и отвечает редиректом на `action=view`) и вызвать `execute` напрямую с `ctx = { signal, commitPoint: spy }`. Утверждения: порядок вызовов: `commitPoint` ровно один раз и строго после проверки списка менеджера и до клика «Сохранить»; при лишнем элементе в менеджере (`.fp-folder`) — выброс **до** `commitPoint`; диалог одноимённого файла → нажат «Перезаписать», кнопка «Переименовать» ни разу не кликнута (счётчик кликов на заготовке); после сохранения `state: "submitted"` при `mode: "draft"` → `confirmed` + предупреждение; несовпадение sha256 → не `confirmed`; удаление: `commitPoint` после страницы подтверждения и до «Продолжить», итог `confirmed` при `state: "none"`.
-- [ ] **Step 2:** запуск до реализации — провал.
+- [ ] **Step 2:** запуск до реализации — красный.
 - [ ] **Step 3: Реализовать** запись в `submissions.ts`; помощники шагов (`attachFile`, `assertManagerState`, `clickOnce`) — внутри модуля.
-- [ ] **Step 4:** сборка и скрипт — все `OK`.
+- [ ] **Step 4:** `npm test` — `fail 0`.
 - [ ] **Step 5: Commit** (`LMS: submit, edit and delete submission via file manager flow`).
 
 ---
@@ -373,19 +377,20 @@ export const deleteAdapter: WriteAdapter<DeleteArgs, DeleteObserved>;
 ### Task 10: Регистрация тулов LMS
 
 **Files:**
-- Modify: `src/services/lms/tools.ts`
+- Create: `test/tools-gating.test.mjs`
+- Modify: `src/services/lms/tools.ts`, `src/config.ts`, `.env.example`
 
 **Interfaces:**
 - Consumes: `defineWrite` (Task 7), `submitAdapter`/`deleteAdapter` (Tasks 8–9).
-- Produces: тулы `lms_submit_assignment` и `lms_delete_submission` (регистрация уже вызывается из `src/index.ts`; `index.ts` не меняется).
+- Produces: `config.writesEnabled: boolean` (геттер: `process.env.HSE_ENABLE_WRITES?.trim().toLowerCase() === "true"`); тулы `lms_submit_assignment` и `lms_delete_submission` регистрируются в `registerLmsTools` **только если** `config.writesEnabled` (регистрация уже вызывается из `src/index.ts`; `index.ts` не меняется); при выключенном флаге один раз в stderr пишется строка «тулы записи выключены (HSE_ENABLE_WRITES не задан)» — без личных данных. `.env.example`: закомментированная `# HSE_ENABLE_WRITES=true` с пояснением «включает тулы, которые отправляют данные в SmartLMS/ЕЛК».
 
 Схемы входа (`zod`): `lms_submit_assignment` — `cmid: number().int().positive()`, `mode: enum(["draft","submit"]).default("draft")`, `files: array(string().min(1).max(255)).min(1).max(10)`, `text: string().max(100_000).optional()` (при передаче — отказ), `confirm: boolean().optional()`, `previewToken: string().max(200).optional()`, `acknowledgeUnknown: boolean().optional()`. `lms_delete_submission` — `cmid`, `confirm`, `previewToken`, `acknowledgeUnknown`. Оба с `annotations` из Global Constraints и описанием в стиле `hse_changes`: сухой прогон по умолчанию; `confirm` и `previewToken` обязательны для записи; сохранение может сразу отправить работу; исход `confirmed`/`rejected`/`unknown` и запрет автоповтора после `unknown`; файлы только из папки «исходящих» по имени; клиент спросит разрешение на вызов; онлайн-текст не поддерживается. Тела: `runTool((signal) => write(args, signal), extra.signal)`.
 
-- [ ] **Step 1: Написать `verify-10.mjs`:** поднять `McpServer` из `dist` с `registerLmsTools`, вызвать `server.server`-уровневый `tools/list` через внутренний транспорт-пару (`InMemoryTransport` из SDK) и проверить: оба тула есть; `annotations.destructiveHint === true`, `readOnlyHint === false`; схема `lms_submit_assignment` требует `cmid` и `files`; вызов без `files` → ошибка валидации; вызов `text: "x"` → `isError: true` с текстом про онлайн-текст, **без обращения к сети** (отказ до `observe`: проверка предусловия «text» делается раньше любой навигации).
-- [ ] **Step 2:** запуск до реализации — провал.
-- [ ] **Step 3: Реализовать** регистрацию.
-- [ ] **Step 4:** `npm run build && node …/verify-10.mjs` — все `OK`.
-- [ ] **Step 5: Commit** (`LMS: register lms_submit_assignment and lms_delete_submission`).
+- [ ] **Step 1: Написать `test/tools-gating.test.mjs`** (постоянный, `node:test`, без сети): `McpServer` из `dist` с `registerLmsTools`, `tools/list` через пару `InMemoryTransport` из SDK; `process.env.HSE_ENABLE_WRITES` задаётся **до** динамического импорта и меняется между случаями (`config` читает флаг геттером, каждый случай создаёт свой сервер). Утверждения: флаг не задан / `"false"` / `"1"` / `""` → ни `lms_submit_assignment`, ни `lms_delete_submission` в списке, читающие тулы (`lms_list_courses`, `lms_open_page`) на месте; `"true"` и `" TRUE "` → оба тула есть; при включённом: `annotations.destructiveHint === true`, `readOnlyHint === false`; схема `lms_submit_assignment` требует `cmid` и `files`; вызов без `files` → ошибка валидации; вызов `text: "x"` → `isError: true` с текстом про онлайн-текст, **без обращения к сети** (отказ до `observe`: проверка предусловия «text» делается раньше любой навигации).
+- [ ] **Step 2:** `npm run build && node --test test/tools-gating.test.mjs` до реализации — красный.
+- [ ] **Step 3: Реализовать** геттер `writesEnabled` и условную регистрацию.
+- [ ] **Step 4:** `npm test` — `fail 0`.
+- [ ] **Step 5: Commit** (`LMS: register lms_submit_assignment and lms_delete_submission behind HSE_ENABLE_WRITES`), включая `test/tools-gating.test.mjs`.
 
 ---
 
@@ -397,11 +402,11 @@ export const deleteAdapter: WriteAdapter<DeleteArgs, DeleteObserved>;
 **Interfaces:**
 - Produces: `assertReadOnlyPath(url: string): void` в `url-utils.ts` — бросает `Error` при `sesskey=` в query (без учёта регистра) и, для путей `/mod/assign/`, при параметре `action=` (кроме пустого). `lms.openPage` и `elk.openPage` вызывают его на результате `resolveScopedUrl`.
 
-- [ ] **Step 1: Написать `scripts/verify/open-page.mjs`** (постоянный): разрешены `/calendar/view.php?view=month`, `/mod/assign/view.php?id=5`; отклонены `/login/logout.php?sesskey=abc`, `/x?SESSKEY=1`, `/mod/assign/view.php?id=5&action=editsubmission`, `/mod/assign/view.php?id=5&action=removesubmissionconfirm`; существующий `resolveScopedUrl` для внешнего хоста по-прежнему бросает.
-- [ ] **Step 2:** запуск до реализации — провал.
+- [ ] **Step 1: Написать `test/open-page.test.mjs`** (постоянный): разрешены `/calendar/view.php?view=month`, `/mod/assign/view.php?id=5`; отклонены `/login/logout.php?sesskey=abc`, `/x?SESSKEY=1`, `/mod/assign/view.php?id=5&action=editsubmission`, `/mod/assign/view.php?id=5&action=removesubmissionconfirm`; существующий `resolveScopedUrl` для внешнего хоста по-прежнему бросает.
+- [ ] **Step 2:** запуск до реализации — красный.
 - [ ] **Step 3: Реализовать** и подключить в обе `openPage`.
-- [ ] **Step 4:** сборка и скрипт — все `OK`.
-- [ ] **Step 5: Commit** (`open_page: reject sesskey and assign action URLs`), включая `scripts/verify/open-page.mjs`.
+- [ ] **Step 4:** `npm test` — `fail 0`.
+- [ ] **Step 5: Commit** (`open_page: reject sesskey and assign action URLs`), включая `test/open-page.test.mjs`.
 
 ---
 
@@ -412,7 +417,7 @@ export const deleteAdapter: WriteAdapter<DeleteArgs, DeleteObserved>;
 
 - [ ] **Step 1:** `docs/requirements.md`: перенести «Сдача домашних заданий» из «Запланировано» в реализованное; добавить нефункциональные требования записи (протокол, журнал, папка «исходящих», точка невозврата) и в «Требования к безопасности» — что присутствие обеспечивает запрос разрешения клиента, а не сервер.
 - [ ] **Step 2:** `CLAUDE.md`: абзац о сервисе записи (`services/writes/`, `cache: false`, `commit()`, `defineWrite`), снять «LMS/ЕЛК только для чтения» из известных ограничений для LMS, добавить в «Известные ограничения» «онлайн-текст не поддерживается; у заданий без отдельного шага сохранение сразу отправляет работу».
-- [ ] **Step 3:** `README.md`: два новых тула, `HSE_OUTBOX_DIR`, правила использования.
+- [ ] **Step 3:** `README.md`: два новых тула, `HSE_ENABLE_WRITES=true` (без него тулов записи нет), `HSE_OUTBOX_DIR`, правила использования.
 - [ ] **Step 4:** `npm run build` — код 0. **Commit** (`Docs: write operations (LMS submit/edit/delete)`).
 
 ---
@@ -423,7 +428,7 @@ export const deleteAdapter: WriteAdapter<DeleteArgs, DeleteObserved>;
 
 Порядок строго по §12 спеки. Перед каждым шагом спросить владельца и дождаться «да» именно на этот шаг; на каждый отказ клиента — остановиться и спросить, не обходить.
 
-- [ ] **Step 1:** пересобрать и перезапустить подключённый `hsemcp` (владелец) из актуального кода; убедиться, что новые тулы видны.
+- [ ] **Step 1:** пересобрать и перезапустить подключённый `hsemcp` (владелец) из актуального кода. Сначала **без** `HSE_ENABLE_WRITES` — убедиться, что тулов записи в списке нет; затем владелец задаёт `HSE_ENABLE_WRITES=true` (в `.env` или в настройках подключения клиента) и перезапускает — новые тулы видны.
 - [ ] **Step 2: сухой прогон** `lms_submit_assignment` на тестовом задании (`cmid` указывает владелец; кандидаты — задания без срока из §17) с `files: ["test.txt"]`. Ожидание: `stage: "preview"`, `previewToken`, предупреждения о немедленной отправке; **в системе ничего не изменилось** (статус до и после совпал).
 - [ ] **Step 3:** `confirm` с токеном, изменив `files` на другой файл → отказ «изменились данные», без записи.
 - [ ] **Step 4: запись** (`confirm: true` + токен, **отдельное разрешение владельца**): ожидание `outcome: "confirmed"`, `sent: true`, `evidence` совпадает со страницей статуса; повтор с тем же токеном → ответ из журнала, вторая запись не выполнена; журнал `storage/writes/journal.json` не содержит имён и id.
@@ -449,9 +454,9 @@ export const deleteAdapter: WriteAdapter<DeleteArgs, DeleteObserved>;
 Правила: `observe` читает форму и снимок множества номеров заявок (`listRequests({ maxAgeMs: 0 })`, только в памяти) → отпечаток состояния = sha256 набора номеров; предусловия: все обязательные `fields` заданы значениями из `options`, лишних подписей нет; `describe` показывает поля, варианты, незаполненные обязательные и предупреждение «заказ необратим: способа отмены в ЕЛК нет»; автозаполненные значения показываются **только** владельцу в ответе. `targetOf` = `service:<serviceId>`.
 
 - [ ] **Step 1: Написать `verify-14.mjs`** — на HTML-заготовке формы (разметка Element Plus по §17: `.el-form-item`, подписи «Формат получения*»/«Наименование организации*», `.el-select-dropdown__item`, кнопка «Отправить» disabled): `readCertificateForm` возвращает два обязательных поля с вариантами «Электронный документ», «Документ на бумажном носителе» и «По месту требования», «Полное наименование организации (указать в дополнительном поле)»; `observe` с неполным `fields` → бросает со списком недостающих подписей; клик «Отправить» не выполняется ни в одном из этих утверждений (счётчик кликов на заготовке — 0).
-- [ ] **Step 2:** запуск до реализации — провал.
+- [ ] **Step 2:** запуск до реализации — красный.
 - [ ] **Step 3: Реализовать** читающую часть.
-- [ ] **Step 4:** сборка и скрипт — все `OK`.
+- [ ] **Step 4:** `npm test` — `fail 0`.
 - [ ] **Step 5: Commit** (`ELK: certificate form reader and dry-run adapter`).
 
 ### Task 15: ЕЛК — запись и проверка
@@ -465,9 +470,9 @@ export const deleteAdapter: WriteAdapter<DeleteArgs, DeleteObserved>;
 `execute` (покадрово): `withPage(form URL)` → заполнить каждое поле по подписи и тексту варианта (клик по обёртке, клик варианта), перепроверить, что обязательных пустых нет и кнопка `getByRole('button', { name: 'Отправить', exact: true })` одна и активна → `commitPoint` → один клик «Отправить» → ожидать (`page.waitForResponse`) ответ на `POST …/rest-api/camunda-gateway/process/start` (статус 2xx — только сигнал, не исход). Проверка (§7, §10): опрос `listRequests({ maxAgeMs: 0 })` до 15 с — ровно один новый номер, которого не было в снимке → `confirmed` (`evidence.newClaimNumber` — только в ответе); ни одного → `unknown`; больше одного → `unknown` с предупреждением. `verifyOnly` — тот же опрос без записи (по снимку номеров из журнала нет: снимок не хранится, поэтому повтор после `unknown` сообщает «новые заявки» и предупреждение «сверьте вручную через elk_list_requests»).
 
 - [ ] **Step 1: Написать `verify-15.mjs`** на заготовке и `page.route` (клик «Отправить» перехватывается заготовкой, `process/start` отвечает 200, `listRequests` подменяется шпионом с набором номеров): порядок: `commitPoint` строго между заполнением и кликом; один новый номер → `confirmed`; ноль → `unknown`; два → `unknown` + предупреждение; **реальные запросы к lk.hse.ru не выполняются** (все `route` заглушены; любой запрос вне заготовки → провал).
-- [ ] **Step 2:** запуск до реализации — провал.
+- [ ] **Step 2:** запуск до реализации — красный.
 - [ ] **Step 3: Реализовать** запись и проверку.
-- [ ] **Step 4:** сборка и скрипт — все `OK`.
+- [ ] **Step 4:** `npm test` — `fail 0`.
 - [ ] **Step 5: Commit** (`ELK: certificate order execute and verification`).
 
 ### Task 16: Тул `elk_order_certificate`, документация, живая проверка
@@ -476,8 +481,8 @@ export const deleteAdapter: WriteAdapter<DeleteArgs, DeleteObserved>;
 - Modify: `src/services/elk/tools.ts`, `docs/requirements.md`, `CLAUDE.md`, `README.md`
 
 - [ ] **Step 1:** зарегистрировать `elk_order_certificate` (`serviceId: number().int().positive()`, `fields: record(string(), string())`, `confirm`, `previewToken`, `acknowledgeUnknown`) с аннотациями и описанием в стиле `hse_changes` (необратимость, сухой прогон, один заказ за раз, `unknown` → сверка через `elk_list_requests`).
-- [ ] **Step 2:** `verify-16.mjs` как в Task 10: тул виден, аннотации, отказ при пустом `fields`.
-- [ ] **Step 3:** документация (как в Task 12, но для ЕЛК).
+- [ ] **Step 2:** `verify-16.mjs` (одноразовый) при включённом флаге: тул виден, аннотации, отказ при пустом `fields`.
+- [ ] **Step 3:** документация (как в Task 12, но для ЕЛК). `elk_order_certificate` регистрируется **только при `config.writesEnabled`** (как в Task 10); `tools-gating.test.mjs` расширить проверкой `registerElkTools`: без флага тула нет, с флагом — есть.
 - [ ] **Step 4: живая проверка — только с владельцем.** Сначала сухой прогон по `serviceId` 14605 (в ЕЛК ничего не меняется: число заявок до и после одинаково); **заказ реальной справки — отдельное явное разрешение владельца**, он выбирает, какая справка ему нужна; перехват блокирующим `route` из §17 перед первым живым запуском повторить и убедиться, что в запросе нет ничего, кроме ожидаемых переменных.
 - [ ] **Step 5:** результаты — в спеку §17; **Commit** (`ELK: elk_order_certificate tool, docs`).
 
@@ -487,7 +492,7 @@ export const deleteAdapter: WriteAdapter<DeleteArgs, DeleteObserved>;
 
 **Files:** нет изменений в коде (кроме правок по итоговому ревью).
 
-- [ ] **Step 1: `verification-before-completion`:** `npm run build` — код 0; все постоянные скрипты проходят (`for f in scripts/verify/*.mjs; do node "$f" || exit 1; done` — все `OK`), одноразовые `verify-N` выполненных задач проходят; `git status` чистый; в `git ls-files` нет `storage/`, `.env`, `.playwright-mcp/`; `grep` по diff на запрещённые утечки — в коде журнала и логов нет записи `text`, имён файлов, `cmid`, номеров заявок (приложить вывод).
+- [ ] **Step 1: `verification-before-completion`:** `npm run build` — код 0; `npm test` — `fail 0`, одноразовые `verify-N` выполненных задач проходят; `git status` чистый; в `git ls-files` нет `storage/`, `.env`, `.playwright-mcp/`, `docs/recon.md`; `grep` по diff на запрещённые утечки — в коде журнала и логов нет записи `text`, имён файлов, `cmid`, номеров заявок (приложить вывод).
 - [ ] **Step 2: `requesting-code-review`:** итоговое ревью всей ветки свежим ревьюером на самой сильной модели по спеке и плану; блокирующие и существенные замечания закрыть через `receiving-code-review`, затем снова Step 1.
 - [ ] **Step 3: `finishing-a-development-branch`:** показать владельцу итог (список коммитов, результаты проверок и живой проверки, оставшиеся допущения) и варианты завершения; PR в `master`, слияние и push — только по его слову. Обновить `docs/requirements.md`/`CLAUDE.md` строкой о статусе подпроекта №4.
 
@@ -496,25 +501,31 @@ export const deleteAdapter: WriteAdapter<DeleteArgs, DeleteObserved>;
 ### Task 18: Подготовка к передаче другому пользователю
 
 **Files:**
-- Modify: `README.md`, `CLAUDE.md`, `docs/requirements.md`, `docs/recon.md`, `docs/superpowers/specs/2026-10-18-write-operations-design.md`, `docs/superpowers/plans/*.md`
+- Create: `LICENSE`
+- Modify: `README.md`, `CLAUDE.md`, `docs/requirements.md`, `.gitignore`, `package.json`, `docs/superpowers/specs/2026-10-18-write-operations-design.md`, `docs/superpowers/plans/*.md`
+- Untrack: `docs/recon.md` (файл остаётся на диске у владельца)
 
 Выполняется после Tasks 12 и 17 (и Task 16, если фаза C сделана); живых действий нет.
 
 - [ ] **Step 1: Убрать личное из отслеживаемых файлов.** Заменить путь `C:/Users/alexk/hsemcp` (и `C:\Users\alexk\hsemcp\.env`) на `<путь-к-проекту>` / «`.env` проекта» в `README.md`, `CLAUDE.md`, спеках и планах; убрать название курса «История России — Проекты» из спеки §17 (оставить «второе задание типа „Проекты“ без срока»). Проверка: `git ls-files | xargs grep -lEI "$PRIVATE_PATTERN"` ничего не выводит, где `PRIVATE_PATTERN` — переменная окружения исполнителя с шаблоном из имени пользователя Windows, фамилии, личных email и идентификаторов владельца (**сам шаблон в файлы и коммиты не записывать**); приложить вывод проверки без шаблона.
 - [ ] **Step 2: `docs/requirements.md`:** заменить требование «Только для одного пользователя» на «каждый пользователь ставит проект у себя со своими учётными данными; `storage/` (сессия, журнал записей, ключ токена, папка «исходящих») локальна для установки и не передаётся».
-- [ ] **Step 3: `README.md`, раздел «Установка и запуск»:** `npm ci`, `npx playwright install chromium`, `cp .env.example .env` и заполнить `HSE_EMAIL`/`HSE_PASSWORD`, `npm run build`, подключение к клиенту (`claude mcp add hsemcp -- node <путь-к-проекту>/dist/index.js`), необязательная `HSE_OUTBOX_DIR`, повторная проверка защиты записи: `for f in scripts/verify/*.mjs; do node "$f"; done` (все `OK`).
+- [ ] **Step 3: `README.md`, раздел «Установка и запуск»:** `npm ci`, `npx playwright install chromium`, `cp .env.example .env` и заполнить `HSE_EMAIL`/`HSE_PASSWORD`, `npm run build`, подключение к клиенту (`claude mcp add hsemcp -- node <путь-к-проекту>/dist/index.js`), необязательные `HSE_ENABLE_WRITES=true` (включает тулы записи; по умолчанию выключены) и `HSE_OUTBOX_DIR`, повторная проверка защиты записи: `npm test` (`fail 0`).
 - [ ] **Step 4: `README.md`, раздел «Тулы записи — что нужно знать»:** сухой прогон по умолчанию; `confirm` и `previewToken` обязательны; сохранение у части заданий **сразу отправляет** работу, у справки заказ **необратим**; не добавлять тулы записи в автоматически разрешённые в клиенте (защита опирается на запрос разрешения на каждый вызов); файлы только из папки «исходящих»; исход `unknown` — сверить результат вручную, не повторять.
 - [ ] **Step 5: `README.md`, раздел «Границы применимости»:** селекторы и тексты Moodle/ЕЛК проверены на одном аккаунте и одном семестре; онлайн-текст не поддерживается; заданий с отдельным шагом «Отправить на оценку» и с `submissiondraft` не наблюдалось (тулы в таких случаях отказывают, а не угадывают); заказ справки проверен на форме одной справки; правила ВШЭ об автоматизированном доступе к SmartLMS/ЕЛК **не проверялись**, пользователь отвечает за их соблюдение сам.
-- [ ] **Step 6: `CLAUDE.md`:** строку «Тестов и линтера в проекте нет» заменить на «Тестового фреймворка и линтера нет; чистая логика проверяется скриптами `scripts/verify/*.mjs` (`node:assert`, без зависимостей)»; убрать личный путь из команды подключения.
+- [ ] **Step 6: `CLAUDE.md`:** строку «Тестов и линтера в проекте нет» заменить на «Линтера нет; тесты — встроенный `node:test` (`npm test`, файлы `test/*.test.mjs`, без зависимостей): чистая логика покрывается тестами, браузерные части — заглушками и живой проверкой»; убрать личный путь из команды подключения; добавить строку про `HSE_ENABLE_WRITES` (тулы записи выключены по умолчанию); ссылки на `docs/recon.md` заменить пометкой «локальный файл владельца, в репозитории отсутствует» (или убрать).
 - [ ] **Step 7: Убрать корпоративную почту из документов** (решение владельца: «почту исключить»). В `docs/` убрать упоминания корпоративной почты ВШЭ (IMAP/SMTP, Yandex 360, `mail_*`, `HSE_MAIL_*`) — примечания «от 2026-10-18» в шапках старых спек и планов, строки таблиц решений и пункты про неё; оставить по одной нейтральной фразе об исключении в `CLAUDE.md` и `docs/requirements.md`. Внутренняя почта SmartLMS (`local_mail`, `lms_list_messages`, `lms_get_message`) — другая система, она **остаётся**. Проверка: `grep -rEI "IMAP|SMTP|Yandex|HSE_MAIL|mail_(list|read|search|send)" docs src` ничего не выводит, кроме фраз об исключении; приложить вывод.
-- [ ] **Step 8:** `npm run build` — код 0; все `scripts/verify/*.mjs` — `OK`; приложить вывод. **Commit** (`Docs: prepare project for use by another student`).
+- [ ] **Step 8: Лицензия, дисклеймер, `docs/recon.md`** (решения владельца 2026-10-18):
+  - `LICENSE` — текст MIT, год 2026, держатель «hsemcp contributors»; в `package.json` `"license": "MIT"`; в README строка «Лицензия: MIT».
+  - `README.md`, раздел «Дисклеймер» (вверху, после описания): неофициальный проект, не связан с НИУ ВШЭ и не одобрен ею; правила ВШЭ об автоматизированном доступе к SmartLMS/ЕЛК не проверялись, пользователь отвечает за их соблюдение; использование на свой риск, без гарантий (см. лицензию); тулы записи отправляют данные от имени пользователя и необратимы (сдача может уйти на оценку сразу, заказ справки не отменить) и выключены по умолчанию (`HSE_ENABLE_WRITES`); автор не хранит учётные данные пользователей — всё локально. **Предупреждения о нагрузке на порталы не добавлять.**
+  - `docs/recon.md`: `git rm --cached docs/recon.md`, строка `docs/recon.md` в `.gitignore`, файл на диске не удалять; перед этим убедиться, что в нём нет единственных копий сведений, нужных пользователю проекта (они уже в спеках §17 и README). Все ссылки на него в отслеживаемых файлах (`CLAUDE.md`, `README.md`, `docs/requirements.md`, спеки, планы) заменить на «локальные заметки разведки (не в репозитории)» либо убрать; проверка: `git grep -n "recon.md"` — только строка в `.gitignore` и, при необходимости, одна фраза в `CLAUDE.md`. Вопрос владельцу (задать при показе итога, не решать самому): дублируют ли §17 спеки и планы содержимое recon настолько, что их тоже оставить локальными.
+- [ ] **Step 9:** `npm run build` — код 0; `npm test` — `fail 0`; `git ls-files | grep -c "docs/recon.md"` — `0`; приложить вывод. **Commit** (`Docs: prepare project for use by another student`).
 
 ---
 
 ### Task 20: Хранение учётных данных (выполняется ПЕРЕД Task 18; ворота: спека `2026-10-18-credential-storage-design.md` одобрена владельцем)
 
 **Files:**
-- Create: `src/credentials.ts`, `src/fs-secure.ts`, `src/cli/credentials.ts`, `scripts/verify/credentials.mjs`, `SECURITY.md`
+- Create: `src/credentials.ts`, `src/fs-secure.ts`, `src/cli/credentials.ts`, `test/credentials.test.mjs`, `SECURITY.md`
 - Modify: `src/config.ts`, `package.json`, `.env.example`, `src/auth/browser-session.ts` (`saveStorageState`), `src/services/writes/token.ts` (`loadOrCreateKey`), `README.md`
 
 **Interfaces:**
@@ -529,10 +540,10 @@ export const deleteAdapter: WriteAdapter<DeleteArgs, DeleteObserved>;
 - `config.ts`: `hsePassword` остаётся **синхронным геттером**; хранилище загружается один раз через top-level `await loadKeyStore()` при импорте модуля; `.env` разбирается отдельно (`dotenv.parse`), в `process.env` по-прежнему попадает как раньше; при `source === "dotenv"` один раз пишется предупреждение без значения (текст — в спеке §2).
 - `src/cli/credentials.ts`: подкоманды `set`, `clear`, `status`; пароль читается без эха; печатает только источник; `package.json`: `"credentials:set": "node dist/cli/credentials.js set"` и аналогично `clear`, `status`; `optionalDependencies: { "@napi-rs/keyring": "^2.1.1" }`.
 
-- [ ] **Step 1: Написать `scripts/verify/credentials.mjs`** (постоянный, без сети и без реального хранилища): `lookupPassword` — env побеждает хранилище и `.env`; хранилище побеждает `.env`; `store: null` → `.env`; нигде нет → `{ password: null, source: "none" }`; поле `source` совпадает с источником; `dotenvPermissionWarning(file, "linux")` на файле с режимом `0o644` → строка без пути-секрета и без значений, на `0o600` → `null`, на `"win32"` → `null`; `restrictFile` на временном файле при POSIX → режим `0o600` (на Windows — печать `SKIP`); вывод `status`-функции CLI и предупреждения не содержат подстроки подставного пароля (`"s3cret-test-value"`) и подставного email.
-- [ ] **Step 2:** `npm run build && node scripts/verify/credentials.mjs` до реализации — провал.
+- [ ] **Step 1: Написать `test/credentials.test.mjs`** (постоянный, без сети и без реального хранилища): `lookupPassword` — env побеждает хранилище и `.env`; хранилище побеждает `.env`; `store: null` → `.env`; нигде нет → `{ password: null, source: "none" }`; поле `source` совпадает с источником; `dotenvPermissionWarning(file, "linux")` на файле с режимом `0o644` → строка без пути-секрета и без значений, на `0o600` → `null`, на `"win32"` → `null`; `restrictFile` на временном файле при POSIX → режим `0o600` (на Windows — `t.skip()`); вывод `status`-функции CLI и предупреждения не содержат подстроки подставного пароля (`"s3cret-test-value"`) и подставного email.
+- [ ] **Step 2:** `npm run build && node --test test/credentials.test.mjs` до реализации — красный.
 - [ ] **Step 3: Реализовать** модули; подключить `restrictFile` после записи `hse-session.json` и ключа `storage/writes/key`; обновить `.env.example` (комментарий: «безопаснее хранить пароль в системном хранилище: npm run credentials:set; `HSE_PASSWORD` необязателен») и создать `SECURITY.md` по спеке §2.
-- [ ] **Step 4:** сборка и скрипт — все `OK`; `npm ci` без `@napi-rs/keyring` (имитация: `npm ci --omit=optional`) — проект собирается и `lookupPassword` откатывается на `.env`.
+- [ ] **Step 4:** `npm test` — `fail 0`; `npm ci` без `@napi-rs/keyring` (имитация: `npm ci --omit=optional`) — проект собирается и `lookupPassword` откатывается на `.env`.
 - [ ] **Step 5: README** — раздел «Учётные данные»: порядок источников, команды `credentials:*`, предупреждение про `.env`, `icacls` для Windows, оговорка про Linux/Secret Service, что делать при утечке. **Commit** (`Credentials: OS keychain support, restricted file permissions, SECURITY.md`).
 - [ ] **Step 6: живая проверка — только с владельцем** (спека §4): `credentials:set`, вход без `HSE_PASSWORD` в `.env`, `credentials:status` → `keychain`, `credentials:clear`; результаты — в спеку.
 
@@ -545,8 +556,8 @@ export const deleteAdapter: WriteAdapter<DeleteArgs, DeleteObserved>;
 Цель: в публичной истории не должно остаться имени пользователя Windows владельца (оно стоит в путях в ряде коммитов) и ничего другого из `PRIVATE_PATTERN` (Task 18, Step 1). Историю **этого** репозитория и его `origin` не переписывать: репозиторий общий для нескольких worktree и веток других сессий, `origin` уже содержит старые коммиты, а на GitHub старые объекты остаются доступными через `refs/pull/*`, форки и кэш даже после force-push.
 
 - [ ] **Step 1:** После слияния работы в `master` (решает владелец) сделать клон без жёстких ссылок: `git clone --no-local <путь к репозиторию> <временный каталог>`; рабочий репозиторий и его worktree не трогать.
-- [ ] **Step 2:** В клоне переписать историю одним проходом `git filter-repo` (поставить `git-filter-repo`, если его нет) с файлами замен, лежащими **вне** клона: для содержимого файлов (`--replace-text`) и сообщений коммитов (`--replace-message`) заменить буквальные строки — путь проекта владельца с обоими видами слэшей на `<путь-к-проекту>`, имя пользователя Windows на нейтральное `user`, остальное из `PRIVATE_PATTERN`. Сами пары замен в репозиторий и в вывод не писать.
-- [ ] **Step 3: Проверка на всей истории клона** (приложить вывод без шаблона): `git log --all -G"$PRIVATE_PATTERN" --oneline` пусто; `git grep -I -l -E "$PRIVATE_PATTERN" $(git rev-list --all)` пусто (запускать по частям, если команда слишком длинная); авторы коммитов — только GitHub-noreply.
+- [ ] **Step 2:** В клоне переписать историю одним проходом `git filter-repo` (поставить `git-filter-repo`, если его нет): `--path docs/recon.md --invert-paths` (файл исчезает из **всех** коммитов) и файлами замен, лежащими **вне** клона: для содержимого файлов (`--replace-text`) и сообщений коммитов (`--replace-message`) заменить буквальные строки — путь проекта владельца с обоими видами слэшей на `<путь-к-проекту>`, имя пользователя Windows на нейтральное `user`, остальное из `PRIVATE_PATTERN`. Сами пары замен в репозиторий и в вывод не писать.
+- [ ] **Step 3: Проверка на всей истории клона** (приложить вывод без шаблона): `git log --all -G"$PRIVATE_PATTERN" --oneline` пусто; `git grep -I -l -E "$PRIVATE_PATTERN" $(git rev-list --all)` пусто (запускать по частям, если команда слишком длинная); `git log --all --oneline -- docs/recon.md` пусто; авторы коммитов — только GitHub-noreply.
 - [ ] **Step 4: Публикация — только по прямому слову владельца и как НОВЫЙ репозиторий** (а не переключением видимости существующего): создать пустой репозиторий, запушить из клона `master`. Старый репозиторий остаётся у владельца; удалять его или нет — его решение. До публикации ещё раз показать владельцу итоговое содержимое (`git ls-files`, `README.md`, `LICENSE`, дисклеймер) и дождаться «да».
 
 ---
