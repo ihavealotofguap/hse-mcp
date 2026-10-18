@@ -27,4 +27,9 @@ export const config = {
   get browserHeadless(): boolean {
     return process.env.HSE_BROWSER_HEADLESS !== "false";
   },
+  /** Папка «исходящих»: `HSE_OUTBOX_DIR` (абсолютный путь или относительно корня проекта), иначе `storage/outbox`. */
+  get outboxDir(): string {
+    const value = process.env.HSE_OUTBOX_DIR?.trim();
+    return value ? path.resolve(projectRoot, value) : path.join(projectRoot, "storage", "outbox");
+  },
 };
