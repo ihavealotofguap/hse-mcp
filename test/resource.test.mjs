@@ -169,3 +169,134 @@ test("кэшируемый ресурс: параллельные вызовы �
   assert.equal(Object.isFrozen(a), true);
   assert.equal(Object.isFrozen(a.list), true);
 });
+
+test("cache:false: abort вызывающего до commit() доходит до ctx.signal, а commit() после отмены бросает", async () => {
+  let signal;
+  let commitError;
+  const call = defineResource({
+    name: "t.abortforward",
+    cache: false,
+    load: async (_a, ctx) => {
+      signal = ctx.signal;
+      await sleep(60);
+      try {
+        ctx.commit();
+      } catch (e) {
+        commitError = e;
+        throw e;
+      }
+      return 1;
+    },
+  });
+  const ac = new AbortController();
+  const p = call(undefined, { signal: ac.signal });
+  await sleep(10);
+  ac.abort(new Error("клиент отменил"));
+  await assert.rejects(p, /клиент отменил/);
+  assert.equal(signal.aborted, true);
+  await sleep(100);
+  assert.match(commitError?.message ?? "", /клиент отменил/);
+});
+
+test("commit() после истечения исходного дедлайна бросает и не сбрасывает кэш", async () => {
+  const readLoad = counting();
+  const read = defineResource({ name: "t.read3", ttl: 60_000, key: () => "k", load: readLoad });
+  await read(undefined);
+
+  let commitError;
+  const write = defineResource({
+    name: "t.latecommit",
+    cache: false,
+    deadlineMs: 30,
+    invalidates: ["t.read3"],
+    load: async (_a, ctx) => {
+      await sleep(80);
+      try {
+        ctx.commit();
+      } catch (e) {
+        commitError = e;
+        throw e;
+      }
+      return 1;
+    },
+  });
+  await assert.rejects(write(undefined), /не уложился/);
+  await sleep(100);
+  assert.match(commitError?.message ?? "", /не уложился/);
+  await read(undefined);
+  assert.equal(readLoad.calls, 1);
+});
+
+test("abort вызывающего после commit() не отменяет ctx.signal загрузчика", async () => {
+  let signal;
+  const call = defineResource({
+    name: "t.abortafternosignal",
+    cache: false,
+    load: async (_a, ctx) => {
+      signal = ctx.signal;
+      ctx.commit();
+      await sleep(60);
+      return "ok";
+    },
+  });
+  const ac = new AbortController();
+  const p = call(undefined, { signal: ac.signal });
+  await sleep(10);
+  ac.abort(new Error("клиент отменил"));
+  assert.equal(await p, "ok");
+  assert.equal(signal.aborted, false);
+});
+
+test("повторный commit() заново взводит дедлайн", async () => {
+  const ok = defineResource({
+    name: "t.recommit1",
+    cache: false,
+    load: async (_a, ctx) => {
+      ctx.commit(100);
+      await sleep(70);
+      ctx.commit(100);
+      await sleep(70);
+      return "ok";
+    },
+  });
+  assert.equal(await ok(undefined), "ok");
+
+  const late = defineResource({
+    name: "t.recommit2",
+    cache: false,
+    load: async (_a, ctx) => {
+      ctx.commit(100);
+      await sleep(70);
+      ctx.commit(100);
+      await sleep(300);
+      return "поздно";
+    },
+  });
+  await assert.rejects(late(undefined), /после точки невозврата/);
+});
+
+test("cache:false: неизвестное имя в invalidates отклоняет вызов до load", async () => {
+  const load = counting();
+  const call = defineResource({ name: "t.nocacheunknown", cache: false, load, invalidates: ["no.such"] });
+  await assert.rejects(call(undefined), /invalidateResource: неизвестный ресурс "no\.such"/);
+  assert.equal(load.calls, 0);
+});
+
+test("cache:false: invalidates срабатывает после commit() и при успехе загрузчика", async () => {
+  const readLoad = counting();
+  const read = defineResource({ name: "t.read4", ttl: 60_000, key: () => "k", load: readLoad });
+  await read(undefined);
+
+  const write = defineResource({
+    name: "t.write4",
+    cache: false,
+    invalidates: ["t.read4"],
+    load: async (_a, ctx) => {
+      ctx.commit();
+      return "записано";
+    },
+  });
+  assert.equal(await write(undefined), "записано");
+  await read(undefined);
+  assert.equal(readLoad.calls, 2);
+});

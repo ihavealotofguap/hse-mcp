@@ -13,6 +13,8 @@ import { COMMIT_DEADLINE_MS } from "./commit.js";
  * - `cache: false` — ресурс записи: без кэша, дедупликации и заморозки результата. Загрузчик вызывает
  *   `ctx.commit()` в точке невозврата: исходный дедлайн заменяется дедлайном коммита, отмена
  *   вызывающего больше не прерывает вызов, а `invalidates` выполняется при любом исходе загрузки.
+ *   До `commit()` отмена вызывающего срабатывает и в `ctx.signal`, а `commit()` после отмены или
+ *   дедлайна бросает: загрузчик не должен проходить точку невозврата в уже отклонённом вызове.
  * - Имена из `invalidates` проверяются в начале каждого вызова, до загрузки.
  */
 
@@ -70,7 +72,8 @@ async function loadWithDeadline<A, Raw>(
   def: Pick<ResourceDef<A, Raw, unknown>, "name" | "load">,
   args: A,
   deadlineMs: number,
-  state: CallState
+  state: CallState,
+  callerSignal?: AbortSignal
 ): Promise<Raw> {
   const ctrl = new AbortController();
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -88,12 +91,23 @@ async function loadWithDeadline<A, Raw>(
     }, ms);
   };
   arm(deadlineMs, `${def.name} не уложился в ${deadlineMs / 1000} с`);
+  // До точки невозврата отмена вызывающего доходит до загрузчика (ctx.signal); после — игнорируется.
+  const onCallerAbort = () => {
+    if (state.committed) return;
+    const err = callerSignal?.reason ?? new Error("операция отменена");
+    ctrl.abort(err);
+    fail(err);
+  };
+  callerSignal?.addEventListener("abort", onCallerAbort, { once: true });
   const ctx: LoadContext = {
     signal: ctrl.signal,
     commit(ms) {
+      // Вызов уже отклонён (дедлайн, отмена) или завершён: точку невозврата проходить поздно —
+      // загрузчик должен упасть до необратимого шага, а не отправить данные, исход которых никто не увидит.
+      if (settled || ctrl.signal.aborted) {
+        throw ctrl.signal.reason ?? new Error(`${def.name}: вызов уже завершён, точка невозврата недоступна`);
+      }
       state.committed = true;
-      // Загрузчик, дожившийся до commit() после завершения вызова, таймер не взводит.
-      if (settled) return;
       const commitMs = ms ?? COMMIT_DEADLINE_MS;
       arm(commitMs, `${def.name} не уложился в ${commitMs / 1000} с после точки невозврата`);
     },
@@ -103,6 +117,7 @@ async function loadWithDeadline<A, Raw>(
   } finally {
     settled = true;
     clearTimeout(timer);
+    callerSignal?.removeEventListener("abort", onCallerAbort);
   }
 }
 
@@ -169,7 +184,7 @@ export function defineResource<A, Raw, R = Raw>(
       // Ресурс записи: без кэша и дедупликации; сброс зависимых ресурсов — только после commit().
       shared = (async () => {
         try {
-          return await loadWithDeadline(def, args, deadlineMs, state);
+          return await loadWithDeadline(def, args, deadlineMs, state, opts.signal);
         } finally {
           if (state.committed) for (const name of def.invalidates ?? []) invalidateResource(name);
         }
