@@ -492,7 +492,7 @@ export const deleteAdapter: WriteAdapter<DeleteArgs, DeleteObserved>;
 
 **Files:** нет изменений в коде (кроме правок по итоговому ревью).
 
-- [ ] **Step 1: `verification-before-completion`:** `npm run build` — код 0; `npm test` — `fail 0`, одноразовые `verify-N` выполненных задач проходят; `git status` чистый; в `git ls-files` нет `storage/`, `.env`, `.playwright-mcp/`, `docs/recon.md`; `grep` по diff на запрещённые утечки — в коде журнала и логов нет записи `text`, имён файлов, `cmid`, номеров заявок (приложить вывод).
+- [ ] **Step 1: `verification-before-completion`:** `npm run build` — код 0; `npm test` — `fail 0`, одноразовые `verify-N` выполненных задач проходят; `git status` чистый; в `git ls-files` нет `storage/`, `.env`, `.playwright-mcp/` (`docs/recon.md` до Task 18 ещё отслеживается — это ожидаемо); `grep` по diff на запрещённые утечки — в коде журнала и логов нет записи `text`, имён файлов, `cmid`, номеров заявок (приложить вывод).
 - [ ] **Step 2: `requesting-code-review`:** итоговое ревью всей ветки свежим ревьюером на самой сильной модели по спеке и плану; блокирующие и существенные замечания закрыть через `receiving-code-review`, затем снова Step 1.
 - [ ] **Step 3: `finishing-a-development-branch`:** показать владельцу итог (список коммитов, результаты проверок и живой проверки, оставшиеся допущения) и варианты завершения; PR в `master`, слияние и push — только по его слову. Обновить `docs/requirements.md`/`CLAUDE.md` строкой о статусе подпроекта №4.
 
