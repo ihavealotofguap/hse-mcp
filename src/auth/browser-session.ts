@@ -4,7 +4,8 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { chromium, type APIRequestContext, type Browser, type BrowserContext, type Page } from "playwright";
 import { config } from "../config.js";
 import { waitForRenderedBody } from "../dom-utils.js";
-import { acquirePageSlot, LEASE_GRACE_MS } from "../limiter.js";
+import { COMMIT_DEADLINE_MS } from "../commit.js";
+import { acquirePageSlot, LEASE_GRACE_MS, type PageSlotRelease } from "../limiter.js";
 import { projectRoot } from "../project-root.js";
 
 // Корень проекта берём из общего хелпера (от расположения файла, а не process.cwd()) — хосты вроде
@@ -201,6 +202,13 @@ export interface WithPageOptions {
 
 export interface PageCallContext {
   signal: AbortSignal;
+  /**
+   * Точка невозврата: гасит исходный дедлайн и снимает внешний `signal`, взводит дедлайн коммита
+   * (`deadlineMs` или `COMMIT_DEADLINE_MS`; повторный вызов — заново) и продлевает аренду слота.
+   * После отмены, дедлайна или завершения вызова бросает: загрузчик не должен проходить точку
+   * невозврата в уже отклонённом вызове.
+   */
+  commit(deadlineMs?: number): void;
 }
 
 const pageScope = new AsyncLocalStorage<true>();
@@ -233,7 +241,24 @@ export async function withPage<T>(
   else opts.signal?.addEventListener("abort", onExternalAbort, { once: true });
 
   let page: Page | undefined;
-  let release: (() => void) | undefined;
+  let release: PageSlotRelease | undefined;
+  let commitTimer: ReturnType<typeof setTimeout> | undefined;
+  let settled = false;
+  const commit = (ms?: number) => {
+    if (settled || ctrl.signal.aborted) {
+      throw ctrl.signal.reason ?? new Error(`${labelOf(url)}: вызов уже завершён, точка невозврата недоступна`);
+    }
+    // После точки невозврата исход записи нельзя терять: исходный дедлайн и отмена вызывающего не действуют.
+    clearTimeout(timer);
+    opts.signal?.removeEventListener("abort", onExternalAbort);
+    const commitMs = ms ?? COMMIT_DEADLINE_MS;
+    clearTimeout(commitTimer);
+    commitTimer = setTimeout(
+      () => ctrl.abort(new Error(`${labelOf(url)} не уложилась в ${commitMs / 1000} с после точки невозврата`)),
+      commitMs
+    );
+    release?.extendLease(commitMs + LEASE_GRACE_MS);
+  };
 
   const aborted = new Promise<never>((_, reject) => {
     ctrl.signal.addEventListener(
@@ -265,7 +290,7 @@ export async function withPage<T>(
     await p.goto(url, { waitUntil: "load" });
     await ensureAuthenticated(p, context, url);
     ctrl.signal.throwIfAborted();
-    return fn(p, { signal: ctrl.signal });
+    return fn(p, { signal: ctrl.signal, commit });
   });
   // Если победила отмена, поздний отказ `work` не должен стать unhandled rejection.
   work.catch(() => {});
@@ -273,7 +298,9 @@ export async function withPage<T>(
   try {
     return await Promise.race([work, aborted]);
   } finally {
+    settled = true;
     clearTimeout(timer);
+    clearTimeout(commitTimer);
     opts.signal?.removeEventListener("abort", onExternalAbort);
     await page?.close().catch(() => {});
     release?.();

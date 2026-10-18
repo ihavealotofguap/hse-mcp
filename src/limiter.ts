@@ -74,22 +74,41 @@ function waitUntil(startAt: number, signal?: AbortSignal): Promise<void> {
   });
 }
 
+/** Освобождение слота: идемпотентно; `extendLease(ms)` заново взводит аренду на `ms` (после точки невозврата). */
+export type PageSlotRelease = (() => void) & { extendLease(ms: number): void };
+
 /**
  * Дожидается свободного слота и паузы между открытиями. Возвращает идемпотентную функцию
  * освобождения слота. `leaseMs` — принудительное освобождение, если слот держат слишком долго.
  */
 export async function acquirePageSlot(
   opts: { signal?: AbortSignal; leaseMs?: number } = {}
-): Promise<() => void> {
+): Promise<PageSlotRelease> {
   await takeSlot(opts.signal);
   let released = false;
   let lease: ReturnType<typeof setTimeout> | undefined;
-  const release = () => {
-    if (released) return;
-    released = true;
+  const armLease = (leaseMs: number) => {
     if (lease) clearTimeout(lease);
-    releaseSlot();
+    lease = setTimeout(() => {
+      if (released) return;
+      console.error(`hsemcp: слот страницы удерживался дольше ${leaseMs} мс — освобождаю принудительно`);
+      release();
+    }, leaseMs);
+    lease.unref?.();
   };
+  const release: PageSlotRelease = Object.assign(
+    () => {
+      if (released) return;
+      released = true;
+      if (lease) clearTimeout(lease);
+      releaseSlot();
+    },
+    {
+      extendLease(ms: number) {
+        if (!released) armLease(ms);
+      },
+    }
+  );
 
   try {
     // Время старта резервируется синхронно, поэтому параллельные вызовы выстраиваются в очередь
@@ -103,15 +122,7 @@ export async function acquirePageSlot(
     throw err;
   }
 
-  if (opts.leaseMs !== undefined) {
-    const leaseMs = opts.leaseMs;
-    lease = setTimeout(() => {
-      if (released) return;
-      console.error(`hsemcp: слот страницы удерживался дольше ${leaseMs} мс — освобождаю принудительно`);
-      release();
-    }, leaseMs);
-    lease.unref?.();
-  }
+  if (opts.leaseMs !== undefined) armLease(opts.leaseMs);
   return release;
 }
 
