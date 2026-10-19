@@ -1,4 +1,6 @@
 import crypto from "node:crypto";
+import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import type { Locator, Page } from "playwright";
 import { PAGE_DEADLINE_MS, withPage, type PageCallContext } from "../../auth/browser-session.js";
@@ -613,6 +615,78 @@ const VIEW_WAIT_MS = COMMIT_DEADLINE_MS / 2;
 // Загрузка каждого файла добавляет время к исходному дедлайну страницы (до точки невозврата).
 const PER_FILE_MS = 10_000;
 
+// Предел буфера Playwright в `setInputFiles` (≈50 МБ); крупнее — проверенная копия во временной папке.
+const MAX_UPLOAD_BUFFER = 48 * 1024 * 1024;
+const UPLOAD_TMP_PREFIX = "hsemcp-upload-";
+const MIME_TYPES: Record<string, string> = {
+  ".pdf": "application/pdf",
+  ".txt": "text/plain",
+  ".doc": "application/msword",
+  ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  ".zip": "application/zip",
+  ".png": "image/png",
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+};
+
+/** Что передаётся в `setInputFiles`: байты в памяти либо путь к проверенной копии. */
+export interface PreparedUpload {
+  files: string | { name: string; mimeType: string; buffer: Buffer };
+  /** Убирает временную копию; для буфера ничего не делает. */
+  cleanup(): Promise<void>;
+}
+
+async function hashAt(p: string): Promise<{ size: number; sha256: string }> {
+  const hash = crypto.createHash("sha256");
+  let size = 0;
+  for await (const chunk of fs.createReadStream(p)) {
+    hash.update(chunk as Buffer);
+    size += (chunk as Buffer).length;
+  }
+  return { size, sha256: hash.digest("hex") };
+}
+
+/**
+ * Байты для загрузки — те, что покрыты токеном. Путь в `setInputFiles` не передаётся: Chromium читал
+ * бы файл в момент запроса пикера, и правка или подмена файла «исходящих» после сухого прогона ушла
+ * бы в систему. Файл читается один раз в Node, размер и sha256 сверяются с наблюдением `observe`;
+ * крупнее предела буфера — копия во временной папке под тем же именем, сверяется именно копия, и она
+ * же загружается. Расхождение или ошибка чтения — отказ без имени и пути (до точки невозврата).
+ */
+export async function prepareUpload(file: OutboxFile, n: number, opts: { maxBuffer?: number } = {}): Promise<PreparedUpload> {
+  const changed = () => new Refusal(`файл №${n} изменился после сухого прогона: выполните сухой прогон заново; операция прервана`);
+  const name = diskName(file);
+  if (file.size <= (opts.maxBuffer ?? MAX_UPLOAD_BUFFER)) {
+    let buffer: Buffer;
+    try {
+      if ((await fs.promises.stat(file.absPath)).size !== file.size) throw changed();
+      buffer = await fs.promises.readFile(file.absPath);
+    } catch {
+      throw changed();
+    }
+    if (buffer.length !== file.size || sha256Hex(buffer) !== file.sha256) throw changed();
+    const mimeType = MIME_TYPES[path.extname(name).toLowerCase()] ?? "application/octet-stream";
+    return { files: { name, mimeType, buffer }, cleanup: async () => {} };
+  }
+  const dir = await fs.promises.mkdtemp(path.join(os.tmpdir(), UPLOAD_TMP_PREFIX));
+  const cleanup = () => fs.promises.rm(dir, { recursive: true, force: true }).catch(() => {});
+  try {
+    const copy = path.join(dir, name);
+    let actual: { size: number; sha256: string };
+    try {
+      await fs.promises.copyFile(file.absPath, copy, fs.constants.COPYFILE_EXCL);
+      actual = await hashAt(copy);
+    } catch {
+      throw changed();
+    }
+    if (actual.size !== file.size || actual.sha256 !== file.sha256) throw changed();
+    return { files: copy, cleanup };
+  } catch (err) {
+    await cleanup();
+    throw err;
+  }
+}
+
 /** Ровно один элемент по селектору (селекторы с `:visible`), иначе отказ: неожиданная страница. */
 async function exactlyOne(page: Page, selector: string, what: string): Promise<Locator> {
   const loc = page.locator(selector);
@@ -671,14 +745,35 @@ async function managerNames(page: Page): Promise<string[]> {
 }
 
 /**
- * Один файл в файловый менеджер: клик «Добавить...» → вкладка «Загрузить файл» → `setInputFiles` →
- * клик «Загрузить этот файл» → при одноимённом файле только «Перезаписать» → пикер закрыт, имя в
- * списке. `replace` — имя уже есть в менеджере: тогда диалог одноимённого файла обязателен (§17,
- * шестой проход), без него — отказ по таймауту; для нового имени диалог — отказ.
+ * Один файл в файловый менеджер. Сначала байты сверяются с наблюдением `observe` (`prepareUpload`) —
+ * до первого клика в менеджере; временная копия крупного файла убирается после загрузки.
  */
 async function attachFile(
   page: Page,
   file: OutboxFile,
+  n: number,
+  replace: boolean,
+  check: () => void,
+  signal: AbortSignal
+): Promise<void> {
+  const prepared = await prepareUpload(file, n);
+  try {
+    await uploadPrepared(page, file, prepared.files, n, replace, check, signal);
+  } finally {
+    await prepared.cleanup();
+  }
+}
+
+/**
+ * Клик «Добавить...» → вкладка «Загрузить файл» → `setInputFiles` проверенных байтов → клик
+ * «Загрузить этот файл» → при одноимённом файле только «Перезаписать» → пикер закрыт, имя в списке.
+ * `replace` — имя уже есть в менеджере: тогда диалог одноимённого файла обязателен (§17, шестой
+ * проход), без него — отказ по таймауту; для нового имени диалог — отказ.
+ */
+async function uploadPrepared(
+  page: Page,
+  file: OutboxFile,
+  upload: PreparedUpload["files"],
   n: number,
   replace: boolean,
   check: () => void,
@@ -694,12 +789,12 @@ async function attachFile(
   check();
   await waitShown(page, SEL_UPLOAD_FORM, "в файловом пикере не активна вкладка «Загрузить файл»; операция прервана", signal);
   const input = await exactlyOne(page, SEL_UPLOAD_INPUT, "поле файла на вкладке «Загрузить файл»");
-  await input.setInputFiles(file.absPath);
+  await input.setInputFiles(upload);
   const picked = await input.evaluate((el) =>
     Array.from((el as HTMLInputElement).files ?? []).map((f) => ({ name: f.name, size: f.size }))
   );
   if (picked.length !== 1 || picked[0].name !== name || picked[0].size !== file.size) {
-    throw new Refusal(`файл №${n} не попал в поле загрузки или изменился на диске; операция прервана`);
+    throw new Refusal(`файл №${n} не попал в поле загрузки; операция прервана`);
   }
   check();
   await clickOnce(page, SEL_UPLOAD_BTN, "кнопка «Загрузить этот файл»");

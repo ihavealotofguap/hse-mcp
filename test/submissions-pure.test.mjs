@@ -1,6 +1,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import path from "node:path";
+import crypto from "node:crypto";
+import fs from "node:fs";
+import os from "node:os";
 
 const m = await import(new URL("../dist/services/lms/submissions.js", import.meta.url).href);
 const {
@@ -21,6 +24,7 @@ const {
   compareFiles,
   classifySubmitOutcome,
   classifyDeleteOutcome,
+  prepareUpload,
 } = m;
 const { classifyError } = await import(new URL("../dist/services/writes/runner.js", import.meta.url).href);
 
@@ -422,6 +426,96 @@ test("classifyDeleteOutcome: none + «Добавить ответ» → confirme
   assert.equal(classifyDeleteOutcome({ after: before, before, errorShown: true }).outcome, "rejected");
   assert.equal(classifyDeleteOutcome({ after: before, errorShown: true }).outcome, "unknown");
   assert.equal(classifyDeleteOutcome({ after: view({ state: "unknown" }), before, errorShown: true }).outcome, "unknown");
+});
+
+// --- prepareUpload: отправляются байты, покрытые токеном, а не путь ---
+
+const UPLOAD_PREFIX = "hsemcp-upload-";
+const uploadTmpDirs = () => fs.readdirSync(os.tmpdir()).filter((n) => n.startsWith(UPLOAD_PREFIX));
+const sha256Of = (data) => crypto.createHash("sha256").update(data).digest("hex");
+
+/** Временная папка «исходящих» с одним файлом; возвращает OutboxFile «как из observe». */
+function withOutboxFile(name, content, fn) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "prep-upload-test-"));
+  const absPath = path.join(dir, name);
+  fs.writeFileSync(absPath, content);
+  const file = { name, absPath, size: Buffer.byteLength(content), sha256: sha256Of(content) };
+  return Promise.resolve(fn(file, absPath, dir)).finally(() => fs.rmSync(dir, { recursive: true, force: true }));
+}
+
+async function assertUploadRefusal(promise, n, file, dir) {
+  await assert.rejects(promise, (err) => {
+    assert.ok(err instanceof Refusal, "отказ модуля, а не ошибка ввода-вывода");
+    assert.match(err.message, new RegExp(`файл №${n} изменился после сухого прогона`));
+    for (const s of [path.basename(file.absPath), "secret-report", dir, os.tmpdir()]) {
+      assert.ok(!err.message.includes(s), `в тексте ошибки не должно быть «${s}»: ${err.message}`);
+    }
+    return true;
+  });
+}
+
+test("prepareUpload: совпало — буфер под именем с диска", async () => {
+  await withOutboxFile("secret-report.pdf", "%PDF-1.4 test\n", async (file) => {
+    const prepared = await prepareUpload(file, 1);
+    try {
+      assert.equal(typeof prepared.files, "object");
+      assert.equal(prepared.files.name, "secret-report.pdf");
+      assert.equal(prepared.files.mimeType, "application/pdf");
+      assert.ok(Buffer.isBuffer(prepared.files.buffer));
+      assert.equal(sha256Of(prepared.files.buffer), file.sha256);
+    } finally {
+      await prepared.cleanup();
+    }
+  });
+});
+
+test("prepareUpload: то же имя и размер, другое содержимое — отказ без имени и пути", async () => {
+  await withOutboxFile("secret-report.pdf", "AAAA", async (file, absPath, dir) => {
+    fs.writeFileSync(absPath, "BBBB");
+    await assertUploadRefusal(prepareUpload(file, 2), 2, file, dir);
+  });
+});
+
+test("prepareUpload: размер изменился — отказ", async () => {
+  await withOutboxFile("secret-report.pdf", "AAAA", async (file, absPath, dir) => {
+    fs.writeFileSync(absPath, "AAAAA");
+    await assertUploadRefusal(prepareUpload(file, 3), 3, file, dir);
+  });
+});
+
+test("prepareUpload: файла нет — отказ без имени и пути", async () => {
+  await withOutboxFile("secret-report.pdf", "AAAA", async (file, absPath, dir) => {
+    fs.rmSync(absPath);
+    await assertUploadRefusal(prepareUpload(file, 1), 1, file, dir);
+  });
+});
+
+test("prepareUpload: выше предела буфера — копия во временной папке, проверена и убрана", async () => {
+  await withOutboxFile("secret-report.pdf", "large enough", async (file, _absPath, dir) => {
+    const before = uploadTmpDirs().length;
+    const prepared = await prepareUpload(file, 1, { maxBuffer: 4 });
+    let copy;
+    try {
+      assert.equal(typeof prepared.files, "string");
+      copy = prepared.files;
+      assert.equal(path.basename(copy), "secret-report.pdf");
+      assert.ok(!copy.startsWith(dir), "копия не в папке «исходящих»");
+      assert.equal(sha256Of(fs.readFileSync(copy)), file.sha256);
+    } finally {
+      await prepared.cleanup();
+    }
+    assert.ok(!fs.existsSync(path.dirname(copy)), "временная папка удалена");
+    assert.equal(uploadTmpDirs().length, before);
+  });
+});
+
+test("prepareUpload: копия с изменённым содержимым — отказ и временная папка убрана", async () => {
+  await withOutboxFile("secret-report.pdf", "AAAAAAAA", async (file, absPath, dir) => {
+    fs.writeFileSync(absPath, "BBBBBBBB");
+    const before = uploadTmpDirs().length;
+    await assertUploadRefusal(prepareUpload(file, 4, { maxBuffer: 4 }), 4, file, dir);
+    assert.equal(uploadTmpDirs().length, before);
+  });
 });
 
 // Сообщения Playwright `page.goto` несут URL с query (id задания): в ответ тула им попадать нельзя.
