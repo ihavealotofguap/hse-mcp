@@ -603,3 +603,213 @@ test("sanitizeNavigationError: собственные отказы модуля 
   }
   assert.equal(caught[0].message, "онлайн-текст в v1 не поддерживается");
 });
+
+// --- H2: усиление разбора, проверок форм и проверки после сохранения ---
+
+const { checkButtonForm, sanitizeCommitError } = m;
+const SHA_C = "c".repeat(64);
+
+test("buildAssignmentView: два класса статуса сразу (отправлено и черновик/новый) — unknown", () => {
+  for (const second of ["submissiondraft", "submissionstatusdraft", "submissionstatusnew"]) {
+    const v = buildAssignmentView(rawPage({ statusClasses: ["submissionstatussubmitted", second, "cell"], buttons: ["Редактировать ответ"] }), 1, [], NOW);
+    assert.equal(v.state, "unknown", second);
+  }
+  assert.equal(buildAssignmentView(rawPage({ statusClasses: ["submissiondraft", "submissionstatusnew"] }), 1, [], NOW).state, "unknown");
+  assert.equal(buildAssignmentView(rawPage({ statusClasses: ["submissionstatussubmitted", "cell", "c1"] }), 1, [], NOW).state, "submitted");
+});
+
+test("buildAssignmentView и planSubmission: одноимённые файлы ответа (вложенные папки) — не схлопываются, отказ", () => {
+  const dup = [
+    { name: "secret-report.pdf", size: 5, sha256: SHA_A },
+    { name: "Secret-Report.PDF", size: 7, sha256: SHA_B },
+  ];
+  const v = buildAssignmentView(rawPage({ statusClasses: ["submissionstatussubmitted"], buttons: ["Редактировать ответ"] }), 1, dup, NOW);
+  assert.equal(v.state, "unknown");
+  assertRefusal(
+    () => planSubmission(view({ state: "submitted", canAdd: false, canEdit: true, files: dup }), form(), [outboxFile("b.txt", 3)]),
+    /одинаков/,
+    ["secret-report", "Secret-Report"]
+  );
+  assertRefusal(() => checkDeletePreconditions(v), /не распознано/);
+});
+
+test("buildAssignmentView: «просрочено» при кнопке «Добавить ответ» — по-прежнему отказ (решение владельца не принято)", () => {
+  const v = buildAssignmentView(rawPage({ remaining: "Задание просрочено на: 1 дн. 2 час.", buttons: ["Добавить ответ на задание"] }), 1, [], NOW);
+  assert.equal(v.closed?.reason, "overdue");
+  assert.equal(v.canAdd, true);
+  assertRefusal(() => planSubmission(v, form(), [outboxFile("a.txt", 3)]), /просрочено/);
+});
+
+test("submitAdapter.describe: условные предупреждения — уже отправлено, перезапись, лимит неизвестен", () => {
+  const base = ["сохранение может сразу отправить работу на оценку (у проверенных заданий отдельного шага нет)", "форма правки открывалась и не сохранялась"];
+  const args = { cmid: 42, mode: "draft", files: ["b.txt"] };
+  const plain = submitAdapter.describe(args, { view: view(), form: form(), files: [outboxFile("b.txt", 3)] });
+  assert.deepEqual(plain.warnings, base);
+  assert.equal(plain.preview.action, "новый ответ");
+
+  const submitted = view({ state: "submitted", canAdd: false, canEdit: true, files: [{ name: "a.txt", size: 5, sha256: SHA_A }] });
+  const edit = submitAdapter.describe(args, { view: submitted, form: form(), files: [outboxFile("b.txt", 3)] });
+  assert.equal(edit.warnings.length, 3);
+  assert.ok(edit.warnings.some((w) => /уже отправлен на оценку/.test(w)));
+  assert.equal(edit.preview.action, "правка ответа");
+
+  const over = submitAdapter.describe(args, { view: submitted, form: form(), files: [outboxFile("a.txt", 3)] });
+  assert.ok(over.warnings.some((w) => /одноимённые файлы ответа будут перезаписаны/.test(w)));
+
+  for (const limits of [{ maxBytes: null }, { maxFiles: null }]) {
+    const unknown = submitAdapter.describe(args, { view: view(), form: form(limits), files: [outboxFile("b.txt", 3)] });
+    assert.deepEqual(unknown.warnings.slice(0, 2), base);
+    assert.ok(unknown.warnings.some((w) => /лимит размера или числа файлов на форме не найден/.test(w)));
+    assert.equal(unknown.warnings.length, 3);
+  }
+});
+
+test("classifySubmitOutcome: нетронутые файлы ответа сверяются с «до» по sha256", () => {
+  const sent = { name: "a.txt", size: 4, sha256: SHA_B };
+  const keep = { name: "n.txt", size: 2, sha256: SHA_A };
+  const before = view({ state: "submitted", canAdd: false, canEdit: true, lastModified: "вчера", files: [fileOld, keep] });
+  const expected = [{ name: "a.txt", sha256: SHA_B }];
+  const ok = classifySubmitOutcome({ mode: "submit", expected, before, expectedTotal: 2, after: view({ ...before, lastModified: "сегодня", files: [sent, keep] }) });
+  assert.equal(ok.outcome, "confirmed");
+  assert.equal(ok.evidence.untouchedMatch, true);
+  assert.equal(ok.evidence.lastModifiedChanged, true);
+
+  // Нетронутый файл изменился.
+  const changed = classifySubmitOutcome({ mode: "submit", expected, before, expectedTotal: 2, after: view({ ...before, lastModified: "сегодня", files: [sent, { ...keep, sha256: SHA_C }] }) });
+  assert.equal(changed.outcome, "unknown");
+  assert.equal(changed.evidence.untouchedMatch, false);
+
+  // Нетронутый файл пропал, вместо него другой (число совпало).
+  const swapped = classifySubmitOutcome({ mode: "submit", expected, before, expectedTotal: 2, after: view({ ...before, files: [sent, { ...keep, name: "x.txt" }] }) });
+  assert.equal(swapped.outcome, "unknown");
+  assert.equal(swapped.evidence.untouchedMatch, false);
+  assert.ok(!JSON.stringify(swapped).includes("n.txt"));
+
+  // Проверка повтора (без «до»): прежнее, более слабое сравнение и прежний вид evidence.
+  const replay = classifySubmitOutcome({ mode: "submit", expected, after: view({ ...before, files: [sent, { ...keep, sha256: SHA_C }] }) });
+  assert.equal(replay.outcome, "confirmed");
+  assert.equal("untouchedMatch" in replay.evidence, false);
+});
+
+test("classifySubmitOutcome: «Последнее изменение» — в evidence, но не единственный признак", () => {
+  const before = view({ state: "submitted", canAdd: false, canEdit: true, lastModified: "вчера", files: [fileOld] });
+  const expected = [{ name: "a.txt", sha256: SHA_A }];
+  // Время изменилось, а байты не те — не confirmed.
+  const r = classifySubmitOutcome({ mode: "submit", expected, before, after: view({ ...before, lastModified: "сегодня" }) });
+  assert.equal(r.outcome, "unknown");
+  assert.equal(r.evidence.lastModifiedChanged, true);
+  // Байты совпали, время прежнее — подтверждено (время не обязательное условие), признак false.
+  const same = classifySubmitOutcome({ mode: "submit", expected, before, after: view({ ...before, files: [fileA] }) });
+  assert.equal(same.outcome, "confirmed");
+  assert.equal(same.evidence.lastModifiedChanged, false);
+});
+
+test("prepareUpload: сбой временной папки — отказ «не удалось подготовить» без пути", async () => {
+  await withOutboxFile("secret-report.pdf", "large enough", async (file, _absPath, dir) => {
+    const bogus = path.join(os.tmpdir(), "no-such-dir-h2", "deeper");
+    const saved = { TEMP: process.env.TEMP, TMP: process.env.TMP, TMPDIR: process.env.TMPDIR };
+    process.env.TEMP = process.env.TMP = process.env.TMPDIR = bogus;
+    try {
+      await assert.rejects(prepareUpload(file, 3, { maxBuffer: 4 }), (err) => {
+        assert.ok(err instanceof Refusal);
+        assert.match(err.message, /^не удалось подготовить файл №3 к отправке/);
+        for (const s of [bogus, "no-such-dir-h2", dir, "secret-report"]) assert.ok(!err.message.includes(s), err.message);
+        return true;
+      });
+    } finally {
+      for (const [k, val] of Object.entries(saved)) {
+        if (val === undefined) delete process.env[k];
+        else process.env[k] = val;
+      }
+    }
+  });
+});
+
+test("prepareUpload: сбой копирования — «не удалось подготовить», а не «изменился»", async () => {
+  await withOutboxFile("secret-report.pdf", "large enough", async (file, absPath, dir) => {
+    fs.rmSync(absPath);
+    const before = uploadTmpDirs().length;
+    await assert.rejects(prepareUpload(file, 2, { maxBuffer: 4 }), (err) => {
+      assert.ok(err instanceof Refusal);
+      assert.match(err.message, /^не удалось подготовить файл №2 к отправке/);
+      assert.doesNotMatch(err.message, /изменился/);
+      for (const s of [dir, os.tmpdir(), "secret-report"]) assert.ok(!err.message.includes(s), err.message);
+      return true;
+    });
+    assert.equal(uploadTmpDirs().length, before);
+  });
+});
+
+test("sanitizeCommitError: отказ точки невозврата — свой текст по классу, без путей; readPage его не переписывает", () => {
+  const journal = new Error("EISDIR: illegal operation on a directory, open 'C:\\Users\\x\\storage\\writes\\journal.json.1.tmp'");
+  const j = sanitizeCommitError(journal);
+  assert.match(j.message, /журнал/);
+  assert.doesNotMatch(j.message, /не удалось открыть или прочитать/);
+  for (const s of ["storage", "C:\\", "journal.json", "EISDIR"]) assert.ok(!j.message.includes(s), j.message);
+  assert.equal(classifyError(j), "other");
+  assert.equal(sanitizeNavigationError(j), j);
+
+  const deadline = sanitizeCommitError(new Error("writes.lms_submit_assignment не уложился в 45 с"));
+  assert.equal(classifyError(deadline), "timeout");
+  const abort = sanitizeCommitError(new DOMException("aborted", "TimeoutError"));
+  assert.equal(classifyError(abort), "timeout");
+  assert.equal(abort.name, "TimeoutError");
+  const cancelled = sanitizeCommitError(new Error("операция отменена"));
+  assert.equal(classifyError(cancelled), "cancelled");
+  assert.equal(sanitizeNavigationError(cancelled), cancelled);
+
+  const done = sanitizeCommitError(new Error("writes.x: вызов уже завершён, точка невозврата недоступна"));
+  assert.match(done.message, /точка невозврата недоступна/);
+  assert.doesNotMatch(done.message, /журнал/);
+  assert.equal(classifyError(done), "other");
+});
+
+/** Форма кнопки «как из страницы»: метод, путь адреса, скрытые поля. */
+function buttonForm(method, fields, over = {}) {
+  return { hasForm: true, method, actionPath: "/mod/assign/view.php", fields: Object.entries(fields).map(([name, value]) => ({ name, value })), ...over };
+}
+const SAVE_FIELDS = { lastmodified: "1", id: "42", userid: "9", action: "savesubmission", _qf__mod_assign_submission_form: "1", files_filemanager: "123", sesskey: "k" };
+const DELETE_FIELDS = { id: "42", action: "removesubmissionconfirm" };
+const CONTINUE_FIELDS = { id: "42", action: "removesubmission", userid: "9", sesskey: "k" };
+const without = (obj, key) => Object.fromEntries(Object.entries(obj).filter(([k]) => k !== key));
+
+test("checkButtonForm: «Сохранить» — POST на view.php, id = cmid, поля формы правки из §17", () => {
+  assert.doesNotThrow(() => checkButtonForm(buttonForm("post", SAVE_FIELDS), "save", 42));
+  const dupId = buttonForm("post", SAVE_FIELDS);
+  dupId.fields.push({ name: "id", value: "42" });
+  const bad = [
+    buttonForm("get", SAVE_FIELDS),
+    buttonForm("post", SAVE_FIELDS, { actionPath: "/mod/assign/other.php" }),
+    buttonForm("post", SAVE_FIELDS, { actionPath: null }),
+    buttonForm("post", SAVE_FIELDS, { hasForm: false }),
+    buttonForm("post", { ...SAVE_FIELDS, id: "43" }),
+    buttonForm("post", { ...SAVE_FIELDS, action: "" }),
+    buttonForm("post", without(SAVE_FIELDS, "files_filemanager")),
+    buttonForm("post", without(SAVE_FIELDS, "_qf__mod_assign_submission_form")),
+    buttonForm("post", without(SAVE_FIELDS, "id")),
+    dupId,
+  ];
+  for (const raw of bad) assertRefusal(() => checkButtonForm(raw, "save", 42), /Сохранить.*до отправки/, ["42", "43", "savesubmission"]);
+});
+
+test("checkButtonForm: «Удалить ответ» — GET на removesubmissionconfirm; «Продолжить» — POST с полями §17", () => {
+  assert.doesNotThrow(() => checkButtonForm(buttonForm("get", DELETE_FIELDS), "delete", 42));
+  for (const raw of [
+    buttonForm("post", DELETE_FIELDS),
+    buttonForm("get", { ...DELETE_FIELDS, action: "removesubmission" }),
+    buttonForm("get", { ...DELETE_FIELDS, id: "7" }),
+    buttonForm("get", { id: "42" }),
+  ]) {
+    assertRefusal(() => checkButtonForm(raw, "delete", 42), /Удалить ответ/, ["42", "removesubmission"]);
+  }
+  assert.doesNotThrow(() => checkButtonForm(buttonForm("post", CONTINUE_FIELDS), "continue", 42));
+  for (const raw of [
+    buttonForm("get", CONTINUE_FIELDS),
+    buttonForm("post", without(CONTINUE_FIELDS, "sesskey")),
+    buttonForm("post", without(CONTINUE_FIELDS, "userid")),
+    buttonForm("post", { ...CONTINUE_FIELDS, id: "7" }),
+    buttonForm("post", CONTINUE_FIELDS, { actionPath: "/login/logout.php" }),
+  ]) {
+    assertRefusal(() => checkButtonForm(raw, "continue", 42), /Продолжить/, ["42", "sesskey"]);
+  }
+});
