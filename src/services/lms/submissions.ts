@@ -378,6 +378,13 @@ export function planSubmission(view: AssignmentView, form: EditFormInfo, files: 
       if (f.size > maxBytes) throw new Refusal(`файл №${i + 1} больше допустимого размера задания (${formatBytes(maxBytes)})`);
     });
   }
+  // Проверка после сохранения скачивает файл со страницы статуса; крупнее предела скачивания исход
+  // записи нельзя будет установить ни сразу, ни повтором — отказ до записи, а не отправка вслепую.
+  files.forEach((f, i) => {
+    if (f.size > MAX_VERIFY_DOWNLOAD) {
+      throw new Refusal(`файл №${i + 1} больше ${formatBytes(MAX_VERIFY_DOWNLOAD)}: результат отправки нельзя будет проверить`);
+    }
+  });
   return { add, replace, total };
 }
 

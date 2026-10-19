@@ -633,6 +633,23 @@ test("buildAssignmentView и planSubmission: одноимённые файлы �
   assertRefusal(() => checkDeletePreconditions(v), /не распознано/);
 });
 
+test("planSubmission: присланный файл крупнее предела проверки (64 Мбайт) — отказ до записи", () => {
+  const big = form({ maxBytes: 512 * MIB });
+  const atLimit = planSubmission(view(), big, [outboxFile("secret-report.pdf", 64 * MIB)]);
+  assert.equal(atLimit.total, 1);
+  assert.equal(planSubmission(view(), form({ maxBytes: null }), [outboxFile("secret-report.pdf", 64 * MIB)]).total, 1);
+  assertRefusal(
+    () => planSubmission(view(), big, [outboxFile("a.txt", 3), outboxFile("secret-report.pdf", 64 * MIB + 1)]),
+    /^файл №2 больше 64 Мбайт: результат отправки нельзя будет проверить$/,
+    ["secret-report", "outbox", "a.txt"]
+  );
+  assertRefusal(
+    () => planSubmission(view(), form({ maxBytes: null }), [outboxFile("secret-report.pdf", 64 * MIB + 1)]),
+    /^файл №1 больше 64 Мбайт: результат отправки нельзя будет проверить$/,
+    ["secret-report", "outbox"]
+  );
+});
+
 test("buildAssignmentView: «просрочено» при кнопке «Добавить ответ» — по-прежнему отказ (решение владельца не принято)", () => {
   const v = buildAssignmentView(rawPage({ remaining: "Задание просрочено на: 1 дн. 2 час.", buttons: ["Добавить ответ на задание"] }), 1, [], NOW);
   assert.equal(v.closed?.reason, "overdue");
