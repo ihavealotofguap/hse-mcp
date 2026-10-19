@@ -300,3 +300,33 @@ test("cache:false: invalidates срабатывает после commit() и п�
   await read(undefined);
   assert.equal(readLoad.calls, 2);
 });
+
+/** Вызывает `fn` при подключённом шпионе unhandledRejection; возвращает собранные причины. */
+async function withRejectionSpy(fn) {
+  const seen = [];
+  const spy = (reason) => seen.push(reason);
+  process.on("unhandledRejection", spy);
+  try {
+    await fn();
+    // unhandledRejection обрабатывается после опустошения микрозадач — даём тикам отработать
+    await sleep(30);
+  } finally {
+    process.off("unhandledRejection", spy);
+  }
+  return seen;
+}
+
+test("abort вызывающего синхронно внутри load (до первого await): отказ без unhandledRejection", async () => {
+  const variants = {
+    "cache:false": (ctrl) => defineResource({ name: "t.syncabort1", cache: false, load: (_a, _ctx) => (ctrl.abort(new Error("отменено")), Promise.reject(new Error("после отмены"))) }),
+    "кэшируемый": (ctrl) => defineResource({ name: "t.syncabort2", ttl: 1000, key: () => "k", load: (_a, _ctx) => (ctrl.abort(new Error("отменено")), Promise.reject(new Error("после отмены"))) }),
+  };
+  for (const [label, make] of Object.entries(variants)) {
+    const ctrl = new AbortController();
+    const call = make(ctrl);
+    const seen = await withRejectionSpy(async () => {
+      await assert.rejects(call(undefined, { signal: ctrl.signal }), /отменено/, label);
+    });
+    assert.deepEqual(seen, [], `${label}: unhandledRejection`);
+  }
+});

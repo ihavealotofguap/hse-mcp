@@ -124,6 +124,9 @@ async function loadWithDeadline<A, Raw>(
 function detach<T>(promise: Promise<T>, state: CallState, signal?: AbortSignal): Promise<T> {
   if (!signal) return promise;
   if (signal.aborted && !state.committed) {
+    // `promise` отвергаем без подписки: его отказ (загрузчик, отменивший сигнал синхронно до первого
+    // await) иначе остался бы без обработчика и дал unhandledRejection.
+    promise.catch(() => {});
     return Promise.reject(signal.reason ?? new Error("операция отменена"));
   }
   return new Promise<T>((resolve, reject) => {

@@ -147,3 +147,36 @@ test("повреждённый журнал при чтении: пусто, б�
   assert.equal(await latestByToken("aaaaaaaaaaaa", dir), undefined);
   assert.deepEqual(await findUnresolvedByTarget("bbbbbbbbbbbb", dir), []);
 });
+
+test("чтение — белый список полей: лишние поля из правленого вручную файла не всплывают и не переписываются", async () => {
+  const dir = tmpDir();
+  const seeded = { ...entry({ tokenId: "seedseedseed", stage: "verified", outcome: "confirmed" }), text: "секрет", name: "file.pdf" };
+  fs.writeFileSync(path.join(dir, "journal.json"), JSON.stringify([seeded]));
+  const last = await latestByToken("seedseedseed", dir);
+  assert.equal(last.stage, "verified");
+  assert.ok(!("text" in last) && !("name" in last));
+  assert.deepEqual(await findUnresolvedByTarget("bbbbbbbbbbbb", dir), []);
+  // файл переписывается следующей записью — лишних полей уже нет, карантина нет (все элементы валидны)
+  await recordJournal(entry({ tokenId: "othrothrothr" }), dir);
+  const raw = fs.readFileSync(path.join(dir, "journal.json"), "utf8");
+  assert.ok(!raw.includes("секрет") && !raw.includes("file.pdf"));
+  assert.equal(readJournal(dir).length, 2);
+  assert.deepEqual(fs.readdirSync(dir).filter((n) => n.includes(".corrupt-")), []);
+});
+
+test("валидный массив с невалидными элементами: чтение их игнорирует, запись уводит оригинал в .corrupt-<ts>", async () => {
+  const dir = tmpDir();
+  const good = entry({ tokenId: "goodgoodgood" });
+  const original = JSON.stringify([good, { at: 5, tokenId: "x" }, "строка", null, { at: new Date().toISOString() }]);
+  fs.writeFileSync(path.join(dir, "journal.json"), original);
+  // чтение: игнор плохих элементов, файл не трогается
+  assert.equal((await latestByToken("goodgoodgood", dir)).tokenId, "goodgoodgood");
+  assert.equal(fs.readFileSync(path.join(dir, "journal.json"), "utf8"), original);
+  assert.deepEqual(fs.readdirSync(dir).filter((n) => n.includes(".corrupt-")), []);
+  // запись: оригинал в карантине, в новом журнале валидная запись и новая
+  await recordJournal(entry({ tokenId: "newnewnewnew" }), dir);
+  const corrupt = fs.readdirSync(dir).filter((n) => /^journal\.json\.corrupt-\d+/.test(n));
+  assert.equal(corrupt.length, 1);
+  assert.equal(fs.readFileSync(path.join(dir, corrupt[0]), "utf8"), original);
+  assert.deepEqual(readJournal(dir).map((e) => e.tokenId), ["goodgoodgood", "newnewnewnew"]);
+});

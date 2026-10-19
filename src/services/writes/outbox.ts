@@ -4,6 +4,7 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { config } from "../../config.js";
 import { errCode } from "../../fs-lock.js";
+import { projectRoot as realProjectRoot } from "../../project-root.js";
 
 // Каноническая форма пути (раскрывает симлинки и junction, на Windows приводит регистр диска и имён).
 const realpath = promisify(fs.realpath.native);
@@ -13,6 +14,7 @@ const MAX_NAME_LENGTH = 255;
 const CHUNK = 64 * 1024;
 
 export interface OutboxFile {
+  /** Имя на диске (`basename` канонического пути), а не написание из запроса модели. */
   name: string;
   absPath: string;
   size: number;
@@ -43,6 +45,20 @@ export function isInsideDir(dir: string, file: string): boolean {
   if (f === d) return false;
   const prefix = d.endsWith(path.sep) ? d : d + path.sep;
   return f.startsWith(prefix);
+}
+
+/**
+ * Папка «исходящих» не должна быть корнем проекта или его `storage`, содержать их или быть корнем
+ * диска: иначе `.env` и `storage/hse-session.json` адресовались бы обычным именем файла.
+ * Оба пути должны быть канонизированы `realpath`.
+ */
+function misplacedOutbox(dirReal: string, root: string): boolean {
+  const dir = comparable(dirReal);
+  const rootC = comparable(root);
+  const storageC = comparable(path.join(root, "storage"));
+  if (dir === rootC || dir === storageC) return true;
+  if (isInsideDir(dirReal, root) || isInsideDir(dirReal, path.join(root, "storage"))) return true;
+  return dir === comparable(path.parse(dir).root);
 }
 
 /** Причина отказа по самому имени (без обращения к диску) или `null`. */
@@ -77,7 +93,7 @@ async function hashFile(handle: fs.promises.FileHandle, expected: number): Promi
  */
 export async function resolveOutboxFiles(
   names: string[],
-  opts: { dir?: string; maxFiles?: number; maxBytes?: number } = {}
+  opts: { dir?: string; maxFiles?: number; maxBytes?: number; projectRoot?: string } = {}
 ): Promise<OutboxFile[]> {
   const maxFiles = opts.maxFiles ?? DEFAULT_MAX_FILES;
   if (!Array.isArray(names) || names.length === 0) throw new Error("Не указано ни одного файла");
@@ -89,6 +105,14 @@ export async function resolveOutboxFiles(
     if (!(await fs.promises.stat(dirReal)).isDirectory()) throw new Error("не папка");
   } catch {
     throw new Error("Папка «исходящих» недоступна: создайте её (storage/outbox или HSE_OUTBOX_DIR)");
+  }
+  // Корень проекта канонизируем так же, как папку (junction/регистр); `projectRoot` в opts — для проверок.
+  const root = await realpath(opts.projectRoot ?? realProjectRoot).catch(() => path.resolve(opts.projectRoot ?? realProjectRoot));
+  if (misplacedOutbox(dirReal, root)) {
+    throw new Error(
+      "Папка «исходящих» настроена неверно: она не должна совпадать с каталогом проекта или его storage, " +
+        "содержать их или быть корнем диска (проверьте HSE_OUTBOX_DIR)"
+    );
   }
 
   const result: OutboxFile[] = [];
@@ -124,6 +148,19 @@ export async function resolveOutboxFiles(
     if (dupReal !== undefined) throw new Error(`Файл №${n}: тот же файл, что и №${dupReal}`);
     seenReal.set(realKey, n);
 
+    // На POSIX тип проверяем до open: открытие FIFO без писателя блокируется навсегда. На Windows open
+    // устройств отсечён проверкой имён, поведение прежнее.
+    if (process.platform !== "win32") {
+      let isRegular = false;
+      try {
+        isRegular = (await fs.promises.stat(real)).isFile();
+      } catch {
+        throw new Error(`Файл №${n}: не удалось открыть`);
+      }
+      if (!isRegular) throw new Error(`Файл №${n}: не обычный файл`);
+    }
+
+    // Окно между realpath и open (подмена файла) принято: содержимое перепроверяется по sha256 при загрузке.
     let handle: fs.promises.FileHandle;
     try {
       handle = await fs.promises.open(real, "r");
@@ -139,7 +176,7 @@ export async function resolveOutboxFiles(
       }
       const { sha256, bytes } = await hashFile(handle, st.size);
       if (bytes !== st.size) throw new Error(`Файл №${n}: изменился во время чтения`);
-      result.push({ name, absPath: real, size: st.size, sha256 });
+      result.push({ name: path.basename(real), absPath: real, size: st.size, sha256 });
     } catch (err) {
       // Свои отказы уже без имён; ошибки ввода-вывода (с путём в тексте) заменяем.
       if (err instanceof Error && err.message.startsWith(`Файл №${n}:`)) throw err;

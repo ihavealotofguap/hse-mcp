@@ -1,5 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
@@ -217,6 +218,97 @@ test("симлинк на файл в соседней папке с общим 
       return;
     }
     await assertRefused(["rel.txt"], { dir: s.dir }, /файл №1/i);
+  } finally {
+    s.cleanup();
+  }
+});
+
+test("name — имя на диске (basename realpath), а не написание из запроса", async () => {
+  const s = setup();
+  try {
+    fs.writeFileSync(path.join(s.dir, "Report.PDF"), "x");
+    // на Windows (регистронезависимая ФС) запрос «report.pdf» находит «Report.PDF»; на POSIX имя совпадает буквально
+    const asked = process.platform === "win32" ? "report.pdf" : "Report.PDF";
+    const [f] = await resolveOutboxFiles([asked], { dir: s.dir });
+    assert.equal(f.name, "Report.PDF");
+    assert.equal(f.name, path.basename(f.absPath));
+  } finally {
+    s.cleanup();
+  }
+});
+
+test("дубликат по realpath: симлинк на файл внутри папки — «тот же файл»", async (t) => {
+  const s = setup();
+  try {
+    try {
+      fs.symlinkSync(path.join(s.dir, "a.txt"), path.join(s.dir, "alias.txt"), "file");
+    } catch {
+      t.skip("нет прав на создание симлинка");
+      return;
+    }
+    await assertRefused(["a.txt", "alias.txt"], { dir: s.dir }, /файл №2: тот же файл, что и №1/i);
+  } finally {
+    s.cleanup();
+  }
+});
+
+test("жёсткие ссылки на один файл — разные записи каталога (разные realpath): принимаются как два файла с одним sha256", async (t) => {
+  const s = setup();
+  try {
+    try {
+      fs.linkSync(path.join(s.dir, "a.txt"), path.join(s.dir, "hard.txt"));
+    } catch {
+      t.skip("жёсткие ссылки недоступны");
+      return;
+    }
+    const files = await resolveOutboxFiles(["a.txt", "hard.txt"], { dir: s.dir });
+    assert.equal(files.length, 2);
+    assert.equal(files[0].sha256, files[1].sha256);
+    assert.deepEqual(files.map((f) => f.name), ["a.txt", "hard.txt"]);
+  } finally {
+    s.cleanup();
+  }
+});
+
+test("FIFO в папке: отказ без зависания (POSIX)", async (t) => {
+  if (process.platform === "win32") return t.skip("FIFO — только POSIX");
+  const s = setup();
+  try {
+    const made = spawnSync("mkfifo", [path.join(s.dir, "pipe")]);
+    if (made.status !== 0) return t.skip("mkfifo недоступен");
+    let timer;
+    const hang = new Promise((_, reject) => (timer = setTimeout(() => reject(new Error("resolveOutboxFiles завис на FIFO")), 3000)));
+    try {
+      await Promise.race([assertRefused(["pipe"], { dir: s.dir }, /файл №1: не обычный файл/i), hang]);
+    } finally {
+      clearTimeout(timer);
+    }
+  } finally {
+    s.cleanup();
+  }
+});
+
+test("папка «исходящих» не должна совпадать с корнем проекта, его storage, содержать их или быть корнем диска", async () => {
+  const s = setup();
+  try {
+    const fakeRoot = path.join(s.root, "proj");
+    const storage = path.join(fakeRoot, "storage");
+    fs.mkdirSync(path.join(storage, "outbox"), { recursive: true });
+    fs.writeFileSync(path.join(fakeRoot, ".env"), "HSE_PASSWORD=x");
+    fs.writeFileSync(path.join(storage, "hse-session.json"), "{}");
+    fs.writeFileSync(path.join(storage, "outbox", "ok.txt"), "ok");
+
+    const refusal = /Папка «исходящих» настроена неверно/;
+    // без реквизитов: ни .env, ни hse-session.json по имени не адресуются ни в одном из случаев
+    await assertRefused([".env"], { dir: fakeRoot, projectRoot: fakeRoot }, refusal);
+    await assertRefused(["hse-session.json"], { dir: storage, projectRoot: fakeRoot }, refusal);
+    await assertRefused(["a.txt"], { dir: s.root, projectRoot: fakeRoot }, refusal); // родитель корня проекта
+    await assertRefused(["a.txt"], { dir: path.parse(s.root).root, projectRoot: fakeRoot }, refusal); // корень диска
+    // обычная подпапка внутри проекта (storage/outbox) допустима
+    const files = await resolveOutboxFiles(["ok.txt"], { dir: path.join(storage, "outbox"), projectRoot: fakeRoot });
+    assert.equal(files[0].name, "ok.txt");
+    // и папка рядом с проектом
+    assert.equal((await resolveOutboxFiles(["a.txt"], { dir: s.dir, projectRoot: fakeRoot }))[0].size, 5);
   } finally {
     s.cleanup();
   }

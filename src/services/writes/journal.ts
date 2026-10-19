@@ -34,7 +34,11 @@ function pick(e: JournalEntry): JournalEntry {
 const isEntry = (v: unknown): v is JournalEntry =>
   !!v && typeof v === "object" && typeof (v as JournalEntry).at === "string" && typeof (v as JournalEntry).tokenId === "string";
 
-/** `corrupt` — файл есть, но не разбирается как массив записей; сам файл чтение не трогает. */
+/**
+ * `corrupt` — файл есть, но не разбирается как массив записей, либо в массиве есть элементы не того
+ * вида (они отброшены); сам файл чтение не трогает. Из элементов копируются только поля журнала
+ * (`pick`): лишнее из файла, правленного вручную, наружу не выходит и не переписывается.
+ */
 async function readEntries(dir: string): Promise<{ entries: JournalEntry[]; corrupt: boolean }> {
   let text: string;
   try {
@@ -45,7 +49,10 @@ async function readEntries(dir: string): Promise<{ entries: JournalEntry[]; corr
   }
   try {
     const parsed: unknown = JSON.parse(text);
-    if (Array.isArray(parsed)) return { entries: parsed.filter(isEntry), corrupt: false };
+    if (Array.isArray(parsed)) {
+      const entries = parsed.filter(isEntry).map(pick);
+      return { entries, corrupt: entries.length !== parsed.length };
+    }
   } catch {
     /* повреждён */
   }
@@ -62,7 +69,8 @@ function corruptName(file: string): string {
 
 /**
  * Добавляет запись под lock-файлом, срезает по возрасту (90 дней) и числу (200), пишет атомарно.
- * Повреждённый журнал переименовывается в `journal.json.corrupt-<ts>`, журнал начинается заново.
+ * Повреждённый журнал (или с отброшенными элементами) переименовывается в `journal.json.corrupt-<ts>`,
+ * журнал начинается заново (с валидными записями, если они были).
  */
 export async function recordJournal(entry: JournalEntry, dir: string = writesDir(), now: Date = new Date()): Promise<void> {
   await withFileLock(lockFile(dir), async () => {

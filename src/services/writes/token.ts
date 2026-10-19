@@ -6,13 +6,20 @@ import { projectRoot } from "../../project-root.js";
 import type { PreviewPayload } from "./types.js";
 
 export const PREVIEW_TTL_MS = 15 * 60_000;
+/** Допустимый перекос часов: токен «из будущего» дальше этого срока не принимается. */
+const FUTURE_SKEW_MS = 60_000;
 
 const KEY_RE = /^[0-9a-f]{64}$/;
-const TOKEN_RE = /^(\d+)\.([0-9a-f]{64})$/;
+// Время выпуска — каноническое десятичное число (без ведущих нулей, ≤ 16 цифр); безопасность целого проверяется отдельно.
+const TOKEN_RE = /^(0|[1-9]\d{0,15})\.([0-9a-f]{64})$/;
 
-/** Каталог ключа и журнала записей; `HSE_WRITES_DIR` — для проверочных скриптов. */
+/**
+ * Каталог ключа и журнала записей; `HSE_WRITES_DIR` — для проверочных скриптов. Относительный путь
+ * разрешается от cwd процесса (нужно только проверкам: сервер задаёт абсолютный или берёт каталог проекта).
+ */
 export function writesDir(): string {
-  return process.env.HSE_WRITES_DIR || path.join(projectRoot, "storage", "writes");
+  const override = process.env.HSE_WRITES_DIR;
+  return override ? path.resolve(override) : path.join(projectRoot, "storage", "writes");
 }
 
 function readKey(file: string): Buffer | null {
@@ -23,7 +30,15 @@ function readKey(file: string): Buffer | null {
     if (errCode(err) === "ENOENT") return null;
     throw err;
   }
-  if (!KEY_RE.test(text)) throw new Error("Файл ключа записи повреждён: удалите storage/writes/key — ключ создастся заново");
+  if (!KEY_RE.test(text)) throw new Error("Файл ключа записи повреждён: удалите файл key в каталоге записей — ключ создастся заново");
+  // Ключ мог быть создан с широкими правами: на POSIX ужимаем до 0o600 (на Windows права не применяются).
+  if (process.platform !== "win32") {
+    try {
+      fs.chmodSync(file, 0o600);
+    } catch {
+      /* не владелец файла — не критично */
+    }
+  }
   return Buffer.from(text, "hex");
 }
 
@@ -35,6 +50,8 @@ export async function loadOrCreateKey(dir: string = writesDir()): Promise<Buffer
   const file = path.join(dir, "key");
   const existing = readKey(file);
   if (existing) return existing;
+  // Каталог создаём сами с 0o700 (lock-файл создал бы его с правами по умолчанию); на Windows mode игнорируется.
+  fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
   return withFileLock(path.join(dir, "key.lock"), async () => {
     const again = readKey(file);
     if (again) return again;
@@ -63,6 +80,7 @@ function previewHmac(key: Buffer, issuedAtSec: number, p: PreviewPayload): strin
 /** `"<issuedAtSec>.<hmac>"`: HMAC-SHA256 по канонической форме операции, цели, режима, файлов и состояния. */
 export function signPreview(key: Buffer, p: PreviewPayload, now: Date = new Date()): string {
   const issuedAtSec = Math.floor(now.getTime() / 1000);
+  if (!Number.isSafeInteger(issuedAtSec)) throw new Error("Некорректное время выпуска токена предпросмотра");
   return `${issuedAtSec}.${previewHmac(key, issuedAtSec, p)}`;
 }
 
@@ -70,23 +88,34 @@ export type VerifyResult =
   | { ok: true; tokenId: string; issuedAt: Date }
   | { ok: false; reason: "malformed" | "expired" | "mismatch" };
 
-export function verifyPreview(key: Buffer, token: string, p: PreviewPayload, now: Date = new Date()): VerifyResult {
+/** Разбор токена: каноническая запись и безопасное целое время выпуска, иначе `null`. */
+function parseToken(token: string): { issuedAtSec: number; hash: string } | null {
   const m = TOKEN_RE.exec(token);
-  if (!m) return { ok: false, reason: "malformed" };
+  if (!m) return null;
   const issuedAtSec = Number(m[1]);
-  const given = Buffer.from(m[2], "hex");
+  return Number.isSafeInteger(issuedAtSec) ? { issuedAtSec, hash: m[2] } : null;
+}
+
+export function verifyPreview(key: Buffer, token: string, p: PreviewPayload, now: Date = new Date()): VerifyResult {
+  const parsed = parseToken(token);
+  if (!parsed) return { ok: false, reason: "malformed" };
+  const { issuedAtSec, hash } = parsed;
+  const given = Buffer.from(hash, "hex");
   const expected = Buffer.from(previewHmac(key, issuedAtSec, p), "hex");
   // timingSafeEqual бросает на разной длине; формат токена это исключает, но защита дешёвая.
   if (given.length !== expected.length || !crypto.timingSafeEqual(given, expected)) return { ok: false, reason: "mismatch" };
   const issuedAt = new Date(issuedAtSec * 1000);
-  if (now.getTime() - issuedAt.getTime() > PREVIEW_TTL_MS) return { ok: false, reason: "expired" };
-  return { ok: true, tokenId: m[2].slice(0, 12), issuedAt };
+  // «expired» и для токена из будущего (> now + 60 с): подпись верна, но часы разошлись — такой токен не принимаем.
+  // Граница строгая: ровно через 15:00.000 токен ещё действителен.
+  const age = now.getTime() - issuedAt.getTime();
+  if (age > PREVIEW_TTL_MS || age < -FUTURE_SKEW_MS) return { ok: false, reason: "expired" };
+  return { ok: true, tokenId: hash.slice(0, 12), issuedAt };
 }
 
 /** 12 hex из хеш-части токена; `null`, если это не токен. */
 export function tokenIdOf(token: string): string | null {
-  const m = TOKEN_RE.exec(token);
-  return m ? m[2].slice(0, 12) : null;
+  const parsed = parseToken(token);
+  return parsed ? parsed.hash.slice(0, 12) : null;
 }
 
 /** Стабильный обезличенный идентификатор цели для журнала: HMAC по `op` и `target`, 12 hex. */

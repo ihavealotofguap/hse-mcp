@@ -75,6 +75,37 @@ test("срок: +16 мин — expired, +14 мин — ok", () => {
   assert.equal(verifyPreview(KEY, token, payload(), minutes(14)).ok, true);
 });
 
+test("граница срока: ровно 15:00.000 принимается (сравнение строгое), 15:00.001 уже нет; 15:01 — expired", () => {
+  const token = signPreview(KEY, payload(), NOW);
+  const at = (ms) => new Date(NOW.getTime() + ms);
+  assert.equal(verifyPreview(KEY, token, payload(), at(PREVIEW_TTL_MS)).ok, true);
+  assert.deepEqual(verifyPreview(KEY, token, payload(), at(PREVIEW_TTL_MS + 1)), { ok: false, reason: "expired" });
+  assert.deepEqual(verifyPreview(KEY, token, payload(), at(PREVIEW_TTL_MS + 60_000)), { ok: false, reason: "expired" });
+});
+
+test("токен из далёкого будущего (> now + 60 с) — expired, перекос часов до 60 с допустим", () => {
+  const future = (ms) => signPreview(KEY, payload(), new Date(NOW.getTime() + ms));
+  assert.equal(verifyPreview(KEY, future(60_000), payload(), NOW).ok, true);
+  assert.deepEqual(verifyPreview(KEY, future(61_000), payload(), NOW), { ok: false, reason: "expired" });
+  assert.deepEqual(verifyPreview(KEY, future(10 * 60_000), payload(), NOW), { ok: false, reason: "expired" });
+});
+
+test("неканоническое время выпуска — malformed: ведущие нули, > 2^53, слишком длинное", () => {
+  const token = signPreview(KEY, payload(), NOW);
+  const [sec, hash] = token.split(".");
+  const bad = [`0${sec}.${hash}`, `00.${hash}`, `${"9".repeat(16)}.${hash}`, `${"1".repeat(17)}.${hash}`, `9007199254740992.${hash}`];
+  for (const b of bad) {
+    assert.deepEqual(verifyPreview(KEY, b, payload(), NOW), { ok: false, reason: "malformed" }, b.slice(0, 20));
+    assert.equal(tokenIdOf(b), null, b.slice(0, 20));
+  }
+  // "0" само по себе — каноническое число (но подпись не сойдётся)
+  assert.deepEqual(verifyPreview(KEY, `0.${hash}`, payload(), NOW), { ok: false, reason: "mismatch" });
+});
+
+test("signPreview: Invalid Date — понятная ошибка, а не токен «NaN.…»", () => {
+  assert.throws(() => signPreview(KEY, payload(), new Date(NaN)), /врем/i);
+});
+
 test("мусор и пустая строка — malformed", () => {
   for (const bad of ["garbage", "1.zz", "", ".", "1.", `.${"a".repeat(64)}`, `x.${"a".repeat(64)}`, `1.${"a".repeat(63)}`]) {
     assert.deepEqual(verifyPreview(KEY, bad, payload(), NOW), { ok: false, reason: "malformed" }, JSON.stringify(bad));
@@ -151,7 +182,10 @@ test("повреждённый файл ключа — отказ, а не мо�
   const dir = tmpDir();
   try {
     fs.writeFileSync(path.join(dir, "key"), "not-a-key");
-    await assert.rejects(() => loadOrCreateKey(dir), /key/);
+    await assert.rejects(
+      () => loadOrCreateKey(dir),
+      (err) => /key/.test(err.message) && !/storage/.test(err.message)
+    );
     assert.equal(fs.readFileSync(path.join(dir, "key"), "utf8"), "not-a-key");
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
@@ -174,8 +208,27 @@ test("writesDir: HSE_WRITES_DIR переопределяет каталог", ()
     assert.equal(writesDir(), process.env.HSE_WRITES_DIR);
     delete process.env.HSE_WRITES_DIR;
     assert.match(writesDir().replaceAll("\\", "/"), /storage\/writes$/);
+    // относительный путь разрешается от cwd (используется только проверочными скриптами)
+    process.env.HSE_WRITES_DIR = path.join("some", "rel");
+    assert.equal(writesDir(), path.resolve("some", "rel"));
   } finally {
     if (saved === undefined) delete process.env.HSE_WRITES_DIR;
     else process.env.HSE_WRITES_DIR = saved;
+  }
+});
+
+test("loadOrCreateKey создаёт каталог с 0o700, существующий ключ ужимается до 0o600 (POSIX)", async (t) => {
+  if (process.platform === "win32") return t.skip("права POSIX не применяются на Windows");
+  const root = tmpDir();
+  try {
+    const dir = path.join(root, "writes");
+    await loadOrCreateKey(dir);
+    assert.equal(fs.statSync(dir).mode & 0o777, 0o700);
+    assert.equal(fs.statSync(path.join(dir, "key")).mode & 0o777, 0o600);
+    fs.chmodSync(path.join(dir, "key"), 0o644);
+    await loadOrCreateKey(dir);
+    assert.equal(fs.statSync(path.join(dir, "key")).mode & 0o777, 0o600);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
   }
 });
