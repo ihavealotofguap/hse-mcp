@@ -4,7 +4,7 @@ import { TTL } from "../../cache.js";
 import { dumpPage, extractGradeTable, extractTable, type GradeTable, type PageDump } from "../../dom-utils.js";
 import { formatLocalDate } from "../../date-utils.js";
 import { defineResource, type ResourceCallOptions } from "../../resource.js";
-import { resolveScopedUrl } from "../../url-utils.js";
+import { assertReadOnlyPath, resolveScopedUrl } from "../../url-utils.js";
 
 const BASE_URL = "https://edu.hse.ru";
 
@@ -503,5 +503,6 @@ export function listGradeItems(courseId: number, opts?: ResourceCallOptions): Pr
 /** Открыть произвольную страницу edu.hse.ru (относительный путь) — для случаев вне готовых тулов. */
 export function openPage(relativePath: string): Promise<PageDump> {
   const url = resolveScopedUrl(BASE_URL, relativePath);
+  assertReadOnlyPath(url);
   return withPage(url, (page) => dumpPage(page));
 }

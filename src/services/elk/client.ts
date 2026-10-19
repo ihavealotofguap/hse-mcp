@@ -6,7 +6,7 @@ import { dumpPage, extractTable, type PageDump } from "../../dom-utils.js";
 import { addDays, formatLocalDate } from "../../date-utils.js";
 import { acquireRequestTurn } from "../../limiter.js";
 import { defineResource, type LoadContext, type ResourceCallOptions } from "../../resource.js";
-import { resolveScopedUrl } from "../../url-utils.js";
+import { assertReadOnlyPath, resolveScopedUrl } from "../../url-utils.js";
 
 const BASE_URL = "https://lk.hse.ru";
 
@@ -825,5 +825,6 @@ export function getProfile(): Promise<PageDump> {
 // со страниц профиля/student-services, поэтому явно разрешён в дополнение к baseUrl.
 export function openPage(relativePath: string): Promise<PageDump> {
   const url = resolveScopedUrl(BASE_URL, relativePath, ["pmo.hse.ru"]);
+  assertReadOnlyPath(url);
   return withPage(url, (page) => dumpPage(page));
 }

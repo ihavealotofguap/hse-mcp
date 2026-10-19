@@ -25,3 +25,52 @@ export function resolveScopedUrl(
   }
   return baseUrl + (relativePath.startsWith("/") ? relativePath : `/${relativePath}`);
 }
+
+/**
+ * Запрет «записывающих» GET для *_open_page: тулы открывают произвольные страницы того же хоста под
+ * авторизованной сессией, и без проверки модель могла бы обойти протокол confirm — перейти по URL с
+ * `sesskey` (выход, смена состояния Moodle) или с `action=` на `/mod/assign/` (`editsubmission`,
+ * `removesubmissionconfirm` и т. п.). Ключи сравниваются после декодирования (URLSearchParams
+ * разбирает `sess%6Bey`) и без учёта регистра; `sesskey` ищется и в query, и в query фрагмента.
+ * Сообщение называет правило и не повторяет URL/query: оно уходит модели и в логи.
+ */
+export function assertReadOnlyPath(url: string): void {
+  let parsed: URL;
+  try {
+    parsed = new URL(url, "https://placeholder.invalid");
+  } catch {
+    throw new Error("Некорректный URL: страница не открыта.");
+  }
+
+  const keysOf = (query: string): string[] =>
+    [...new URLSearchParams(query).keys()].map((k) => k.toLowerCase());
+
+  // Фрагмент не уходит на сервер, но SPA читают из него «query» (`#/путь?a=b` или `#a=b`).
+  const hash = parsed.hash.replace(/^#/, "");
+  const hashQuery = hash.includes("?") ? hash.slice(hash.indexOf("?") + 1) : hash;
+  if (keysOf(parsed.search).includes("sesskey") || keysOf(hashQuery).includes("sesskey")) {
+    throw new Error(
+      "Открытие страниц с параметром sesskey запрещено: такие ссылки выполняют действия, " +
+        "а этот тул только читает."
+    );
+  }
+
+  let path = parsed.pathname;
+  try {
+    path = decodeURIComponent(path);
+  } catch {
+    // Битое кодирование — проверяем путь как есть.
+  }
+  path = path.toLowerCase().replace(/\/+/g, "/");
+  if (path.startsWith("/mod/assign/")) {
+    const hasAction = [...new URLSearchParams(parsed.search)].some(
+      ([k, v]) => k.toLowerCase() === "action" && v !== ""
+    );
+    if (hasAction) {
+      throw new Error(
+        "Открытие страниц /mod/assign/ с параметром action запрещено: такие ссылки меняют " +
+          "состояние сдачи, а этот тул только читает."
+      );
+    }
+  }
+}
