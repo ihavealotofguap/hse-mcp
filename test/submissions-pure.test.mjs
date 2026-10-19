@@ -14,7 +14,10 @@ const {
   checkDeletePreconditions,
   submitAdapter,
   deleteAdapter,
+  sanitizeNavigationError,
+  Refusal,
 } = m;
+const { classifyError } = await import(new URL("../dist/services/writes/runner.js", import.meta.url).href);
 
 const MIB = 1024 * 1024;
 const NOW = new Date("2026-10-18T12:00:00Z");
@@ -300,4 +303,90 @@ test("deleteAdapter: цель, payload, описание; запись ещё н
   await assert.rejects(() => deleteAdapter.execute(args, { view: v }, { signal: new AbortController().signal, commitPoint: async () => {} }), /не реализовано/);
   await assert.rejects(() => deleteAdapter.verifyOnly(args), /не реализовано/);
   await assert.rejects(() => deleteAdapter.observe({ cmid: -1 }), /cmid/);
+});
+
+// Сообщения Playwright `page.goto` несут URL с query (id задания): в ответ тула им попадать нельзя.
+const HOST = "edu.example.test";
+const GOTO_URL = `https://${HOST}/mod/assign/view.php?id=4242&action=editsubmission`;
+const LEAKS = ["?id=", "4242", "http", HOST, "editsubmission"];
+
+function assertClean(err) {
+  assert.ok(err instanceof Error);
+  for (const s of LEAKS) assert.ok(!err.message.includes(s), `в тексте ошибки не должно быть «${s}»: ${err.message}`);
+}
+
+function playwrightError(message, name = "Error") {
+  const err = new Error(message);
+  err.name = name;
+  return err;
+}
+
+test("sanitizeNavigationError: сетевая ошибка goto — без URL, класс network", () => {
+  const raw = playwrightError(
+    `page.goto: net::ERR_NAME_NOT_RESOLVED at ${GOTO_URL}\nCall log:\n  - navigating to "${GOTO_URL}", waiting until "load"`
+  );
+  assert.equal(classifyError(raw), "network");
+  const clean = sanitizeNavigationError(raw);
+  assertClean(clean);
+  assert.equal(classifyError(clean), "network");
+  assert.match(clean.message, /ERR_NAME_NOT_RESOLVED/);
+});
+
+test("sanitizeNavigationError: таймаут goto и дедлайн withPage — без URL, класс timeout", () => {
+  const gotoTimeout = playwrightError(
+    `page.goto: Timeout 30000ms exceeded.\nCall log:\n  - navigating to "${GOTO_URL}", waiting until "load"`,
+    "TimeoutError"
+  );
+  const clean = sanitizeNavigationError(gotoTimeout);
+  assertClean(clean);
+  assert.equal(classifyError(clean), "timeout");
+
+  const deadline = new Error(`${HOST}/mod/assign/view.php не уложилась в 45 с`);
+  const cleanDeadline = sanitizeNavigationError(deadline);
+  assertClean(cleanDeadline);
+  assert.equal(classifyError(cleanDeadline), "timeout");
+
+  const abort = new DOMException(`aborted at ${GOTO_URL}`, "AbortError");
+  const cleanAbort = sanitizeNavigationError(abort);
+  assertClean(cleanAbort);
+  assert.equal(cleanAbort.name, "AbortError");
+  assert.equal(classifyError(cleanAbort), "timeout");
+});
+
+test("sanitizeNavigationError: вход и отмена сохраняют класс, прочее — нейтральный текст", () => {
+  const auth = sanitizeNavigationError(new Error(`HTTP 401 при открытии ${GOTO_URL}`));
+  assertClean(auth);
+  assert.equal(classifyError(auth), "auth");
+
+  const cancelled = sanitizeNavigationError(new Error("операция отменена"));
+  assertClean(cancelled);
+  assert.equal(classifyError(cancelled), "cancelled");
+
+  const other = sanitizeNavigationError(new Error(`page.evaluate: Target closed; url ${GOTO_URL}`));
+  assertClean(other);
+  assert.equal(classifyError(other), "other");
+  assert.match(other.message, /страниц/);
+
+  assertClean(sanitizeNavigationError(`строка ${GOTO_URL}`));
+});
+
+test("sanitizeNavigationError: собственные отказы модуля проходят без изменений", () => {
+  const caught = [];
+  for (const fn of [
+    () => checkSubmitArgs({ cmid: 1, mode: "draft", files: ["a.txt"], text: "x" }),
+    () => planSubmission(view({ canAdd: false, canEdit: false }), form(), []),
+    () => checkDeletePreconditions(view({ state: "none" })),
+  ]) {
+    try {
+      fn();
+    } catch (err) {
+      caught.push(err);
+    }
+  }
+  assert.equal(caught.length, 3);
+  for (const err of caught) {
+    assert.ok(err instanceof Refusal);
+    assert.equal(sanitizeNavigationError(err), err);
+  }
+  assert.equal(caught[0].message, "онлайн-текст в v1 не поддерживается");
 });

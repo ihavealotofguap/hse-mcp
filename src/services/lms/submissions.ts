@@ -3,7 +3,7 @@ import path from "node:path";
 import type { Page } from "playwright";
 import { withPage } from "../../auth/browser-session.js";
 import { resolveOutboxFiles, type OutboxFile } from "../writes/outbox.js";
-import type { WriteAdapter } from "../writes/runner.js";
+import { classifyError, type WriteAdapter } from "../writes/runner.js";
 
 /**
  * Сдача, правка и удаление ответа на задание SmartLMS (спека №4 §9, §9.1). Здесь — читающая
@@ -111,6 +111,53 @@ export interface SubmissionPlan {
   replace: Array<{ name: string; size: number; currentSize: number }>;
   /** Файлов в ответе после сохранения (уникальные по имени). */
   total: number;
+}
+
+/** Собственный отказ модуля: текст составлен здесь и безопасен для ответа тула (без URL, имён, id). */
+export class Refusal extends Error {}
+
+/**
+ * Ошибка открытия или чтения страницы → текст без URL. Сообщения Playwright (`page.goto`, журнал
+ * вызова) и дедлайн `withPage` содержат адрес с query, то есть id задания, а в ответ тула он попадать
+ * не должен (спека §8). `Refusal` проходит как есть; прочее заменяется нейтральным текстом, который
+ * сохраняет то, по чему `classifyError` различает класс: имя `AbortError`/`TimeoutError`, «не уложил»,
+ * «отменен», код `ERR_…`, «вход (401)». Исходная ошибка в `cause` не кладётся.
+ */
+export function sanitizeNavigationError(err: unknown, what = "страница задания"): Error {
+  if (err instanceof Refusal) return err;
+  const name = err instanceof Error || err instanceof DOMException ? err.name : "";
+  const message = err instanceof Error || err instanceof DOMException ? err.message : String(err);
+  let text: string;
+  switch (classifyError(err)) {
+    case "timeout":
+      text = `${what} не уложилась в отведённое время`;
+      break;
+    case "cancelled":
+      text = "операция отменена";
+      break;
+    case "network": {
+      const code = /\bERR_[A-Z0-9_]+/.exec(message)?.[0];
+      text = `${what} не открылась: ошибка сети ${code ?? "(fetch)"}`;
+      break;
+    }
+    case "auth":
+      text = `${what} не открылась: требуется вход (401)`;
+      break;
+    default:
+      text = `${what}: не удалось открыть или прочитать`;
+  }
+  const clean = new Error(text);
+  if (name === "AbortError" || name === "TimeoutError") clean.name = name;
+  return clean;
+}
+
+/** `withPage` с очисткой ошибок от URL; собственные отказы проходят как есть. */
+async function readPage<T>(url: string, fn: (page: Page) => Promise<T>, signal?: AbortSignal): Promise<T> {
+  try {
+    return await withPage(url, fn, { signal });
+  } catch (err) {
+    throw sanitizeNavigationError(err);
+  }
 }
 
 const sha256Hex = (data: string | Buffer) => crypto.createHash("sha256").update(data).digest("hex");
@@ -238,16 +285,16 @@ export function stateFingerprint(view: Pick<AssignmentView, "state" | "files">):
 
 function checkCmid(cmid: unknown): void {
   if (typeof cmid !== "number" || !Number.isSafeInteger(cmid) || cmid <= 0) {
-    throw new Error("cmid должен быть положительным целым числом");
+    throw new Refusal("cmid должен быть положительным целым числом");
   }
 }
 
 /** Отказы по самим аргументам — до любого обращения к диску и к системе. */
 export function checkSubmitArgs(args: SubmitArgs): void {
-  if (args.text !== undefined) throw new Error("онлайн-текст в v1 не поддерживается");
+  if (args.text !== undefined) throw new Refusal("онлайн-текст в v1 не поддерживается");
   checkCmid(args.cmid);
-  if (args.mode !== "draft" && args.mode !== "submit") throw new Error("mode должен быть draft или submit");
-  if (!Array.isArray(args.files) || args.files.length === 0) throw new Error("отправка без файлов не поддерживается");
+  if (args.mode !== "draft" && args.mode !== "submit") throw new Refusal("mode должен быть draft или submit");
+  if (!Array.isArray(args.files) || args.files.length === 0) throw new Refusal("отправка без файлов не поддерживается");
 }
 
 const CLOSED_REFUSAL: Record<NonNullable<AssignmentView["closed"]>["reason"], string> = {
@@ -259,9 +306,9 @@ const CLOSED_REFUSAL: Record<NonNullable<AssignmentView["closed"]>["reason"], st
 
 /** Предусловия по странице статуса: их проверяют до открытия формы правки. */
 function checkSubmittable(view: AssignmentView): void {
-  if (view.state === "unknown") throw new Error("состояние ответа на странице задания не распознано");
-  if (view.closed) throw new Error(CLOSED_REFUSAL[view.closed.reason]);
-  if (!view.canAdd && !view.canEdit) throw new Error("нельзя добавить или править ответ");
+  if (view.state === "unknown") throw new Refusal("состояние ответа на странице задания не распознано");
+  if (view.closed) throw new Refusal(CLOSED_REFUSAL[view.closed.reason]);
+  if (!view.canAdd && !view.canEdit) throw new Refusal("нельзя добавить или править ответ");
 }
 
 const fold = (s: string) => s.toLowerCase();
@@ -282,7 +329,7 @@ function formatBytes(n: number): string {
  */
 export function planSubmission(view: AssignmentView, form: EditFormInfo, files: OutboxFile[]): SubmissionPlan {
   checkSubmittable(view);
-  if (!form.fileOnly) throw new Error("задание принимает не только файлы: в v1 поддерживается только сдача файлом");
+  if (!form.fileOnly) throw new Refusal("задание принимает не только файлы: в v1 поддерживается только сдача файлом");
 
   const existing = new Map(view.files.map((f) => [f.name, f]));
   const existingFolded = new Set(view.files.map((f) => fold(f.name)));
@@ -293,18 +340,18 @@ export function planSubmission(view: AssignmentView, form: EditFormInfo, files: 
     const same = existing.get(name);
     if (same) replace.push({ name, size: f.size, currentSize: same.size });
     else if (existingFolded.has(fold(name))) {
-      throw new Error(`файл №${i + 1}: имя отличается от файла ответа только регистром букв — переименуйте файл`);
+      throw new Refusal(`файл №${i + 1}: имя отличается от файла ответа только регистром букв — переименуйте файл`);
     } else add.push({ name, size: f.size });
   });
 
   const total = existing.size + add.length;
   if (form.maxFiles !== null && total > form.maxFiles) {
-    throw new Error(`файлов в ответе будет больше, чем разрешает задание: не более ${form.maxFiles}`);
+    throw new Refusal(`файлов в ответе будет больше, чем разрешает задание: не более ${form.maxFiles}`);
   }
   if (form.maxBytes !== null) {
     const maxBytes = form.maxBytes;
     files.forEach((f, i) => {
-      if (f.size > maxBytes) throw new Error(`файл №${i + 1} больше допустимого размера задания (${formatBytes(maxBytes)})`);
+      if (f.size > maxBytes) throw new Refusal(`файл №${i + 1} больше допустимого размера задания (${formatBytes(maxBytes)})`);
     });
   }
   return { add, replace, total };
@@ -312,9 +359,9 @@ export function planSubmission(view: AssignmentView, form: EditFormInfo, files: 
 
 /** Удаление: нужен представленный ответ и кнопка «Удалить ответ» на странице статуса. */
 export function checkDeletePreconditions(view: AssignmentView): void {
-  if (view.state === "unknown") throw new Error("состояние ответа на странице задания не распознано");
-  if (view.state === "none") throw new Error("нечего удалять: ответ на задание не представлен");
-  if (!view.canDelete) throw new Error("удалить ответ нельзя: на странице задания нет кнопки «Удалить ответ»");
+  if (view.state === "unknown") throw new Refusal("состояние ответа на странице задания не распознано");
+  if (view.state === "none") throw new Refusal("нечего удалять: ответ на задание не представлен");
+  if (!view.canDelete) throw new Refusal("удалить ответ нельзя: на странице задания нет кнопки «Удалить ответ»");
 }
 
 async function extractAssignmentPage(page: Page): Promise<RawAssignmentPage> {
@@ -367,7 +414,7 @@ async function downloadSubmissionFile(page: Page, href: string, n: number): Prom
       return null;
     }
   }, href);
-  if (r === null) throw new Error(`Файл ответа №${n} не скачался со страницы задания`);
+  if (r === null) throw new Refusal(`Файл ответа №${n} не скачался со страницы задания`);
   const bytes = Buffer.from(r, "base64");
   return { size: bytes.length, sha256: sha256Hex(bytes) };
 }
@@ -377,7 +424,7 @@ export async function readAssignmentView(page: Page, cmid: number): Promise<Assi
   const raw = await extractAssignmentPage(page);
   const files: AssignmentView["files"] = [];
   for (const [i, link] of raw.fileLinks.entries()) {
-    if (!link.name) throw new Error(`Файл ответа №${i + 1}: имя на странице не найдено`);
+    if (!link.name) throw new Refusal(`Файл ответа №${i + 1}: имя на странице не найдено`);
     files.push({ name: link.name, ...(await downloadSubmissionFile(page, link.href, i + 1)) });
   }
   return buildAssignmentView(raw, cmid, files);
@@ -440,18 +487,18 @@ export const submitAdapter: WriteAdapter<SubmitArgs, SubmitObserved> = {
   async observe(args, signal) {
     checkSubmitArgs(args);
     const files = await resolveOutboxFiles(args.files);
-    const view = await withPage(viewUrl(args.cmid), (page) => readAssignmentView(page, args.cmid), { signal });
+    const view = await readPage(viewUrl(args.cmid), (page) => readAssignmentView(page, args.cmid), signal);
     checkSubmittable(view);
-    const form = await withPage(
+    const form = await readPage(
       editUrl(args.cmid),
       async (page) => {
         // Файловый менеджер дорисовывает список файлов запросом после загрузки страницы.
         await page.waitForLoadState("networkidle", { timeout: 8_000 }).catch(() => {});
         const raw = await extractEditForm(page);
-        if (!raw.hasForm) throw new Error("форма правки ответа не открылась");
+        if (!raw.hasForm) throw new Refusal("форма правки ответа не открылась");
         return buildEditFormInfo(raw);
       },
-      { signal }
+      signal
     );
     planSubmission(view, form, files);
     return { view, form, files };
@@ -495,7 +542,7 @@ export const deleteAdapter: WriteAdapter<DeleteArgs, DeleteObserved> = {
   targetOf,
   async observe(args, signal) {
     checkCmid(args.cmid);
-    const view = await withPage(viewUrl(args.cmid), (page) => readAssignmentView(page, args.cmid), { signal });
+    const view = await readPage(viewUrl(args.cmid), (page) => readAssignmentView(page, args.cmid), signal);
     checkDeletePreconditions(view);
     return { view };
   },
