@@ -69,13 +69,16 @@ function corruptName(file: string): string {
 
 /**
  * Добавляет запись под lock-файлом, срезает по возрасту (90 дней) и числу (200), пишет атомарно.
- * Повреждённый журнал (или с отброшенными элементами) переименовывается в `journal.json.corrupt-<ts>`,
- * журнал начинается заново (с валидными записями, если они были).
+ * Повреждённый журнал (или с отброшенными элементами) копируется в `journal.json.corrupt-<ts>`, затем
+ * `journal.json` атомарно заменяется (с валидными записями, если они были). Копия, а не переименование:
+ * читатели работают без блокировки, и между переименованием и записью они видели бы отсутствующий файл,
+ * то есть пустой журнал, и пропустили бы неразрешённую запись.
  */
 export async function recordJournal(entry: JournalEntry, dir: string = writesDir(), now: Date = new Date()): Promise<void> {
   await withFileLock(lockFile(dir), async () => {
     const { entries, corrupt } = await readEntries(dir);
-    if (corrupt) await retryIo(() => fs.renameSync(journalFile(dir), corruptName(journalFile(dir))));
+    // COPYFILE_EXCL: существующий карантин не затирается даже при гонке имён (имя уже уникально по `corruptName`).
+    if (corrupt) await retryIo(() => fs.copyFileSync(journalFile(dir), corruptName(journalFile(dir)), fs.constants.COPYFILE_EXCL));
     const cutoff = now.getTime() - JOURNAL_MAX_AGE_MS;
     const kept = [...entries, pick(entry)].filter((e) => !(Date.parse(e.at) < cutoff));
     await writeFileAtomic(journalFile(dir), JSON.stringify(kept.slice(-JOURNAL_MAX_ENTRIES)));

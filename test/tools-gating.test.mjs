@@ -1,8 +1,10 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 // Ключ и журнал записей — во временном каталоге; задаётся до импорта модулей.
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), "hsemcp-gating-"));
@@ -172,13 +174,41 @@ test("контроль шпиона: настоящее открытие стр�
   assert.equal(launches, before + 1, "шпион на chromium.launch не сработал — проверка выше ничего не доказывает");
 });
 
-test("уведомление «тулы записи выключены» печатается не более одного раза на процесс", async () => {
-  // К этому моменту выключенный режим регистрировался в нескольких случаях выше; флаг модульный.
+test("уведомление «тулы записи выключены» печатается ровно один раз на процесс", async () => {
+  // Тесты файла идут по порядку объявления: первый же случай выше (флаг пуст) регистрировал выключенный
+  // режим, значит к этому моменту уведомление уже напечатано — ровно одно; флаг модульный.
   const total = writesOffNotices().length;
-  assert.ok(total <= 1, `уведомлений: ${total}`);
+  assert.equal(total, 1, `уведомлений: ${total}`);
   for (const flag of ["", "false", undefined]) await connect(flag);
   assert.equal(writesOffNotices().length, total, "повторные регистрации не печатают уведомление снова");
   await connect("true");
   assert.equal(writesOffNotices().length, total);
   for (const line of writesOffNotices()) assert.equal(line, "hsemcp: тулы записи выключены (HSE_ENABLE_WRITES не задан)");
+});
+
+test("уведомление «тулы записи выключены»: свежий процесс, две регистрации с выключенным флагом — ровно одна строка", () => {
+  const script = `
+    const { McpServer } = await import("@modelcontextprotocol/sdk/server/mcp.js");
+    const { registerLmsTools } = await import(process.env.HSEMCP_TEST_TOOLS_URL);
+    for (let i = 0; i < 2; i++) registerLmsTools(new McpServer({ name: "child", version: "0.0.0" }));
+  `;
+  const childDir = fs.mkdtempSync(path.join(os.tmpdir(), "hsemcp-gating-child-"));
+  try {
+    const res = spawnSync(process.execPath, ["--input-type=module", "-e", script], {
+      cwd: fileURLToPath(new URL("..", import.meta.url)), // отсюда разрешается @modelcontextprotocol/sdk
+      env: {
+        ...process.env,
+        HSE_ENABLE_WRITES: "",
+        HSE_WRITES_DIR: childDir,
+        HSEMCP_TEST_TOOLS_URL: new URL("../dist/services/lms/tools.js", import.meta.url).href,
+      },
+      encoding: "utf8",
+      timeout: 60_000,
+    });
+    assert.equal(res.status, 0, `дочерний процесс: ${res.stderr}`);
+    const notices = res.stderr.split(/\r?\n/).filter((l) => /тулы записи выключены/.test(l));
+    assert.deepEqual(notices, ["hsemcp: тулы записи выключены (HSE_ENABLE_WRITES не задан)"]);
+  } finally {
+    fs.rmSync(childDir, { recursive: true, force: true });
+  }
 });

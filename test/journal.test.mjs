@@ -129,7 +129,72 @@ test("10 параллельных recordJournal: 10 записей, файл в�
   assert.deepEqual(fs.readdirSync(dir).filter((n) => n.endsWith(".tmp") || n.endsWith(".lock")), []);
 });
 
-test("повреждённый JSON: не падает, журнал начинается заново, старый файл переименован в .corrupt-<ts>", async () => {
+test("карантин: journal.json присутствует всегда — безблокировочный читатель во время записи не видит пустой журнал", async () => {
+  const dir = tmpDir();
+  const original = JSON.stringify([entry({ tokenId: "keepkeepkeep", stage: "sending" }), { at: 5, tokenId: "x" }]);
+  const file = path.join(dir, "journal.json");
+  fs.writeFileSync(file, original);
+
+  // Читатели без блокировки (как latestByToken) крутятся на микрозадачах между шагами записи. Их
+  // несколько и с разным сдвигом по тактам: хотя бы один попадает в любое окно между шагами записи.
+  let done = false;
+  let reads = 0;
+  let missing = 0;
+  // Раунд — все читатели по 50 чтений, затем уступка циклу событий (иначе таймеры и ввод-вывод голодают).
+  const round = () =>
+    Promise.all(
+      Array.from({ length: 12 }, async (_, offset) => {
+        for (let i = 0; i < offset; i++) await Promise.resolve();
+        for (let i = 0; i < 50 && !done; i++) {
+          const last = await latestByToken("keepkeepkeep", dir);
+          reads++;
+          if (!last) missing++;
+        }
+      })
+    );
+  const reader = (async () => {
+    while (!done) {
+      await round();
+      await new Promise((r) => setImmediate(r));
+    }
+  })();
+  try {
+    await recordJournal(entry({ tokenId: "newnewnewnew" }), dir);
+  } finally {
+    done = true;
+    await reader;
+  }
+  assert.ok(reads > 0, "читатель не отработал");
+  assert.equal(missing, 0, `читатель ${missing} раз(а) не увидел неразрешённую запись`);
+  const corrupt = fs.readdirSync(dir).filter((n) => /^journal\.json\.corrupt-\d+/.test(n));
+  assert.equal(corrupt.length, 1);
+  assert.equal(fs.readFileSync(path.join(dir, corrupt[0]), "utf8"), original);
+  assert.deepEqual(readJournal(dir).map((e) => e.tokenId), ["keepkeepkeep", "newnewnewnew"]);
+});
+
+test("карантин не затирает существующий .corrupt-<ts>: второй вынос получает другое имя", async () => {
+  const dir = tmpDir();
+  const bad1 = "{ первый";
+  const bad2 = "[1, ";
+  fs.writeFileSync(path.join(dir, "journal.json"), bad1);
+  await recordJournal(entry({ tokenId: "oneoneoneone" }), dir);
+  const firstQuarantine = fs.readdirSync(dir).filter((n) => /^journal\.json\.corrupt-/.test(n));
+  assert.equal(firstQuarantine.length, 1);
+  // повторная порча в ту же миллисекунду не должна затереть первый карантин: занимаем имена `Date.now()` вперёд
+  const realNow = Date.now;
+  Date.now = () => Number(firstQuarantine[0].match(/corrupt-(\d+)/)[1]);
+  try {
+    fs.writeFileSync(path.join(dir, "journal.json"), bad2);
+    await recordJournal(entry({ tokenId: "twotwotwotwo" }), dir);
+  } finally {
+    Date.now = realNow;
+  }
+  const all = fs.readdirSync(dir).filter((n) => /^journal\.json\.corrupt-/.test(n));
+  assert.equal(all.length, 2);
+  assert.deepEqual(all.map((n) => fs.readFileSync(path.join(dir, n), "utf8")).sort(), [bad1, bad2].sort());
+});
+
+test("повреждённый JSON: не падает, журнал начинается заново, оригинал сохранён копией в .corrupt-<ts>", async () => {
   const dir = tmpDir();
   fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(path.join(dir, "journal.json"), "{ не json");

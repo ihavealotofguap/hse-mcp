@@ -1,7 +1,6 @@
 import type { PageCallContext } from "../../auth/browser-session.js";
 import { defineResource, type LoadContext } from "../../resource.js";
 import { findUnresolvedByTarget, latestByToken, recordJournal, type JournalEntry } from "./journal.js";
-import { sleep } from "../../fs-lock.js";
 import { loadOrCreateKey, PREVIEW_TTL_MS, signPreview, targetIdOf, tokenIdOf, verifyPreview } from "./token.js";
 import type { ErrorClass, Outcome, PreviewPayload } from "./types.js";
 
@@ -45,6 +44,32 @@ export interface WriteResponse extends ExecuteResult {
   sent: boolean;
 }
 
+/**
+ * Ожидание, которое прерывается сигналом: по отмене таймер снимается и ожидание отклоняется причиной
+ * сигнала (уже отменённый сигнал — сразу, без таймера).
+ */
+export function abortableSleep(ms: number, signal?: AbortSignal): Promise<void> {
+  if (signal?.aborted) return Promise.reject(signal.reason ?? new Error("операция отменена"));
+  return new Promise<void>((resolve, reject) => {
+    const onAbort = (): void => {
+      clearTimeout(timer);
+      reject(signal?.reason ?? new Error("операция отменена"));
+    };
+    const timer = setTimeout(() => {
+      signal?.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
+/** Шов только для проверок (`test/runner.test.mjs`): подмена ожидания следующей секунды в сухом прогоне. */
+export const testSeams: { sleep: (ms: number, signal?: AbortSignal) => Promise<void> } = { sleep: abortableSleep };
+
+/** Дедлайн коммита из адаптера: конечное положительное число, иначе `undefined` (раннер берёт значение по умолчанию). */
+const sanitizeDeadline = (ms: unknown): number | undefined =>
+  typeof ms === "number" && Number.isFinite(ms) && ms > 0 ? ms : undefined;
+
 /** Журнал `sending` → `commit()` ресурса → `commit()` страницы; бросает, если вызов уже отклонён. */
 export type CommitPoint = (pageCtx: PageCallContext) => Promise<void>;
 
@@ -57,7 +82,11 @@ export interface WriteAdapter<A extends object, Obs> {
   op: string;
   /** Ресурсы чтения, сбрасываемые после точки невозврата при любом исходе. */
   invalidates: string[];
-  /** Дедлайн после точки невозврата, мс (по умолчанию `COMMIT_DEADLINE_MS`); нужен прежде всего проверкам. */
+  /**
+   * Тестовый шов: дедлайн после точки невозврата, мс (по умолчанию `COMMIT_DEADLINE_MS`); нужен только
+   * проверкам. Принимается лишь конечное положительное число, иное (NaN, 0, отрицательное, Infinity)
+   * заменяется значением по умолчанию.
+   */
   commitDeadlineMs?: number;
   /** Идентификатор цели (курс/задание/заявка): в журнал попадает только его HMAC. */
   targetOf(args: A): string;
@@ -192,7 +221,8 @@ export function defineWrite<A extends object, Obs>(
     name: `writes.${adapter.op}`,
     cache: false,
     invalidates: adapter.invalidates,
-    load: (x, ctx) => adapter.execute(x.args, x.observed, { signal: ctx.signal, commitPoint: commitPointFor(x.call, ctx, adapter.commitDeadlineMs) }),
+    load: (x, ctx) =>
+      adapter.execute(x.args, x.observed, { signal: ctx.signal, commitPoint: commitPointFor(x.call, ctx, sanitizeDeadline(adapter.commitDeadlineMs)) }),
   });
 
   const payloadFor = (args: A, observed: Obs): PreviewPayload => ({
@@ -211,7 +241,8 @@ export function defineWrite<A extends object, Obs>(
     // уже использованный токен (повтор из журнала вместо новой записи) — ждём следующую секунду.
     const issuedId = tokenIdOf(previewToken);
     if (issuedId && (await latestByToken(issuedId))) {
-      await sleep(1000 - (Date.now() % 1000) + 5);
+      // Отмена прерывает ожидание: сухой прогон ничего не журналирует, отклоняемся причиной отмены.
+      await testSeams.sleep(1000 - (Date.now() % 1000) + 5, signal);
       now = new Date();
       previewToken = signPreview(key, payload, now);
     }

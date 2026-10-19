@@ -9,7 +9,7 @@ import path from "node:path";
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), "hsemcp-runner-"));
 process.env.HSE_WRITES_DIR = dir;
 
-const { defineWrite, classifyError } = await import(new URL("../dist/services/writes/runner.js", import.meta.url).href);
+const { defineWrite, classifyError, testSeams } = await import(new URL("../dist/services/writes/runner.js", import.meta.url).href);
 const { defineResource } = await import(new URL("../dist/resource.js", import.meta.url).href);
 const { loadOrCreateKey, signPreview, targetIdOf } = await import(new URL("../dist/services/writes/token.js", import.meta.url).href);
 const { recordJournal } = await import(new URL("../dist/services/writes/journal.js", import.meta.url).href);
@@ -543,17 +543,89 @@ test("o. дедлайн коммита истёк после commitPoint → unk
   await sleep(450); // фоновый execute доработает до конца теста
 });
 
+/** Шов ожидания следующей секунды в сухом прогоне: считает вызовы, каждый раз передавая настоящему ожиданию. */
+function spyOnWait() {
+  const real = testSeams.sleep;
+  const waits = [];
+  testSeams.sleep = (ms, signal) => {
+    waits.push(ms);
+    return real(ms, signal);
+  };
+  return { waits, restore: () => (testSeams.sleep = real) };
+}
+
 test("p. сухой прогон после записи в ту же секунду не выдаёт уже использованный токен", async () => {
   const fake = makeFake("test_write_kp");
   const args = { id: "kp1", value: "val-kp" };
-  await sleep(1005 - (Date.now() % 1000)); // начало секунды: запись и повторный прогон укладываются в неё
-  const dry1 = await fake.write(args);
-  assert.equal((await fake.write({ ...args, confirm: true, previewToken: dry1.previewToken })).outcome, "confirmed");
-  fake.system.delete("kp1"); // то же наблюдаемое состояние → тот же payload
-  const dry2 = await fake.write(args);
-  assert.notEqual(dry2.previewToken, dry1.previewToken);
-  assert.ok(Number(dry2.previewToken.split(".")[0]) > Number(dry1.previewToken.split(".")[0]));
-  // новый токен — это новая запись, а не повтор из журнала
-  assert.equal((await fake.write({ ...args, confirm: true, previewToken: dry2.previewToken })).evidence.fromJournal, undefined);
-  assert.equal(fake.calls.execute, 2);
+  const spy = spyOnWait();
+  try {
+    await sleep(1005 - (Date.now() % 1000)); // начало секунды: запись и повторный прогон укладываются в неё
+    const dry1 = await fake.write(args);
+    assert.equal((await fake.write({ ...args, confirm: true, previewToken: dry1.previewToken })).outcome, "confirmed");
+    fake.system.delete("kp1"); // то же наблюдаемое состояние → тот же payload
+    assert.equal(spy.waits.length, 0, "до повторного прогона ожиданий не было");
+    const dry2 = await fake.write(args);
+    // ожидание следующей секунды действительно сработало (иначе тест прошёл бы вхолостую, если бы секунда сменилась сама)
+    assert.equal(spy.waits.length, 1, "ожидание следующей секунды не запускалось");
+    assert.ok(spy.waits[0] > 0 && spy.waits[0] <= 1005, `ожидание ${spy.waits[0]} мс`);
+    assert.notEqual(dry2.previewToken, dry1.previewToken);
+    assert.ok(Number(dry2.previewToken.split(".")[0]) > Number(dry1.previewToken.split(".")[0]));
+    // новый токен — это новая запись, а не повтор из журнала
+    assert.equal((await fake.write({ ...args, confirm: true, previewToken: dry2.previewToken })).evidence.fromJournal, undefined);
+    assert.equal(fake.calls.execute, 2);
+  } finally {
+    spy.restore();
+  }
+});
+
+test("q. отмена во время ожидания следующей секунды: сухой прогон отклоняется причиной отмены, журнал не тронут", async () => {
+  const fake = makeFake("test_write_kq");
+  const args = { id: "kq1", value: "val-kq" };
+  const real = testSeams.sleep;
+  const ctrl = new AbortController();
+  const reason = new Error("отмена клиентом");
+  let waited = false;
+  testSeams.sleep = (ms, signal) => {
+    waited = true;
+    queueMicrotask(() => ctrl.abort(reason)); // отмена приходит, пока раннер спит
+    return real(ms, signal);
+  };
+  try {
+    await sleep(1005 - (Date.now() % 1000));
+    const dry1 = await fake.write(args);
+    assert.equal((await fake.write({ ...args, confirm: true, previewToken: dry1.previewToken })).outcome, "confirmed");
+    fake.system.delete("kq1");
+    const journalBefore = fs.readFileSync(path.join(dir, "journal.json"), "utf8");
+    const started = Date.now();
+    await assert.rejects(fake.write(args, ctrl.signal), (err) => err === reason);
+    assert.equal(waited, true, "ожидание следующей секунды не запускалось");
+    assert.ok(Date.now() - started < 500, "ожидание не прервано отменой");
+    assert.equal(fs.readFileSync(path.join(dir, "journal.json"), "utf8"), journalBefore);
+    assert.equal(fake.calls.execute, 1);
+  } finally {
+    testSeams.sleep = real;
+  }
+});
+
+test("q2. уже отменённый сигнал: ожидание не стартует ни на миг", async () => {
+  const { abortableSleep } = await import(new URL("../dist/services/writes/runner.js", import.meta.url).href);
+  const ctrl = new AbortController();
+  ctrl.abort(new Error("уже отменено"));
+  const started = Date.now();
+  await assert.rejects(abortableSleep(5000, ctrl.signal), /уже отменено/);
+  assert.ok(Date.now() - started < 200);
+  await abortableSleep(5); // без сигнала — обычное ожидание
+});
+
+test("r. commitDeadlineMs шва ограничен конечным положительным числом: NaN, 0, отрицательное и Infinity не ломают дедлайн", async () => {
+  for (const [i, bad] of [Number.NaN, 0, -5, Number.POSITIVE_INFINITY, "100"].entries()) {
+    const fake = makeFake(`test_write_kr${i}`);
+    fake.adapter.commitDeadlineMs = bad;
+    fake.behavior.workMs = 150; // дольше мгновенного дедлайна 0/NaN, но намного короче дефолтных 20 с
+    const args = { id: `kr${i}`, value: "val-kr" };
+    const dry = await fake.write(args);
+    const res = await fake.write({ ...args, confirm: true, previewToken: dry.previewToken });
+    assert.equal(res.outcome, "confirmed", `commitDeadlineMs=${String(bad)}: ${JSON.stringify(res)}`);
+    assert.equal(res.sent, true);
+  }
 });
