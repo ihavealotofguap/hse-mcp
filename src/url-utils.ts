@@ -42,8 +42,9 @@ export function assertReadOnlyPath(url: string): void {
     throw new Error("Некорректный URL: страница не открыта.");
   }
 
-  const keysOf = (query: string): string[] =>
-    [...new URLSearchParams(query).keys()].map((k) => k.toLowerCase());
+  // Ключ-массив (`sesskey[]`, `action[0]`, они же в `%5B%5D`) PHP/Moodle читает как обычный ключ: хвост `[...]` отбрасываем.
+  const normKey = (k: string): string => k.toLowerCase().replace(/\[[^\]]*\]$/, "");
+  const keysOf = (query: string): string[] => [...new URLSearchParams(query).keys()].map(normKey);
 
   // Фрагмент не уходит на сервер, но SPA читают из него «query» (`#/путь?a=b` или `#a=b`).
   const hash = parsed.hash.replace(/^#/, "");
@@ -62,10 +63,8 @@ export function assertReadOnlyPath(url: string): void {
     // Битое кодирование — проверяем путь как есть.
   }
   path = path.toLowerCase().replace(/\/+/g, "/");
-  if (path.startsWith("/mod/assign/")) {
-    const hasAction = [...new URLSearchParams(parsed.search)].some(
-      ([k, v]) => k.toLowerCase() === "action" && v !== ""
-    );
+  if (path === "/mod/assign" || path.startsWith("/mod/assign/")) {
+    const hasAction = [...new URLSearchParams(parsed.search)].some(([k, v]) => normKey(k) === "action" && v !== "");
     if (hasAction) {
       throw new Error(
         "Открытие страниц /mod/assign/ с параметром action запрещено: такие ссылки меняют " +

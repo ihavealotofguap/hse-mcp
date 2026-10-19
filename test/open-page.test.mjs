@@ -67,6 +67,29 @@ test("пути /mod/assign/ распознаются независимо от �
   assert.throws(() => assertReadOnlyPath(`${BASE}/mod/x/../assign/view.php?action=edit`), /action/);
 });
 
+test("ключи-массивы sesskey[] / sesskey%5B%5D / sesskey[0] считаются sesskey", () => {
+  assert.throws(() => assertReadOnlyPath(`${BASE}/x?sesskey[]=1`), /sesskey/);
+  assert.throws(() => assertReadOnlyPath(`${BASE}/x?sesskey%5B%5D=1`), /sesskey/);
+  assert.throws(() => assertReadOnlyPath(`${BASE}/x?SessKey%5b0%5d=1`), /sesskey/);
+  assert.throws(() => assertReadOnlyPath(`${BASE}/x#a=1&sesskey[]=1`), /sesskey/);
+  assert.doesNotThrow(() => assertReadOnlyPath(`${BASE}/x?sesskeys[]=1`));
+});
+
+test("action[] на assign считается action", () => {
+  assert.throws(() => assertReadOnlyPath(`${BASE}/mod/assign/view.php?id=5&action[]=editsubmission`), /action/);
+  assert.throws(() => assertReadOnlyPath(`${BASE}/mod/assign/view.php?id=5&action%5B%5D=submit`), /action/);
+  assert.doesNotThrow(() => assertReadOnlyPath(`${BASE}/mod/assign/view.php?id=5&action[]=`));
+  assert.doesNotThrow(() => assertReadOnlyPath(`${BASE}/mod/forum/view.php?action[]=view`));
+});
+
+test("/mod/assign без хвостового слэша — тоже путь assign", () => {
+  assert.throws(() => assertReadOnlyPath(`${BASE}/mod/assign?action=editsubmission`), /action/);
+  assert.throws(() => assertReadOnlyPath(`${BASE}/MOD/Assign?action=x`), /action/);
+  assert.throws(() => assertReadOnlyPath(`${BASE}/mod/assign/?action=x`), /action/);
+  assert.doesNotThrow(() => assertReadOnlyPath(`${BASE}/mod/assign?id=5`));
+  assert.doesNotThrow(() => assertReadOnlyPath(`${BASE}/mod/assignment?action=x`));
+});
+
 test("пустой action на assign разрешён", () => {
   assert.doesNotThrow(() => assertReadOnlyPath(`${BASE}/mod/assign/view.php?id=5&action=`));
   assert.doesNotThrow(() => assertReadOnlyPath(`${BASE}/mod/assign/view.php?id=5&action`));

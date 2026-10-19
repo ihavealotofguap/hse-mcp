@@ -8,6 +8,14 @@ import path from "node:path";
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), "hsemcp-gating-"));
 process.env.HSE_WRITES_DIR = dir;
 
+// Перехват stderr: уведомление «тулы записи выключены» печатается один раз на экземпляр модуля.
+const stderrLines = [];
+const realConsoleError = console.error;
+console.error = (...args) => {
+  stderrLines.push(args.join(" "));
+};
+const writesOffNotices = () => stderrLines.filter((l) => /тулы записи выключены/.test(l));
+
 // `config` при первом импорте подгружает .env владельца, а dotenv не перезаписывает уже заданные
 // переменные, поэтому флаг задаётся явно в каждом случае (в том числе пустой — вместо «не задан»).
 process.env.HSE_ENABLE_WRITES = "";
@@ -15,6 +23,15 @@ process.env.HSE_ENABLE_WRITES = "";
 const { McpServer } = await import("@modelcontextprotocol/sdk/server/mcp.js");
 const { Client } = await import("@modelcontextprotocol/sdk/client/index.js");
 const { InMemoryTransport } = await import("@modelcontextprotocol/sdk/inMemory.js");
+// Шпион на запуск браузера: общий объект `chromium` из playwright тот же, что использует dist/auth/browser-session.
+// Любой запуск считается и отклоняется — настоящий Chromium в тестах не стартует.
+const { chromium } = await import("playwright");
+const realLaunch = chromium.launch;
+let launches = 0;
+chromium.launch = async () => {
+  launches++;
+  throw new Error("запуск браузера отключён в тесте");
+};
 const { registerLmsTools } = await import(new URL("../dist/services/lms/tools.js", import.meta.url).href);
 
 const WRITE_TOOLS = ["lms_submit_assignment", "lms_delete_submission"];
@@ -37,6 +54,8 @@ async function connect(flag) {
 }
 
 test.after(async () => {
+  chromium.launch = realLaunch;
+  console.error = realConsoleError;
   for (const x of opened) await x.close();
   fs.rmSync(dir, { recursive: true, force: true });
 });
@@ -94,14 +113,45 @@ test("вызов без files — ошибка валидации", async () => 
     result = await client.callTool({ name: "lms_submit_assignment", arguments: { cmid: 1 } });
   } catch (err) {
     assert.ok(err instanceof Error);
+    assert.match(err.message, /files/);
     return;
   }
   assert.equal(result.isError, true);
+  assert.match(result.content[0].text, /files/);
+});
+
+test("схема lms_submit_assignment: mode по умолчанию draft; files 1..10, элементы 1..255", async () => {
+  const { byName } = await connect("true");
+  const { properties } = byName.get("lms_submit_assignment").inputSchema;
+  assert.equal(properties.mode.default, "draft");
+  assert.deepEqual(properties.mode.enum, ["draft", "submit"]);
+  assert.equal(properties.files.type, "array");
+  assert.equal(properties.files.minItems, 1);
+  assert.equal(properties.files.maxItems, 10);
+  assert.equal(properties.files.items.type, "string");
+  assert.equal(properties.files.items.minLength, 1);
+  assert.equal(properties.files.items.maxLength, 255);
+});
+
+test("границы files проверяются валидацией: 0 и 11 файлов, пустое и 256-символьное имя — отказ по files", async () => {
+  const { client } = await connect("true");
+  const bad = [[], Array.from({ length: 11 }, (_, i) => `f${i}.txt`), [""], ["x".repeat(256)]];
+  for (const files of bad) {
+    let text;
+    try {
+      const result = await client.callTool({ name: "lms_submit_assignment", arguments: { cmid: 1, files } });
+      assert.equal(result.isError, true);
+      text = result.content[0].text;
+    } catch (err) {
+      text = err.message;
+    }
+    assert.match(text, /files/);
+  }
 });
 
 test("text: отказ про онлайн-текст до любой навигации (сухой прогон и запись)", async () => {
   const { client } = await connect("true");
-  const started = Date.now();
+  const launchesBefore = launches;
   for (const extra of [{}, { confirm: true, previewToken: "1.abc" }]) {
     const result = await client.callTool({
       name: "lms_submit_assignment",
@@ -110,6 +160,25 @@ test("text: отказ про онлайн-текст до любой навиг
     assert.equal(result.isError, true);
     assert.match(result.content[0].text, /онлайн-текст/);
   }
-  // Браузер не запускался бы быстрее нескольких секунд: отказ случился до observe.
-  assert.ok(Date.now() - started < 3000, "отказ должен быть мгновенным, без запуска браузера");
+  // Детерминированно: отказ случился до observe, браузер не запускался ни разу.
+  assert.equal(launches, launchesBefore, "отказ про текст не должен запускать браузер");
+});
+
+test("контроль шпиона: настоящее открытие страницы доходит до запуска браузера", async () => {
+  const { client } = await connect("true");
+  const before = launches;
+  const result = await client.callTool({ name: "lms_open_page", arguments: { path: "/" } });
+  assert.equal(result.isError, true);
+  assert.equal(launches, before + 1, "шпион на chromium.launch не сработал — проверка выше ничего не доказывает");
+});
+
+test("уведомление «тулы записи выключены» печатается не более одного раза на процесс", async () => {
+  // К этому моменту выключенный режим регистрировался в нескольких случаях выше; флаг модульный.
+  const total = writesOffNotices().length;
+  assert.ok(total <= 1, `уведомлений: ${total}`);
+  for (const flag of ["", "false", undefined]) await connect(flag);
+  assert.equal(writesOffNotices().length, total, "повторные регистрации не печатают уведомление снова");
+  await connect("true");
+  assert.equal(writesOffNotices().length, total);
+  for (const line of writesOffNotices()) assert.equal(line, "hsemcp: тулы записи выключены (HSE_ENABLE_WRITES не задан)");
 });
