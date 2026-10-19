@@ -123,3 +123,48 @@ test("сообщение об ошибке не содержит ни значе
 test("resolveScopedUrl по-прежнему бросает для внешнего хоста", () => {
   assert.throws(() => resolveScopedUrl(BASE, "https://evil.example.com/x"), /запрещено/);
 });
+
+// PHP нормализует имена переменных запроса: убирает ведущие пробелы и читает всё от первой `[` как индекс массива.
+test("ведущий пробел в ключе (%20, +) не обходит sesskey и action", () => {
+  assert.throws(() => assertReadOnlyPath(`${BASE}/x?%20sesskey=1`), /sesskey/);
+  assert.throws(() => assertReadOnlyPath(`${BASE}/x?+sesskey=1`), /sesskey/);
+  assert.throws(() => assertReadOnlyPath(`${BASE}/x?++%20SessKey=1`), /sesskey/);
+  assert.throws(() => assertReadOnlyPath(`${BASE}/x#a=1&%20sesskey=1`), /sesskey/);
+  assert.throws(() => assertReadOnlyPath(`${BASE}/mod/assign/view.php?id=5&+action=editsubmission`), /action/);
+  assert.throws(() => assertReadOnlyPath(`${BASE}/mod/assign/view.php?id=5&%20%20ACTION=submit`), /action/);
+  assert.throws(() => assertReadOnlyPath(`${BASE}/mod/assign/view.php?%20action[]=submit`), /action/);
+});
+
+test("несколько и хвостовые группы скобок: sesskey[a][b], sesskey[]x, action[0]", () => {
+  assert.throws(() => assertReadOnlyPath(`${BASE}/x?sesskey[a][b]=1`), /sesskey/);
+  assert.throws(() => assertReadOnlyPath(`${BASE}/x?sesskey%5Ba%5D%5Bb%5D=1`), /sesskey/);
+  assert.throws(() => assertReadOnlyPath(`${BASE}/x?sesskey[]x=1`), /sesskey/);
+  assert.throws(() => assertReadOnlyPath(`${BASE}/x?sesskey[0=1`), /sesskey/);
+  assert.throws(() => assertReadOnlyPath(`${BASE}/x#sesskey[a][b]=1`), /sesskey/);
+  assert.throws(() => assertReadOnlyPath(`${BASE}/mod/assign/view.php?id=5&action[0]=submit`), /action/);
+  assert.throws(() => assertReadOnlyPath(`${BASE}/mod/assign/view.php?id=5&action[a][b]=submit`), /action/);
+  assert.throws(() => assertReadOnlyPath(`${BASE}/mod/assign/view.php?id=5&action[]x=submit`), /action/);
+});
+
+test("нормализация ключей не задевает обычные параметры", () => {
+  assert.doesNotThrow(() => assertReadOnlyPath(`${BASE}/mod/assign/view.php?id=5`));
+  assert.doesNotThrow(() => assertReadOnlyPath(`${BASE}/calendar/view.php?view=month&%20course=5`));
+  assert.doesNotThrow(() => assertReadOnlyPath(`${BASE}/x?ids[]=5&ids[]=6&id[0]=7`));
+  assert.doesNotThrow(() => assertReadOnlyPath(`${BASE}/x?my sesskey=1&sesskeyx=2`));
+  assert.doesNotThrow(() => assertReadOnlyPath(`${BASE}/mod/assign/view.php?id=5&my+action=submit&actions[0]=x`));
+  assert.doesNotThrow(() => assertReadOnlyPath(`${BASE}/mod/assign/view.php?id=5&%20action=`));
+});
+
+test("сообщение при нормализованных ключах не повторяет URL и значение", () => {
+  const secret = "SECRETVALUE456";
+  for (const url of [`${BASE}/x?%20sesskey=${secret}`, `${BASE}/mod/assign/view.php?id=5&action[0]=${secret}`]) {
+    let msg = "";
+    try {
+      assertReadOnlyPath(url);
+    } catch (e) {
+      msg = e.message;
+    }
+    assert.notEqual(msg, "");
+    assert.ok(!msg.includes(secret) && !msg.includes("edu.hse.ru") && !msg.includes(url));
+  }
+});

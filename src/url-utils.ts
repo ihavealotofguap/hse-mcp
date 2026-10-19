@@ -31,7 +31,8 @@ export function resolveScopedUrl(
  * авторизованной сессией, и без проверки модель могла бы обойти протокол confirm — перейти по URL с
  * `sesskey` (выход, смена состояния Moodle) или с `action=` на `/mod/assign/` (`editsubmission`,
  * `removesubmissionconfirm` и т. п.). Ключи сравниваются после декодирования (URLSearchParams
- * разбирает `sess%6Bey`) и без учёта регистра; `sesskey` ищется и в query, и в query фрагмента.
+ * разбирает `sess%6Bey`), нормализуются как в PHP (ведущие пробелы, хвост от первой `[`) и сравниваются
+ * без учёта регистра; `sesskey` ищется и в query, и в query фрагмента.
  * Сообщение называет правило и не повторяет URL/query: оно уходит модели и в логи.
  */
 export function assertReadOnlyPath(url: string): void {
@@ -42,8 +43,10 @@ export function assertReadOnlyPath(url: string): void {
     throw new Error("Некорректный URL: страница не открыта.");
   }
 
-  // Ключ-массив (`sesskey[]`, `action[0]`, они же в `%5B%5D`) PHP/Moodle читает как обычный ключ: хвост `[...]` отбрасываем.
-  const normKey = (k: string): string => k.toLowerCase().replace(/\[[^\]]*\]$/, "");
+  // Имя переменной PHP/Moodle нормализует: ведущие пробелы (`%20sesskey`, `+action`) отбрасывает, а всё
+  // от первой `[` (`sesskey[]`, `sesskey[a][b]`, `sesskey[]x`, `action[0]`, они же в `%5B`) читает как
+  // индекс массива. Режем от первой `[` целиком — строже PHP, зато без обхода хвостом после скобок.
+  const normKey = (k: string): string => k.replace(/^ +/, "").replace(/\[[\s\S]*$/, "").toLowerCase();
   const keysOf = (query: string): string[] => [...new URLSearchParams(query).keys()].map(normKey);
 
   // Фрагмент не уходит на сервер, но SPA читают из него «query» (`#/путь?a=b` или `#a=b`).

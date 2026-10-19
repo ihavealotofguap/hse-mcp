@@ -49,15 +49,19 @@ export function isInsideDir(dir: string, file: string): boolean {
 
 /**
  * Папка «исходящих» не должна быть корнем проекта или его `storage`, содержать их или быть корнем
- * диска: иначе `.env` и `storage/hse-session.json` адресовались бы обычным именем файла.
- * Оба пути должны быть канонизированы `realpath`.
+ * диска: иначе `.env` и `storage/hse-session.json` адресовались бы обычным именем файла. Внутри
+ * `storage` допустима только `storage/outbox` (по умолчанию) и её подпапки: ключ HMAC и журнал лежат в
+ * `storage/writes`, сессия и снимки — в других папках `storage`, и становиться «исходящими» им нельзя.
+ * Все пути должны быть канонизированы `realpath` (в том числе `storage`: junction не должен обходить сравнение).
  */
-function misplacedOutbox(dirReal: string, root: string): boolean {
+function misplacedOutbox(dirReal: string, root: string, storage: string): boolean {
   const dir = comparable(dirReal);
-  const rootC = comparable(root);
-  const storageC = comparable(path.join(root, "storage"));
-  if (dir === rootC || dir === storageC) return true;
-  if (isInsideDir(dirReal, root) || isInsideDir(dirReal, path.join(root, "storage"))) return true;
+  if (dir === comparable(root) || dir === comparable(storage)) return true;
+  if (isInsideDir(dirReal, root) || isInsideDir(dirReal, storage)) return true;
+  if (isInsideDir(storage, dirReal)) {
+    const defaultOutbox = path.join(storage, "outbox");
+    if (comparable(dirReal) !== comparable(defaultOutbox) && !isInsideDir(defaultOutbox, dirReal)) return true;
+  }
   return dir === comparable(path.parse(dir).root);
 }
 
@@ -108,10 +112,13 @@ export async function resolveOutboxFiles(
   }
   // Корень проекта канонизируем так же, как папку (junction/регистр); `projectRoot` в opts — для проверок.
   const root = await realpath(opts.projectRoot ?? realProjectRoot).catch(() => path.resolve(opts.projectRoot ?? realProjectRoot));
-  if (misplacedOutbox(dirReal, root)) {
+  // `storage` канонизируем так же (если его нет — берём путь как есть): иначе junction на storage обходит сравнение.
+  const storageRaw = path.join(root, "storage");
+  const storage = await realpath(storageRaw).catch(() => storageRaw);
+  if (misplacedOutbox(dirReal, root, storage)) {
     throw new Error(
       "Папка «исходящих» настроена неверно: она не должна совпадать с каталогом проекта или его storage, " +
-        "содержать их или быть корнем диска (проверьте HSE_OUTBOX_DIR)"
+        "содержать их, быть корнем диска или лежать в storage кроме storage/outbox (проверьте HSE_OUTBOX_DIR)"
     );
   }
 

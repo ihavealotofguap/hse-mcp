@@ -314,6 +314,64 @@ test("папка «исходящих» не должна совпадать с 
   }
 });
 
+test("внутри storage разрешена только storage/outbox (и её подпапки): storage/writes и прочие — отказ", async () => {
+  const s = setup();
+  try {
+    const fakeRoot = path.join(s.root, "proj");
+    const storage = path.join(fakeRoot, "storage");
+    for (const sub of ["writes", "hse-sessions", "changes", "outbox", path.join("outbox", "sub")]) {
+      fs.mkdirSync(path.join(storage, sub), { recursive: true });
+      fs.writeFileSync(path.join(storage, sub, "f.txt"), "data");
+    }
+    fs.writeFileSync(path.join(storage, "writes", "key"), "secret-key");
+    fs.writeFileSync(path.join(storage, "writes", "journal.json"), "[]");
+
+    const refusal = /Папка «исходящих» настроена неверно/;
+    await assertRefused(["key"], { dir: path.join(storage, "writes"), projectRoot: fakeRoot }, refusal);
+    await assertRefused(["journal.json"], { dir: path.join(storage, "writes"), projectRoot: fakeRoot }, refusal);
+    await assertRefused(["f.txt"], { dir: path.join(storage, "hse-sessions"), projectRoot: fakeRoot }, refusal);
+    await assertRefused(["f.txt"], { dir: path.join(storage, "changes"), projectRoot: fakeRoot }, refusal);
+    // сама storage/outbox и её подпапка допустимы
+    assert.equal((await resolveOutboxFiles(["f.txt"], { dir: path.join(storage, "outbox"), projectRoot: fakeRoot }))[0].size, 4);
+    assert.equal((await resolveOutboxFiles(["f.txt"], { dir: path.join(storage, "outbox", "sub"), projectRoot: fakeRoot }))[0].size, 4);
+    // папка вне проекта и внутри проекта, но вне storage — допустимы
+    assert.equal((await resolveOutboxFiles(["a.txt"], { dir: s.dir, projectRoot: fakeRoot }))[0].size, 5);
+    fs.mkdirSync(path.join(fakeRoot, "my-outbox"));
+    fs.writeFileSync(path.join(fakeRoot, "my-outbox", "f.txt"), "data");
+    assert.equal((await resolveOutboxFiles(["f.txt"], { dir: path.join(fakeRoot, "my-outbox"), projectRoot: fakeRoot }))[0].size, 4);
+  } finally {
+    s.cleanup();
+  }
+});
+
+test("storage — junction наружу: папка внутри цели junction считается лежащей в storage", async (t) => {
+  const s = setup();
+  try {
+    const fakeRoot = path.join(s.root, "proj");
+    const realStorage = path.join(s.root, "real-storage");
+    fs.mkdirSync(path.join(realStorage, "writes"), { recursive: true });
+    fs.mkdirSync(path.join(realStorage, "outbox"), { recursive: true });
+    fs.writeFileSync(path.join(realStorage, "writes", "key"), "secret-key");
+    fs.writeFileSync(path.join(realStorage, "outbox", "ok.txt"), "ok");
+    fs.mkdirSync(fakeRoot);
+    try {
+      fs.symlinkSync(realStorage, path.join(fakeRoot, "storage"), "junction");
+    } catch {
+      t.skip("нет прав на создание junction");
+      return;
+    }
+    const refusal = /Папка «исходящих» настроена неверно/;
+    // обращение к каталогу напрямую (минуя junction) всё равно раскрывается в тот же storage
+    await assertRefused(["key"], { dir: path.join(realStorage, "writes"), projectRoot: fakeRoot }, refusal);
+    await assertRefused(["key"], { dir: path.join(fakeRoot, "storage", "writes"), projectRoot: fakeRoot }, refusal);
+    await assertRefused(["key"], { dir: realStorage, projectRoot: fakeRoot }, refusal);
+    assert.equal((await resolveOutboxFiles(["ok.txt"], { dir: path.join(fakeRoot, "storage", "outbox"), projectRoot: fakeRoot }))[0].size, 2);
+    assert.equal((await resolveOutboxFiles(["ok.txt"], { dir: path.join(realStorage, "outbox"), projectRoot: fakeRoot }))[0].size, 2);
+  } finally {
+    s.cleanup();
+  }
+});
+
 test("isInsideDir: граница по разделителю, регистр, хвостовой разделитель, корень", () => {
   const sep = path.sep;
   const base = process.platform === "win32" ? "C:\\box" : "/box";
