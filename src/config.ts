@@ -32,4 +32,8 @@ export const config = {
     const value = process.env.HSE_OUTBOX_DIR?.trim();
     return value ? path.resolve(projectRoot, value) : path.join(projectRoot, "storage", "outbox");
   },
+  /** Тулы записи — opt-in: включены только при `HSE_ENABLE_WRITES=true` (без учёта регистра и пробелов). */
+  get writesEnabled(): boolean {
+    return process.env.HSE_ENABLE_WRITES?.trim().toLowerCase() === "true";
+  },
 };

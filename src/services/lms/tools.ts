@@ -1,7 +1,34 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { config } from "../../config.js";
 import { runTool } from "../../mcp-utils.js";
+import { defineWrite } from "../writes/runner.js";
 import * as lms from "./client.js";
+import { deleteAdapter, submitAdapter } from "./submissions.js";
+
+// Аннотации тулов записи: клиент не должен разрешать вызов автоматически (спека №4 §5).
+const WRITE_ANNOTATIONS = { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true };
+
+const CONFIRM_SCHEMA = {
+  confirm: z.boolean().optional().describe("true — выполнить запись; требует previewToken из сухого прогона."),
+  previewToken: z.string().max(200).optional().describe("Токен из ответа сухого прогона (действует 15 минут)."),
+  acknowledgeUnknown: z
+    .boolean()
+    .optional()
+    .describe("true — подтвердить новую запись по цели, где прошлая закончилась исходом unknown."),
+};
+
+const submitAssignment = defineWrite(submitAdapter);
+const deleteSubmission = defineWrite(deleteAdapter);
+
+let writesOffNoted = false;
+
+/** Один раз за процесс сообщает в stderr, что тулов записи нет (без личных данных). */
+function noteWritesDisabled(): void {
+  if (writesOffNoted) return;
+  writesOffNoted = true;
+  console.error("hsemcp: тулы записи выключены (HSE_ENABLE_WRITES не задан)");
+}
 
 export function registerLmsTools(server: McpServer): void {
   server.registerTool(
@@ -98,5 +125,74 @@ export function registerLmsTools(server: McpServer): void {
       },
     },
     async ({ path }) => runTool(() => lms.openPage(path))
+  );
+
+  if (!config.writesEnabled) {
+    noteWritesDisabled();
+    return;
+  }
+
+  server.registerTool(
+    "lms_submit_assignment",
+    {
+      title: "Сдать ответ на задание SmartLMS (файлами)",
+      description:
+        "ЗАПИСЬ в SmartLMS: сохраняет файлы из папки «исходящих» как ответ на задание (mod/assign) по " +
+        "cmid из lms_get_course_materials. Без confirm — сухой прогон: только чтение, показывает, что " +
+        "будет добавлено и заменено, предупреждения и previewToken; ничего не отправляет. Для записи " +
+        "нужны confirm: true И previewToken из сухого прогона (токен привязан к заданию, файлам и " +
+        "состоянию ответа, действует 15 минут, одноразовый). mode: draft (по умолчанию) — сохранить " +
+        "без отправки на оценку; submit — отправить. ВНИМАНИЕ: у заданий без отдельного шага «Отправить " +
+        "на оценку» само сохранение сразу отправляет работу на оценку — draft этого не исключает. " +
+        "Файлы указываются только ИМЕНЕМ файла из папки «исходящих» (не путём); одноимённый файл ответа " +
+        "перезаписывается. Онлайн-текст не поддерживается: параметр text отклоняется до любых " +
+        "обращений к системе. Результат записи проверяется чтением: outcome confirmed (подтверждено), " +
+        "rejected (система отказала) или unknown (неизвестно); после unknown НЕ повторяйте отправку — " +
+        "повторите вызов с тем же previewToken (выполнится только проверка чтением) или сделайте новый " +
+        "сухой прогон; новая запись по такой цели требует acknowledgeUnknown: true. Клиент спросит " +
+        "разрешение на каждый вызов — присутствие человека обеспечивает он, а не сервер. Тул доступен " +
+        "только при HSE_ENABLE_WRITES=true. Возвращает JSON: stage, outcome, evidence, warnings, sent.",
+      inputSchema: {
+        cmid: z.number().int().positive().describe("id модуля задания (cmid, view.php?id=...)"),
+        mode: z
+          .enum(["draft", "submit"])
+          .default("draft")
+          .describe("draft — сохранить без отправки на оценку; submit — отправить на оценку."),
+        files: z
+          .array(z.string().min(1).max(255))
+          .min(1)
+          .max(10)
+          .describe("Имена файлов из папки «исходящих» (только имя, без пути)."),
+        text: z.string().max(100_000).optional().describe("Онлайн-текст: НЕ поддерживается, вызов будет отклонён."),
+        ...CONFIRM_SCHEMA,
+      },
+      annotations: WRITE_ANNOTATIONS,
+    },
+    async (args, extra) => runTool((signal) => submitAssignment(args, signal), extra.signal)
+  );
+
+  server.registerTool(
+    "lms_delete_submission",
+    {
+      title: "Удалить ответ на задание SmartLMS",
+      description:
+        "ЗАПИСЬ в SmartLMS: удаляет представленный ответ на задание (mod/assign) по cmid; файлы в папке " +
+        "«исходящих» не трогаются. Без confirm — сухой прогон: только чтение, показывает текущий ответ, " +
+        "предупреждения и previewToken; ничего не удаляет. Для удаления нужны confirm: true И " +
+        "previewToken из сухого прогона (токен привязан к заданию и состоянию ответа, действует 15 " +
+        "минут, одноразовый; токен сдачи сюда не подходит). Удаление необратимо. Результат проверяется " +
+        "чтением: outcome confirmed (подтверждено), rejected (система отказала) или unknown " +
+        "(неизвестно); после unknown НЕ повторяйте удаление — повторите вызов с тем же previewToken " +
+        "(выполнится только проверка чтением) или сделайте новый сухой прогон; новая запись по такой " +
+        "цели требует acknowledgeUnknown: true. Клиент спросит разрешение на каждый вызов — " +
+        "присутствие человека обеспечивает он, а не сервер. Тул доступен только при " +
+        "HSE_ENABLE_WRITES=true. Возвращает JSON: stage, outcome, evidence, warnings, sent.",
+      inputSchema: {
+        cmid: z.number().int().positive().describe("id модуля задания (cmid, view.php?id=...)"),
+        ...CONFIRM_SCHEMA,
+      },
+      annotations: WRITE_ANNOTATIONS,
+    },
+    async (args, extra) => runTool((signal) => deleteSubmission(args, signal), extra.signal)
   );
 }
