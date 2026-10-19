@@ -16,6 +16,11 @@ const {
   deleteAdapter,
   sanitizeNavigationError,
   Refusal,
+  sameFileSet,
+  expectedManagerFiles,
+  compareFiles,
+  classifySubmitOutcome,
+  classifyDeleteOutcome,
 } = m;
 const { classifyError } = await import(new URL("../dist/services/writes/runner.js", import.meta.url).href);
 
@@ -255,7 +260,7 @@ test("checkDeletePreconditions: нужна кнопка «Удалить отв�
   assert.doesNotThrow(() => checkDeletePreconditions(view({ state: "submitted", canDelete: true })));
 });
 
-test("submitAdapter: цель, payload, описание; запись ещё не реализована", async () => {
+test("submitAdapter: цель, payload, описание; запись отказывает по аргументам до сети", async () => {
   const args = { cmid: 42, mode: "draft", files: ["A.TXT", "b.txt"] };
   const v = view({ state: "submitted", canAdd: false, canEdit: true, dueText: "срок", files: [{ name: "a.txt", size: 5, sha256: SHA_A }] });
   const observed = { view: v, form: form(), files: [outboxFile("A.TXT", 12, SHA_B, "a.txt"), outboxFile("b.txt", 3, SHA_A)] };
@@ -282,8 +287,12 @@ test("submitAdapter: цель, payload, описание; запись ещё н
   assert.deepEqual(preview.replace, [{ name: "a.txt", size: 12, currentSize: 5 }]);
   assert.deepEqual(preview.add, [{ name: "b.txt", size: 3 }]);
 
-  await assert.rejects(() => submitAdapter.execute(args, observed, { signal: new AbortController().signal, commitPoint: async () => {} }), /не реализовано/);
-  await assert.rejects(() => submitAdapter.verifyOnly(args), /не реализовано/);
+  let commits = 0;
+  const ctx = { signal: new AbortController().signal, commitPoint: async () => void commits++ };
+  await assert.rejects(() => submitAdapter.execute({ ...args, text: "x" }, observed, ctx), /^Error: онлайн-текст в v1 не поддерживается$/);
+  await assert.rejects(() => submitAdapter.execute({ ...args, cmid: 0 }, observed, ctx), /cmid/);
+  await assert.rejects(() => submitAdapter.verifyOnly({ ...args, files: [] }), /^Error: отправка без файлов не поддерживается$/);
+  assert.equal(commits, 0);
 });
 
 test("submitAdapter.observe: отказ по аргументам до сети", async () => {
@@ -291,7 +300,7 @@ test("submitAdapter.observe: отказ по аргументам до сети"
   await assert.rejects(() => submitAdapter.observe({ cmid: 42, mode: "submit", files: [] }), /^Error: отправка без файлов не поддерживается$/);
 });
 
-test("deleteAdapter: цель, payload, описание; запись ещё не реализована", async () => {
+test("deleteAdapter: цель, payload, описание; запись отказывает по аргументам до сети", async () => {
   const v = view({ state: "submitted", canAdd: false, canEdit: true, canDelete: true, files: [{ name: "a.txt", size: 5, sha256: SHA_A }] });
   const args = { cmid: 7 };
   assert.equal(deleteAdapter.targetOf(args), "assign:7");
@@ -300,9 +309,119 @@ test("deleteAdapter: цель, payload, описание; запись ещё н
   assert.deepEqual(preview.files, [{ name: "a.txt", size: 5 }]);
   assert.equal(preview.state, "submitted");
   assert.ok(warnings.some((w) => /необратим/.test(w)));
-  await assert.rejects(() => deleteAdapter.execute(args, { view: v }, { signal: new AbortController().signal, commitPoint: async () => {} }), /не реализовано/);
-  await assert.rejects(() => deleteAdapter.verifyOnly(args), /не реализовано/);
+  let commits = 0;
+  const ctx = { signal: new AbortController().signal, commitPoint: async () => void commits++ };
+  await assert.rejects(() => deleteAdapter.execute({ cmid: -1 }, { view: v }, ctx), /cmid/);
+  await assert.rejects(() => deleteAdapter.verifyOnly({ cmid: 1.5 }), /cmid/);
   await assert.rejects(() => deleteAdapter.observe({ cmid: -1 }), /cmid/);
+  assert.equal(commits, 0);
+});
+
+test("sameFileSet: множества имён без учёта регистра и с учётом повторов", () => {
+  assert.equal(sameFileSet([], []), true);
+  assert.equal(sameFileSet(["a.txt", "B.pdf"], ["b.pdf", "A.TXT"]), true);
+  assert.equal(sameFileSet(["a.txt"], ["a.txt", "b.txt"]), false);
+  assert.equal(sameFileSet(["a.txt", "Новая папка"], ["a.txt"]), false);
+  assert.equal(sameFileSet(["a.txt", "A.txt"], ["a.txt", "b.txt"]), false);
+  assert.equal(sameFileSet(["a (1).txt"], ["a.txt"]), false);
+});
+
+test("expectedManagerFiles: существующие ∪ новые, одноимённый заменяется", () => {
+  assert.deepEqual(expectedManagerFiles([], ["a.txt"]), ["a.txt"]);
+  assert.deepEqual(expectedManagerFiles(["a.txt", "b.txt"], ["A.TXT", "c.txt"]), ["a.txt", "b.txt", "c.txt"]);
+  assert.deepEqual(expectedManagerFiles(["a.txt"], []), ["a.txt"]);
+});
+
+test("compareFiles: имя на месте ровно один раз и sha256 совпал", () => {
+  const actual = [
+    { name: "a.txt", size: 5, sha256: SHA_A },
+    { name: "b.txt", size: 3, sha256: SHA_B },
+  ];
+  assert.deepEqual(compareFiles([{ name: "a.txt", sha256: SHA_A }], actual), { namesMatch: true, contentMatch: true });
+  assert.deepEqual(compareFiles([{ name: "A.TXT", sha256: SHA_A }], actual), { namesMatch: true, contentMatch: true });
+  assert.deepEqual(compareFiles([{ name: "a.txt", sha256: SHA_B }], actual), { namesMatch: true, contentMatch: false });
+  assert.deepEqual(compareFiles([{ name: "c.txt", sha256: SHA_A }], actual), { namesMatch: false, contentMatch: false });
+  // Два файла, совпадающие по имени без учёта регистра, — неоднозначно.
+  const twice = [...actual, { name: "A.txt", size: 5, sha256: SHA_A }];
+  assert.deepEqual(compareFiles([{ name: "a.txt", sha256: SHA_A }], twice), { namesMatch: false, contentMatch: false });
+  assert.deepEqual(compareFiles([], actual), { namesMatch: true, contentMatch: true });
+});
+
+const SUBMITTED_ON_SAVE = /отправлена на оценку сразу при сохранении/;
+const fileA = { name: "a.txt", size: 5, sha256: SHA_A };
+const fileOld = { name: "a.txt", size: 3, sha256: SHA_B };
+
+test("classifySubmitOutcome: draft → submitted подтверждается с предупреждением", () => {
+  const after = view({ state: "submitted", canAdd: false, canEdit: true, files: [fileA] });
+  const r = classifySubmitOutcome({ mode: "draft", expected: [{ name: "a.txt", sha256: SHA_A }], after, expectedTotal: 1 });
+  assert.equal(r.outcome, "confirmed");
+  assert.equal(r.stage, "verified");
+  assert.ok(r.warnings.some((w) => SUBMITTED_ON_SAVE.test(w)));
+  assert.deepEqual(r.evidence, { state: "submitted", files: 1, namesMatch: true, contentMatch: true, errorShown: false });
+
+  const submit = classifySubmitOutcome({ mode: "submit", expected: [{ name: "a.txt", sha256: SHA_A }], after });
+  assert.equal(submit.outcome, "confirmed");
+  assert.ok(!submit.warnings.some((w) => SUBMITTED_ON_SAVE.test(w)));
+});
+
+test("classifySubmitOutcome: черновик — confirmed для draft, unknown/draft-saved для submit", () => {
+  const after = view({ state: "draft", canAdd: false, canEdit: true, files: [fileA] });
+  const draft = classifySubmitOutcome({ mode: "draft", expected: [{ name: "a.txt", sha256: SHA_A }], after });
+  assert.equal(draft.outcome, "confirmed");
+  assert.equal(draft.stage, "verified");
+  const submit = classifySubmitOutcome({ mode: "submit", expected: [{ name: "a.txt", sha256: SHA_A }], after });
+  assert.equal(submit.outcome, "unknown");
+  assert.equal(submit.stage, "draft-saved");
+});
+
+test("classifySubmitOutcome: нераспознанное или пустое состояние — unknown даже при совпавших файлах", () => {
+  for (const state of ["unknown", "none"]) {
+    for (const mode of ["draft", "submit"]) {
+      const r = classifySubmitOutcome({ mode, expected: [{ name: "a.txt", sha256: SHA_A }], after: view({ state, files: [fileA] }) });
+      assert.equal(r.outcome, "unknown", `${state}/${mode}`);
+    }
+  }
+});
+
+test("classifySubmitOutcome: расхождение файлов — не confirmed; rejected только при ошибке и неизменном состоянии", () => {
+  const before = view({ state: "submitted", canAdd: false, canEdit: true, files: [fileOld] });
+  const expected = [{ name: "a.txt", sha256: SHA_A }];
+  // sha256 не совпал, ошибки нет.
+  assert.equal(classifySubmitOutcome({ mode: "draft", expected, after: before, before }).outcome, "unknown");
+  // Явная ошибка Moodle и состояние прежнее.
+  const rejected = classifySubmitOutcome({ mode: "draft", expected, after: before, before, errorShown: true });
+  assert.equal(rejected.outcome, "rejected");
+  assert.equal(rejected.evidence.errorShown, true);
+  // Явная ошибка, но состояние изменилось.
+  const changed = view({ ...before, lastModified: "позже", files: [{ name: "a.txt", size: 4, sha256: "c".repeat(64) }] });
+  assert.equal(classifySubmitOutcome({ mode: "draft", expected, after: changed, before, errorShown: true }).outcome, "unknown");
+  // Без «до» (проверка повтора) rejected не бывает.
+  assert.equal(classifySubmitOutcome({ mode: "draft", expected, after: before, errorShown: true }).outcome, "unknown");
+  // Пропал существующий файл: присланный на месте, но файлов меньше ожидаемого.
+  const after = view({ state: "submitted", files: [fileA] });
+  assert.equal(classifySubmitOutcome({ mode: "submit", expected, after, expectedTotal: 2 }).outcome, "unknown");
+});
+
+test("classifySubmitOutcome: evidence без имён файлов", () => {
+  const after = view({ state: "submitted", files: [{ name: "secret-report.pdf", size: 5, sha256: SHA_A }] });
+  const r = classifySubmitOutcome({ mode: "draft", expected: [{ name: "secret-report.pdf", sha256: SHA_A }], after });
+  assert.ok(!JSON.stringify(r).includes("secret-report"));
+});
+
+test("classifyDeleteOutcome: none + «Добавить ответ» → confirmed; rejected только с «до» и ошибкой", () => {
+  const before = view({ state: "submitted", canAdd: false, canEdit: true, canDelete: true, files: [fileA] });
+  const gone = view({ state: "none", canAdd: true, files: [] });
+  const ok = classifyDeleteOutcome({ after: gone, before });
+  assert.equal(ok.outcome, "confirmed");
+  assert.equal(ok.stage, "verified");
+  assert.deepEqual(ok.evidence, { state: "none", files: 0, canAdd: true, errorShown: false });
+  assert.equal(classifyDeleteOutcome({ after: gone }).outcome, "confirmed");
+
+  assert.equal(classifyDeleteOutcome({ after: view({ state: "none", canAdd: false, closed: { reason: "other", text: "" } }), before }).outcome, "unknown");
+  assert.equal(classifyDeleteOutcome({ after: before, before }).outcome, "unknown");
+  assert.equal(classifyDeleteOutcome({ after: before, before, errorShown: true }).outcome, "rejected");
+  assert.equal(classifyDeleteOutcome({ after: before, errorShown: true }).outcome, "unknown");
+  assert.equal(classifyDeleteOutcome({ after: view({ state: "unknown" }), before, errorShown: true }).outcome, "unknown");
 });
 
 // Сообщения Playwright `page.goto` несут URL с query (id задания): в ответ тула им попадать нельзя.

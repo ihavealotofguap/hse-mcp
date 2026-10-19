@@ -1,18 +1,24 @@
 import crypto from "node:crypto";
 import path from "node:path";
-import type { Page } from "playwright";
-import { withPage } from "../../auth/browser-session.js";
+import type { Locator, Page } from "playwright";
+import { PAGE_DEADLINE_MS, withPage, type PageCallContext } from "../../auth/browser-session.js";
+import { COMMIT_DEADLINE_MS } from "../../commit.js";
 import { resolveOutboxFiles, type OutboxFile } from "../writes/outbox.js";
-import { classifyError, type WriteAdapter } from "../writes/runner.js";
+import { classifyError, type CommitPoint, type ExecuteResult, type WriteAdapter } from "../writes/runner.js";
 
 /**
- * Сдача, правка и удаление ответа на задание SmartLMS (спека №4 §9, §9.1). Здесь — читающая
- * половина адаптеров записи: разбор страницы статуса `/mod/assign/view.php?id=<cmid>` и формы правки
- * (`action=editsubmission`), предусловия сухого прогона, описание для владельца и отпечаток
- * состояния для `previewToken`. Все селекторы и подписи — из живой разведки (спека §17).
+ * Сдача, правка и удаление ответа на задание SmartLMS (спека №4 §9, §9.1): разбор страницы статуса
+ * `/mod/assign/view.php?id=<cmid>` и формы правки (`action=editsubmission`), предусловия сухого
+ * прогона, описание для владельца, отпечаток состояния для `previewToken`, сама запись через
+ * файловый менеджер Moodle и проверка чтением (§7). Все селекторы и подписи — из живой разведки
+ * (спека §17).
  *
  * Неожиданное состояние страницы (незнакомый класс статуса, нет нужной строки или кнопки) — отказ,
  * а не догадка. Тексты ошибок не содержат ни имён файлов, ни URL, ни текста страницы.
+ *
+ * Запись покадровая (урок третьего прохода §17): каждый шаг — одно действие по точному селектору
+ * (ровно один видимый элемент) и проверка состояния после него; первое расхождение — отказ до точки
+ * невозврата. Необратимо только одно действие на операцию: «Сохранить» или «Продолжить».
  */
 
 const BASE_URL = "https://edu.hse.ru";
@@ -151,10 +157,19 @@ export function sanitizeNavigationError(err: unknown, what = "страница �
   return clean;
 }
 
-/** `withPage` с очисткой ошибок от URL; собственные отказы проходят как есть. */
-async function readPage<T>(url: string, fn: (page: Page) => Promise<T>, signal?: AbortSignal): Promise<T> {
+/**
+ * `withPage` с очисткой ошибок от URL; собственные отказы проходят как есть. Через неё идёт любое
+ * обращение к странице, и запись тоже: исключение `commitPoint` пробрасывается (очищенным), а не
+ * глотается.
+ */
+async function readPage<T>(
+  url: string,
+  fn: (page: Page, ctx: PageCallContext) => Promise<T>,
+  signal?: AbortSignal,
+  deadlineMs?: number
+): Promise<T> {
   try {
-    return await withPage(url, fn, { signal });
+    return await withPage(url, fn, { signal, deadlineMs });
   } catch (err) {
     throw sanitizeNavigationError(err);
   }
@@ -364,6 +379,114 @@ export function checkDeletePreconditions(view: AssignmentView): void {
   if (!view.canDelete) throw new Refusal("удалить ответ нельзя: на странице задания нет кнопки «Удалить ответ»");
 }
 
+/**
+ * Одинаковы ли списки имён как мультимножества без учёта регистра. Регистр не различается, потому
+ * что `planSubmission` уже отказывает на именах, различающихся только регистром; повторы различаются:
+ * `a.txt` и `A.txt` против `a.txt` и `b.txt` — не совпадение.
+ */
+export function sameFileSet(actual: string[], expected: string[]): boolean {
+  if (actual.length !== expected.length) return false;
+  const a = actual.map(fold).sort();
+  const e = expected.map(fold).sort();
+  return a.every((name, i) => name === e[i]);
+}
+
+/** Ожидаемый список файлового менеджера после загрузки: существующие ∪ новые (одноимённый заменяется). */
+export function expectedManagerFiles(existing: string[], added: string[]): string[] {
+  const result = [...existing];
+  for (const name of added) if (!result.some((n) => fold(n) === fold(name))) result.push(name);
+  return result;
+}
+
+export interface ExpectedFile {
+  name: string;
+  sha256: string;
+}
+
+/**
+ * Присланные файлы против файлов ответа на странице статуса (§7, §9.1): имя на месте ровно один раз
+ * (без учёта регистра) и sha256 скачанного равен sha256 отправленного.
+ */
+export function compareFiles(
+  expected: ExpectedFile[],
+  actual: AssignmentView["files"]
+): { namesMatch: boolean; contentMatch: boolean } {
+  let namesMatch = true;
+  let contentMatch = true;
+  for (const e of expected) {
+    const found = actual.filter((f) => fold(f.name) === fold(e.name));
+    if (found.length !== 1) {
+      namesMatch = false;
+      contentMatch = false;
+    } else if (found[0].sha256 !== e.sha256) contentMatch = false;
+  }
+  return { namesMatch, contentMatch };
+}
+
+const W_SUBMITTED_ON_SAVE = "работа отправлена на оценку сразу при сохранении: у этого задания нет отдельного шага «Отправить на оценку»";
+const W_DRAFT_ONLY = "ответ сохранён черновиком и на оценку не отправлен: отдельный шаг «Отправить на оценку» тул в v1 не выполняет";
+
+/**
+ * Исход сдачи по свежему чтению страницы статуса (§7). Файлы совпали: `submitted` — подтверждено
+ * (при `draft` с предупреждением, что работа уже отправлена), `draft` — подтверждено для `draft` и
+ * `unknown`/`draft-saved` для `submit`; иное состояние (в том числе нераспознанный класс) — `unknown`.
+ * Файлы не совпали: `rejected` только при явной ошибке Moodle на странице и неизменном состоянии
+ * относительно `before`; без `before` (проверка повтора) `rejected` не бывает. `expectedTotal` —
+ * сколько файлов должно быть в ответе (существующие ∪ присланные), если это известно. В `evidence`
+ * только нейтральные признаки, без имён.
+ */
+export function classifySubmitOutcome(input: {
+  mode: SubmitArgs["mode"];
+  expected: ExpectedFile[];
+  after: AssignmentView;
+  before?: AssignmentView | null;
+  expectedTotal?: number | null;
+  errorShown?: boolean;
+}): ExecuteResult {
+  const { mode, expected, after, before, expectedTotal } = input;
+  const errorShown = input.errorShown === true;
+  const { namesMatch, contentMatch } = compareFiles(expected, after.files);
+  const evidence = { state: after.state, files: after.files.length, namesMatch, contentMatch, errorShown };
+  const filesOk = namesMatch && contentMatch && (expectedTotal == null || after.files.length === expectedTotal);
+  if (filesOk) {
+    if (after.state === "submitted") {
+      return { stage: "verified", outcome: "confirmed", evidence, warnings: mode === "draft" ? [W_SUBMITTED_ON_SAVE] : [] };
+    }
+    if (after.state === "draft") {
+      return mode === "draft"
+        ? { stage: "verified", outcome: "confirmed", evidence, warnings: [] }
+        : { stage: "draft-saved", outcome: "unknown", evidence, warnings: [W_DRAFT_ONLY] };
+    }
+    return { stage: "verified", outcome: "unknown", evidence, warnings: [] };
+  }
+  if (errorShown && before && stateFingerprint(before) === stateFingerprint(after)) {
+    return { stage: "verified", outcome: "rejected", evidence, warnings: [] };
+  }
+  return { stage: "verified", outcome: "unknown", evidence, warnings: [] };
+}
+
+/**
+ * Исход удаления (§9.1): ответа нет, файлов нет, кнопка «Добавить ответ на задание» на месте —
+ * подтверждено; явная ошибка и состояние не изменилось относительно `before` — `rejected`; иначе
+ * `unknown`. Без `before` (проверка повтора) `rejected` не бывает.
+ */
+export function classifyDeleteOutcome(input: {
+  after: AssignmentView;
+  before?: AssignmentView | null;
+  errorShown?: boolean;
+}): ExecuteResult {
+  const { after, before } = input;
+  const errorShown = input.errorShown === true;
+  const evidence = { state: after.state, files: after.files.length, canAdd: after.canAdd, errorShown };
+  if (after.state === "none" && after.canAdd && after.files.length === 0) {
+    return { stage: "verified", outcome: "confirmed", evidence, warnings: [] };
+  }
+  if (errorShown && before && stateFingerprint(before) === stateFingerprint(after)) {
+    return { stage: "verified", outcome: "rejected", evidence, warnings: [] };
+  }
+  return { stage: "verified", outcome: "unknown", evidence, warnings: [] };
+}
+
 async function extractAssignmentPage(page: Page): Promise<RawAssignmentPage> {
   return page.evaluate(() => {
     const clean = (s: string | null | undefined) => (s ?? "").replace(/\s+/g, " ").trim();
@@ -464,9 +587,200 @@ const STATE_TEXT: Record<AssignmentView["state"], string> = {
 const W_SAVE_MAY_SUBMIT = "сохранение может сразу отправить работу на оценку (у проверенных заданий отдельного шага нет)";
 const W_FORM_OPENED = "форма правки открывалась и не сохранялась";
 
-const notImplemented = async (): Promise<never> => {
-  throw new Error("не реализовано");
-};
+// --- Запись: шаги файлового менеджера (§17, четвёртый и шестой проходы) ---
+
+const SEL_ADD = 'a[title="Добавить..."]:visible';
+const SEL_PICKER = ".file-picker:visible";
+// Форма загрузки показывается только на вкладке «Загрузить файл»: её видимость и есть проверка вкладки.
+const SEL_UPLOAD_FORM = ".file-picker:visible .fp-upload-form:visible";
+const SEL_UPLOAD_INPUT = `${SEL_UPLOAD_FORM} input[name="repo_upload_file"]`;
+const SEL_UPLOAD_BTN = `${SEL_UPLOAD_FORM} .fp-upload-btn:visible`;
+const SEL_OVERWRITE = 'button:visible:has-text("Перезаписать")';
+const SEL_PICKER_ERROR = ".fp-msg-error:visible";
+const SEL_SAVE = 'input[name="submitbutton"]';
+const SEL_DELETE = 'button:visible:has-text("Удалить ответ")';
+const SEL_CONTINUE = 'button:visible:has-text("Продолжить")';
+const SEL_MOODLE_ERROR = ".alert-danger:visible, .moodle-exception-message:visible";
+const DUP_TEXT = "Файл с этим именем уже был прикреплен";
+const CONFIRM_DELETE_TEXT = "Вы уверены, что хотите удалить представленный ответ";
+
+const POLL_MS = 100;
+const STEP_TIMEOUT_MS = 10_000;
+const UPLOAD_TIMEOUT_MS = 20_000;
+// Ожидание страницы статуса после «Сохранить»/«Продолжить»: половина дедлайна коммита, вторая —
+// на чтение и скачивание файлов для проверки.
+const VIEW_WAIT_MS = COMMIT_DEADLINE_MS / 2;
+// Загрузка каждого файла добавляет время к исходному дедлайну страницы (до точки невозврата).
+const PER_FILE_MS = 10_000;
+
+/** Ровно один элемент по селектору (селекторы с `:visible`), иначе отказ: неожиданная страница. */
+async function exactlyOne(page: Page, selector: string, what: string): Promise<Locator> {
+  const loc = page.locator(selector);
+  const n = await loc.count();
+  if (n !== 1) throw new Refusal(`${what}: ожидался ровно один элемент, найдено ${n}; операция прервана`);
+  return loc;
+}
+
+/** Один клик по единственному элементу; повторов нет (урок третьего прохода §17). */
+async function clickOnce(page: Page, selector: string, what: string): Promise<void> {
+  await (await exactlyOne(page, selector, what)).click();
+}
+
+const visibleCount = (page: Page, selector: string) => page.locator(selector).count();
+const dupDialogShown = async (page: Page) =>
+  (await page.getByText(DUP_TEXT).filter({ visible: true }).count()) > 0 || (await visibleCount(page, SEL_OVERWRITE)) > 0;
+
+/**
+ * Ждёт появления элемента; не появился — отказ с понятной причиной. Отмена и дедлайн страницы
+ * (сигнал `withPage`) пробрасываются как есть, чтобы не маскировать их под отказ.
+ */
+async function waitShown(page: Page, selector: string, refusal: string, signal: AbortSignal): Promise<void> {
+  try {
+    await page.locator(selector).first().waitFor({ state: "visible", timeout: STEP_TIMEOUT_MS });
+  } catch (err) {
+    if (signal.aborted) throw err;
+    throw new Refusal(refusal);
+  }
+}
+
+/**
+ * Неожиданные события страницы: системный диалог выбора файла (штатный путь его не открывает,
+ * §17, четвёртый проход) и JS-диалоги. Диалог закрывается, следующая проверка отказывает.
+ */
+function guardPage(page: Page): () => void {
+  let problem: string | null = null;
+  page.on("filechooser", () => {
+    problem ??= "открылся системный диалог выбора файла";
+  });
+  page.on("dialog", (dialog) => {
+    problem ??= "страница показала неожиданный диалог";
+    dialog.dismiss().catch(() => {});
+  });
+  return () => {
+    if (problem) throw new Refusal(`${problem}; операция прервана`);
+  };
+}
+
+/** Имена в файловом менеджере формы — тем же способом, что в `extractEditForm`. */
+async function managerNames(page: Page): Promise<string[]> {
+  return page.evaluate(() =>
+    Array.from(document.querySelectorAll(".filemanager .fp-filename"))
+      .map((e) => (e.textContent ?? "").replace(/\s+/g, " ").trim())
+      .filter(Boolean)
+  );
+}
+
+/**
+ * Один файл в файловый менеджер: клик «Добавить...» → вкладка «Загрузить файл» → `setInputFiles` →
+ * клик «Загрузить этот файл» → при одноимённом файле только «Перезаписать» → пикер закрыт, имя в
+ * списке. `replace` — имя уже есть в менеджере: тогда диалог одноимённого файла обязателен (§17,
+ * шестой проход), без него — отказ по таймауту; для нового имени диалог — отказ.
+ */
+async function attachFile(
+  page: Page,
+  file: OutboxFile,
+  n: number,
+  replace: boolean,
+  check: () => void,
+  signal: AbortSignal
+): Promise<void> {
+  const name = diskName(file);
+  check();
+  if ((await visibleCount(page, SEL_PICKER)) > 0 || (await dupDialogShown(page))) {
+    throw new Refusal("файловый пикер или диалог уже открыт до загрузки; операция прервана");
+  }
+  await clickOnce(page, SEL_ADD, "кнопка «Добавить...» файлового менеджера");
+  await waitShown(page, SEL_PICKER, "файловый пикер не открылся; операция прервана", signal);
+  check();
+  await waitShown(page, SEL_UPLOAD_FORM, "в файловом пикере не активна вкладка «Загрузить файл»; операция прервана", signal);
+  const input = await exactlyOne(page, SEL_UPLOAD_INPUT, "поле файла на вкладке «Загрузить файл»");
+  await input.setInputFiles(file.absPath);
+  const picked = await input.evaluate((el) =>
+    Array.from((el as HTMLInputElement).files ?? []).map((f) => ({ name: f.name, size: f.size }))
+  );
+  if (picked.length !== 1 || picked[0].name !== name || picked[0].size !== file.size) {
+    throw new Refusal(`файл №${n} не попал в поле загрузки или изменился на диске; операция прервана`);
+  }
+  check();
+  await clickOnce(page, SEL_UPLOAD_BTN, "кнопка «Загрузить этот файл»");
+
+  const deadline = Date.now() + UPLOAD_TIMEOUT_MS;
+  let overwritten = false;
+  for (;;) {
+    check();
+    signal.throwIfAborted();
+    if ((await visibleCount(page, SEL_PICKER_ERROR)) > 0) {
+      throw new Refusal(`файловый пикер сообщил об ошибке при загрузке файла №${n}; операция прервана`);
+    }
+    const dup = await dupDialogShown(page);
+    if (dup && !overwritten) {
+      if (!replace) throw new Refusal(`неожиданный диалог одноимённого файла для файла №${n}; операция прервана`);
+      if ((await page.getByText(DUP_TEXT).filter({ visible: true }).count()) === 0) {
+        throw new Refusal("диалог одноимённого файла не распознан; операция прервана");
+      }
+      // «Переименовать» не нажимается никогда (§9.1): только «Перезаписать», ровно один раз.
+      await clickOnce(page, SEL_OVERWRITE, "кнопка «Перезаписать»");
+      overwritten = true;
+    } else if (!dup && (overwritten || !replace) && (await visibleCount(page, SEL_PICKER)) === 0) {
+      if ((await managerNames(page)).some((x) => fold(x) === fold(name))) return;
+    }
+    if (Date.now() > deadline) throw new Refusal(`файл №${n} не загрузился в файловый менеджер за отведённое время; операция прервана`);
+    await page.waitForTimeout(POLL_MS);
+  }
+}
+
+/**
+ * Предусловие точки невозврата (§17, третий и четвёртый проходы): пикер и диалоги закрыты, ошибок
+ * пикера нет, на форме один файловый менеджер, папок нет, имена ровно ожидаемые, «Сохранить» одна.
+ */
+async function assertManagerState(page: Page, expected: string[], check: () => void): Promise<Locator> {
+  check();
+  if ((await visibleCount(page, SEL_PICKER)) > 0) throw new Refusal("файловый пикер не закрылся; операция прервана до отправки");
+  if (await dupDialogShown(page)) throw new Refusal("диалог одноимённого файла не закрылся; операция прервана до отправки");
+  if ((await visibleCount(page, SEL_PICKER_ERROR)) > 0) throw new Refusal("файловый пикер показывает ошибку; операция прервана до отправки");
+  if ((await page.locator(".filemanager").count()) !== 1) throw new Refusal("на форме не один файловый менеджер; операция прервана до отправки");
+  if ((await page.locator(".filemanager .fp-folder").count()) > 0) {
+    throw new Refusal("в файловом менеджере появилась папка; операция прервана до отправки");
+  }
+  if (!sameFileSet(await managerNames(page), expected)) {
+    throw new Refusal("список файлов в файловом менеджере не совпадает с ожидаемым; операция прервана до отправки");
+  }
+  return exactlyOne(page, SEL_SAVE, "кнопка «Сохранить»");
+}
+
+/** Страница статуса того же задания после POST: Moodle переадресует на `action=view`. */
+function isViewUrl(url: URL, cmid: number, action = "view"): boolean {
+  return url.pathname.endsWith("/mod/assign/view.php") && url.searchParams.get("id") === String(cmid) && url.searchParams.get("action") === action;
+}
+
+const moodleErrorShown = async (page: Page) => (await visibleCount(page, SEL_MOODLE_ERROR)) > 0;
+
+/**
+ * Единственный необратимый клик: `commitPoint` (исключение не перехватывается) → клик → ожидание
+ * страницы статуса. Не дошли до неё — `false`: исход определит вызывающий как `unknown`.
+ */
+async function commitAndClick(
+  page: Page,
+  pageCtx: PageCallContext,
+  button: Locator,
+  cmid: number,
+  commitPoint: CommitPoint
+): Promise<boolean> {
+  await commitPoint(pageCtx);
+  const reached = page.waitForURL((u) => isViewUrl(u, cmid), { timeout: VIEW_WAIT_MS }).then(
+    () => true,
+    () => false
+  );
+  await button.click();
+  return reached;
+}
+
+const NOT_REACHED = (errorShown: boolean): ExecuteResult => ({
+  stage: "sent",
+  outcome: "unknown",
+  evidence: { reachedView: false, errorShown },
+  warnings: [],
+});
 
 const targetOf = (args: { cmid: number }) => `assign:${args.cmid}`;
 
@@ -532,8 +846,52 @@ export const submitAdapter: WriteAdapter<SubmitArgs, SubmitObserved> = {
       state: stateFingerprint(view),
     };
   },
-  execute: notImplemented,
-  verifyOnly: notImplemented,
+  async execute(args, { view, files }, ctx) {
+    checkSubmitArgs(args);
+    const expected = files.map((f) => ({ name: diskName(f), sha256: f.sha256 }));
+    return readPage(
+      editUrl(args.cmid),
+      async (page, pageCtx) => {
+        const check = guardPage(page);
+        await page.waitForLoadState("networkidle", { timeout: 8_000 }).catch(() => {});
+        // Предусловия заново, как в observe: форма та же, что показана в сухом прогоне.
+        const raw = await extractEditForm(page);
+        if (!raw.hasForm) throw new Refusal("форма правки ответа не открылась");
+        const form = buildEditFormInfo(raw);
+        const plan = planSubmission(view, form, files);
+        if (!sameFileSet(form.managerFiles, view.files.map((f) => f.name))) {
+          throw new Refusal("файлы в форме правки не совпадают с ответом на странице задания: состояние изменилось после сухого прогона");
+        }
+        let manager = form.managerFiles;
+        for (const [i, file] of files.entries()) {
+          const replace = manager.some((m) => fold(m) === fold(diskName(file)));
+          await attachFile(page, file, i + 1, replace, check, pageCtx.signal);
+          manager = expectedManagerFiles(manager, [diskName(file)]);
+        }
+        const save = await assertManagerState(page, manager, check);
+        check();
+
+        // Точка невозврата: дальше только ожидание и чтение.
+        if (!(await commitAndClick(page, pageCtx, save, args.cmid, ctx.commitPoint))) {
+          return NOT_REACHED(await moodleErrorShown(page).catch(() => false));
+        }
+        const errorShown = await moodleErrorShown(page);
+        const after = await readAssignmentView(page, args.cmid);
+        return classifySubmitOutcome({ mode: args.mode, expected, after, before: view, expectedTotal: plan.total, errorShown });
+      },
+      ctx.signal,
+      PAGE_DEADLINE_MS + PER_FILE_MS * files.length
+    );
+  },
+  async verifyOnly(args, signal) {
+    checkSubmitArgs(args);
+    const files = await resolveOutboxFiles(args.files);
+    const expected = files.map((f) => ({ name: diskName(f), sha256: f.sha256 }));
+    const after = await readPage(viewUrl(args.cmid), (page) => readAssignmentView(page, args.cmid), signal);
+    // Без `before`: проверка повтора не выносит `rejected`.
+    const { outcome, evidence, warnings } = classifySubmitOutcome({ mode: args.mode, expected, after });
+    return { outcome: outcome === "rejected" ? "unknown" : outcome, evidence, warnings };
+  },
 };
 
 export const deleteAdapter: WriteAdapter<DeleteArgs, DeleteObserved> = {
@@ -557,6 +915,47 @@ export const deleteAdapter: WriteAdapter<DeleteArgs, DeleteObserved> = {
   payloadOf(_args, { view }) {
     return { files: [], state: stateFingerprint(view) };
   },
-  execute: notImplemented,
-  verifyOnly: notImplemented,
+  async execute(args, { view }, ctx) {
+    checkCmid(args.cmid);
+    return readPage(
+      viewUrl(args.cmid),
+      async (page, pageCtx) => {
+        const check = guardPage(page);
+        const before = await readAssignmentView(page, args.cmid);
+        checkDeletePreconditions(before);
+        if (stateFingerprint(before) !== stateFingerprint(view)) {
+          throw new Refusal("состояние ответа изменилось после сухого прогона: выполните сухой прогон заново");
+        }
+        // «Удалить ответ» только открывает страницу подтверждения (GET, §9.1) — это ещё чтение.
+        await clickOnce(page, SEL_DELETE, "кнопка «Удалить ответ»");
+        try {
+          await page.waitForURL((u) => isViewUrl(u, args.cmid, "removesubmissionconfirm"), { timeout: STEP_TIMEOUT_MS });
+        } catch (err) {
+          if (pageCtx.signal.aborted) throw err;
+          throw new Refusal("страница подтверждения удаления не открылась; операция прервана");
+        }
+        check();
+        if ((await page.getByText(CONFIRM_DELETE_TEXT).filter({ visible: true }).count()) === 0) {
+          throw new Refusal("страница подтверждения удаления не распознана; операция прервана");
+        }
+        const proceed = await exactlyOne(page, SEL_CONTINUE, "кнопка «Продолжить»");
+        check();
+
+        // Точка невозврата: дальше только ожидание и чтение.
+        if (!(await commitAndClick(page, pageCtx, proceed, args.cmid, ctx.commitPoint))) {
+          return NOT_REACHED(await moodleErrorShown(page).catch(() => false));
+        }
+        const errorShown = await moodleErrorShown(page);
+        const after = await readAssignmentView(page, args.cmid);
+        return classifyDeleteOutcome({ after, before, errorShown });
+      },
+      ctx.signal
+    );
+  },
+  async verifyOnly(args, signal) {
+    checkCmid(args.cmid);
+    const after = await readPage(viewUrl(args.cmid), (page) => readAssignmentView(page, args.cmid), signal);
+    const { outcome, evidence, warnings } = classifyDeleteOutcome({ after });
+    return { outcome: outcome === "rejected" ? "unknown" : outcome, evidence, warnings };
+  },
 };
