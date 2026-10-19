@@ -1,6 +1,7 @@
 import type { PageCallContext } from "../../auth/browser-session.js";
 import { defineResource, type LoadContext } from "../../resource.js";
 import { findUnresolvedByTarget, latestByToken, recordJournal, type JournalEntry } from "./journal.js";
+import { sleep } from "../../fs-lock.js";
 import { loadOrCreateKey, PREVIEW_TTL_MS, signPreview, targetIdOf, tokenIdOf, verifyPreview } from "./token.js";
 import type { ErrorClass, Outcome, PreviewPayload } from "./types.js";
 
@@ -56,6 +57,8 @@ export interface WriteAdapter<A extends object, Obs> {
   op: string;
   /** Ресурсы чтения, сбрасываемые после точки невозврата при любом исходе. */
   invalidates: string[];
+  /** Дедлайн после точки невозврата, мс (по умолчанию `COMMIT_DEADLINE_MS`); нужен прежде всего проверкам. */
+  commitDeadlineMs?: number;
   /** Идентификатор цели (курс/задание/заявка): в журнал попадает только его HMAC. */
   targetOf(args: A): string;
   /** Только чтение; бросает при невыполненных предусловиях. */
@@ -64,12 +67,18 @@ export interface WriteAdapter<A extends object, Obs> {
   payloadOf(args: A, observed: Obs): Pick<PreviewPayload, "mode" | "files" | "state">;
   /**
    * Запись и проверка чтением. Перед **каждым** необратимым действием — `await ctx.commitPoint(pageCtx)`.
-   * Исключение из `commitPoint` не перехватывать: оно значит, что вызов уже отклонён (отмена, дедлайн,
-   * сбой журнала), и необратимое действие выполнять нельзя. Проглоченный отказ раннер считает
-   * неизвестным исходом.
+   * Контракт: `execute` не перехватывает и не проглатывает исключение из `commitPoint` — оно значит,
+   * что вызов уже отклонён (отмена, дедлайн, сбой журнала), и необратимое действие выполнять нельзя.
+   * Проглоченный отказ раннер считает неизвестным исходом.
    */
   execute(args: A, observed: Obs, ctx: ExecuteContext): Promise<ExecuteResult>;
-  /** Только чтение: исход ранее начатой записи, без повторной отправки. */
+  /**
+   * Только чтение: исход ранее начатой записи, без повторной отправки. Возвращает только `confirmed`
+   * или `unknown`, **никогда `rejected`** (раннер превращает `rejected` в `unknown` с предупреждением):
+   * проверка не вправе по своему усмотрению закрыть запись как отклонённую. Аргументы повтора могут
+   * отличаться от подтверждённых при записи, поэтому проверять нужно то, что сказано в журнале
+   * (предыдущая попытка), а не собственные данные вызова: ничего не помечать разрешённым самовольно.
+   */
   verifyOnly(
     args: A,
     signal?: AbortSignal
@@ -140,7 +149,7 @@ interface ExecArgs<A, Obs> {
   call: WriteCall;
 }
 
-function commitPointFor(call: WriteCall, ctx: LoadContext): CommitPoint {
+function commitPointFor(call: WriteCall, ctx: LoadContext, deadlineMs?: number): CommitPoint {
   return async (pageCtx) => {
     try {
       if (!call.sending) {
@@ -154,8 +163,8 @@ function commitPointFor(call: WriteCall, ctx: LoadContext): CommitPoint {
         call.pending = pending;
         await pending;
       }
-      ctx.commit();
-      pageCtx.commit();
+      ctx.commit(deadlineMs);
+      pageCtx.commit(deadlineMs);
     } catch (err) {
       call.refused = true;
       throw err;
@@ -183,7 +192,7 @@ export function defineWrite<A extends object, Obs>(
     name: `writes.${adapter.op}`,
     cache: false,
     invalidates: adapter.invalidates,
-    load: (x, ctx) => adapter.execute(x.args, x.observed, { signal: ctx.signal, commitPoint: commitPointFor(x.call, ctx) }),
+    load: (x, ctx) => adapter.execute(x.args, x.observed, { signal: ctx.signal, commitPoint: commitPointFor(x.call, ctx, adapter.commitDeadlineMs) }),
   });
 
   const payloadFor = (args: A, observed: Obs): PreviewPayload => ({
@@ -196,8 +205,16 @@ export function defineWrite<A extends object, Obs>(
     const key = await loadOrCreateKey();
     const observed = await adapter.observe(args, signal);
     const payload = payloadFor(args, observed);
-    const now = new Date();
-    const previewToken = signPreview(key, payload, now);
+    let now = new Date();
+    let previewToken = signPreview(key, payload, now);
+    // Токен детерминирован секундой и данными: тот же сухой прогон в ту же секунду после записи дал бы
+    // уже использованный токен (повтор из журнала вместо новой записи) — ждём следующую секунду.
+    const issuedId = tokenIdOf(previewToken);
+    if (issuedId && (await latestByToken(issuedId))) {
+      await sleep(1000 - (Date.now() % 1000) + 5);
+      now = new Date();
+      previewToken = signPreview(key, payload, now);
+    }
     const { preview, warnings } = adapter.describe(args, observed);
     const priorUnknown = (await findUnresolvedByTarget(targetIdOf(key, adapter.op, payload.target))).length > 0;
     return {
@@ -220,11 +237,15 @@ export function defineWrite<A extends object, Obs>(
     }
     const started = Date.now();
     const checked = await adapter.verifyOnly(args, signal);
-    const warnings = withUnknownWarning(checked.outcome, [...checked.warnings]);
+    // Контракт verifyOnly: только confirmed/unknown. `rejected` от проверки чтением не принимается как
+    // исход — отправка по токену уже начиналась, значит исход неизвестен.
+    const outcome: Outcome = checked.outcome === "rejected" ? "unknown" : checked.outcome;
+    const extra = checked.outcome === "rejected" ? ["verifyOnly вернул «отклонено», что ему не разрешено: исход считается неизвестным."] : [];
+    const warnings = withUnknownWarning(outcome, [...checked.warnings, ...extra]);
     const ids = { op: prior.op, tokenId: prior.tokenId, targetId: prior.targetId };
-    await journalOutcome({ ...ids, stage: "verified", outcome: checked.outcome, durationMs: Date.now() - started }, warnings);
-    // Отправка по токену уже начиналась: «не отправлено» утверждается, только если система отказала.
-    return { stage: "verified", outcome: checked.outcome, evidence: checked.evidence, warnings, sent: checked.outcome !== "rejected" };
+    await journalOutcome({ ...ids, stage: "verified", outcome, durationMs: Date.now() - started }, warnings);
+    // Отправка по токену уже начиналась: «не отправлено» утверждается только записанным в журнале отказом.
+    return { stage: "verified", outcome, evidence: checked.evidence, warnings, sent: true };
   }
 
   async function write(args: A, token: string, acknowledgeUnknown: boolean, signal?: AbortSignal): Promise<WriteResponse> {

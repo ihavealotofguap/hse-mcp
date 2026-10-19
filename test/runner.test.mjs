@@ -11,7 +11,8 @@ process.env.HSE_WRITES_DIR = dir;
 
 const { defineWrite, classifyError } = await import(new URL("../dist/services/writes/runner.js", import.meta.url).href);
 const { defineResource } = await import(new URL("../dist/resource.js", import.meta.url).href);
-const { loadOrCreateKey, signPreview } = await import(new URL("../dist/services/writes/token.js", import.meta.url).href);
+const { loadOrCreateKey, signPreview, targetIdOf } = await import(new URL("../dist/services/writes/token.js", import.meta.url).href);
+const { recordJournal } = await import(new URL("../dist/services/writes/journal.js", import.meta.url).href);
 
 test.after(() => {
   fs.rmSync(dir, { recursive: true, force: true });
@@ -418,4 +419,141 @@ test("classifyError", () => {
     [undefined, "other"],
   ];
   for (const [err, expected] of cases) assert.equal(classifyError(err), expected, String(err?.message ?? err));
+});
+
+// --- Покрытие сбоев журнала, повтора после падения и дедлайна коммита (H1) ---
+
+/**
+ * Шов для отказа записи журнала без изменений в продакшен-коде: `writeFileAtomic` пишет во временный
+ * файл `journal.json.<pid>.tmp`; каталог на его месте даёт EISDIR при записи, а чтение журнала
+ * (ENOENT/обычный файл) не страдает.
+ */
+const journalTmp = path.join(dir, `journal.json.${process.pid}.tmp`);
+const blockJournalWrites = () => fs.mkdirSync(journalTmp, { recursive: true });
+const unblockJournalWrites = () => fs.rmSync(journalTmp, { recursive: true, force: true });
+
+test("k. сбой записи `sending` в журнал → отказ до необратимого шага, ничего не отправлено, токен не потрачен", async () => {
+  const fake = makeFake("test_write_ka");
+  const reached = { afterCommit: false, pageCommit: false };
+  fake.behavior.afterCommit = () => (reached.afterCommit = true);
+  fake.behavior.pageCommit = () => (reached.pageCommit = true);
+  const args = { id: "ka1", value: "val-ka" };
+  const dry = await fake.write(args);
+  blockJournalWrites();
+  try {
+    await assert.rejects(fake.write({ ...args, confirm: true, previewToken: dry.previewToken }), /ничего не отправлено/);
+  } finally {
+    unblockJournalWrites();
+  }
+  // execute вызывался, но commitPoint бросил до commit() ресурса/страницы и до действия адаптера
+  assert.equal(reached.afterCommit, false);
+  assert.equal(reached.pageCommit, false);
+  assert.equal(fake.system.has("ka1"), false);
+  assert.deepEqual(byToken(dry.previewToken), []);
+  // журнал цел, токен свободен: тот же токен после починки проходит как первая запись
+  const res = await fake.write({ ...args, confirm: true, previewToken: dry.previewToken });
+  assert.equal(res.outcome, "confirmed");
+  assert.deepEqual(byToken(dry.previewToken).map((e) => e.stage), ["sending", "verified"]);
+});
+
+test("l. сбой записи `verified` в журнал → исход всё равно возвращается, с предупреждением", async () => {
+  const fake = makeFake("test_write_kb");
+  fake.behavior.afterCommit = blockJournalWrites; // `sending` уже записан, дальше запись журнала ломается
+  const args = { id: "kb1", value: "val-kb" };
+  const dry = await fake.write(args);
+  let res;
+  try {
+    res = await fake.write({ ...args, confirm: true, previewToken: dry.previewToken });
+  } finally {
+    unblockJournalWrites();
+  }
+  assert.equal(res.outcome, "confirmed");
+  assert.equal(res.sent, true);
+  assert.ok(res.warnings.some((w) => /не записан в журнал/.test(w)), JSON.stringify(res.warnings));
+  assert.equal(fake.system.get("kb1"), "val-kb");
+  assert.deepEqual(byToken(dry.previewToken).map((e) => e.stage), ["sending"]);
+});
+
+/** Журнал «упавшего» процесса: токен выпущен, `sending` записан, исхода нет. */
+async function crashedAfterSending(fake, args) {
+  const dry = await fake.write(args);
+  const key = await loadOrCreateKey(dir);
+  await recordJournal({
+    at: new Date().toISOString(),
+    op: fake.adapter.op,
+    tokenId: tokenIdOf(dry.previewToken),
+    targetId: targetIdOf(key, fake.adapter.op, fake.adapter.targetOf(args)),
+    stage: "sending",
+  });
+  return dry;
+}
+
+test("m. повтор, когда последняя запись журнала — только `sending` (падение): вызывается лишь verifyOnly", async () => {
+  const fake = makeFake("test_write_kc");
+  const args = { id: "kc1", value: "val-kc" };
+  const dry = await crashedAfterSending(fake, args);
+  const observeBefore = fake.calls.observe;
+
+  const res = await fake.write({ ...args, confirm: true, previewToken: dry.previewToken });
+  assert.equal(fake.calls.execute, 0);
+  assert.equal(fake.calls.verifyOnly, 1);
+  assert.equal(fake.calls.observe, observeBefore);
+  assert.equal(res.outcome, "confirmed");
+  assert.equal(res.sent, true);
+  assert.deepEqual(byToken(dry.previewToken).map((e) => [e.stage, e.outcome]), [["sending", undefined], ["verified", "confirmed"]]);
+
+  // исход «unknown» от проверки сохраняет запрет автоповтора
+  const fake2 = makeFake("test_write_kc2");
+  fake2.behavior.verifyOutcome = "unknown";
+  const args2 = { id: "kc2", value: "val-kc2" };
+  const dry2 = await crashedAfterSending(fake2, args2);
+  const res2 = await fake2.write({ ...args2, confirm: true, previewToken: dry2.previewToken });
+  assert.equal(fake2.calls.execute, 0);
+  assert.equal(res2.outcome, "unknown");
+  assert.ok(res2.warnings.some((w) => /повторять отправку без проверки запрещено/i.test(w)));
+});
+
+test("n. verifyOnly не вправе возвращать rejected: раннер превращает его в unknown с предупреждением", async () => {
+  const fake = makeFake("test_write_kn");
+  fake.behavior.verifyOutcome = "rejected";
+  const args = { id: "kn1", value: "val-kn" };
+  const dry = await crashedAfterSending(fake, args);
+  const res = await fake.write({ ...args, confirm: true, previewToken: dry.previewToken });
+  assert.equal(fake.calls.execute, 0);
+  assert.equal(res.outcome, "unknown");
+  assert.equal(res.sent, true);
+  assert.ok(res.warnings.some((w) => /verifyOnly/.test(w)), JSON.stringify(res.warnings));
+  assert.ok(res.warnings.some((w) => /повторять отправку без проверки запрещено/i.test(w)));
+  assert.deepEqual(byToken(dry.previewToken).at(-1).outcome, "unknown");
+});
+
+test("o. дедлайн коммита истёк после commitPoint → unknown, sent: true (errorClass timeout)", async () => {
+  const fake = makeFake("test_write_kd");
+  fake.adapter.commitDeadlineMs = 100;
+  fake.behavior.workMs = 400;
+  const args = { id: "kd1", value: "val-kd" };
+  const dry = await fake.write(args);
+  const res = await fake.write({ ...args, confirm: true, previewToken: dry.previewToken });
+  assert.equal(res.stage, "sent");
+  assert.equal(res.outcome, "unknown");
+  assert.equal(res.sent, true);
+  assert.deepEqual(res.evidence, { errorClass: "timeout" });
+  const entries = byToken(dry.previewToken);
+  assert.deepEqual(entries.map((e) => [e.stage, e.outcome, e.errorClass]), [["sending", undefined, undefined], ["sent", "unknown", "timeout"]]);
+  await sleep(450); // фоновый execute доработает до конца теста
+});
+
+test("p. сухой прогон после записи в ту же секунду не выдаёт уже использованный токен", async () => {
+  const fake = makeFake("test_write_kp");
+  const args = { id: "kp1", value: "val-kp" };
+  await sleep(1005 - (Date.now() % 1000)); // начало секунды: запись и повторный прогон укладываются в неё
+  const dry1 = await fake.write(args);
+  assert.equal((await fake.write({ ...args, confirm: true, previewToken: dry1.previewToken })).outcome, "confirmed");
+  fake.system.delete("kp1"); // то же наблюдаемое состояние → тот же payload
+  const dry2 = await fake.write(args);
+  assert.notEqual(dry2.previewToken, dry1.previewToken);
+  assert.ok(Number(dry2.previewToken.split(".")[0]) > Number(dry1.previewToken.split(".")[0]));
+  // новый токен — это новая запись, а не повтор из журнала
+  assert.equal((await fake.write({ ...args, confirm: true, previewToken: dry2.previewToken })).evidence.fromJournal, undefined);
+  assert.equal(fake.calls.execute, 2);
 });
