@@ -5,7 +5,7 @@ import { chromium, type APIRequestContext, type Browser, type BrowserContext, ty
 import { config } from "../config.js";
 import { waitForRenderedBody } from "../dom-utils.js";
 import { COMMIT_DEADLINE_MS } from "../commit.js";
-import { restrictFile } from "../fs-secure.js";
+import { ensurePrivateDir, restrictFile } from "../fs-secure.js";
 import { acquirePageSlot, LEASE_GRACE_MS, type PageSlotRelease } from "../limiter.js";
 import { projectRoot } from "../project-root.js";
 
@@ -33,7 +33,7 @@ async function getContext(): Promise<BrowserContext> {
   if (!contextPromise) {
     contextPromise = (async () => {
       try {
-        fs.mkdirSync(STORAGE_DIR, { recursive: true });
+        ensurePrivateDir(STORAGE_DIR);
         if (!browserPromise) {
           browserPromise = chromium.launch({ headless: config.browserHeadless }).catch((err) => {
             browserPromise = null;

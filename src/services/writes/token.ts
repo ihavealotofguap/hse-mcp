@@ -2,7 +2,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { errCode, withFileLock, writeFileAtomic } from "../../fs-lock.js";
-import { restrictFile } from "../../fs-secure.js";
+import { ensurePrivateDir, restrictFile, restrictFileOnce } from "../../fs-secure.js";
 import { projectRoot } from "../../project-root.js";
 import type { PreviewPayload } from "./types.js";
 
@@ -32,13 +32,16 @@ function readKey(file: string): Buffer | null {
     throw err;
   }
   if (!KEY_RE.test(text)) throw new Error("Файл ключа записи повреждён: удалите файл key в каталоге записей — ключ создастся заново");
-  // Ключ мог быть создан с широкими правами: на POSIX ужимаем до 0o600 (на Windows права не применяются).
+  // Ключ мог быть создан с широкими правами: на POSIX ужимаем до 0o600, на Windows снимаем
+  // унаследованные права через icacls (один раз за процесс).
   if (process.platform !== "win32") {
     try {
       fs.chmodSync(file, 0o600);
     } catch {
       /* не владелец файла — не критично */
     }
+  } else {
+    restrictFileOnce(file);
   }
   return Buffer.from(text, "hex");
 }
@@ -49,10 +52,13 @@ function readKey(file: string): Buffer | null {
  */
 export async function loadOrCreateKey(dir: string = writesDir()): Promise<Buffer> {
   const file = path.join(dir, "key");
+  // Каталог создаём сами с 0o700 (lock-файл создал бы его с правами по умолчанию) и ограничиваем
+  // права на нём: на Windows mode игнорируется, а файлы внутри наследуют права каталога. Для
+  // стандартного расположения то же делаем с `storage/`.
+  if (dir === path.join(projectRoot, "storage", "writes")) ensurePrivateDir(path.dirname(dir));
+  ensurePrivateDir(dir);
   const existing = readKey(file);
   if (existing) return existing;
-  // Каталог создаём сами с 0o700 (lock-файл создал бы его с правами по умолчанию); на Windows mode игнорируется.
-  fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
   return withFileLock(path.join(dir, "key.lock"), async () => {
     const again = readKey(file);
     if (again) return again;

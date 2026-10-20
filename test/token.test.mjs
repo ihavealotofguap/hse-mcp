@@ -232,3 +232,19 @@ test("loadOrCreateKey создаёт каталог с 0o700, существую
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
+
+test("loadOrCreateKey: уже существующий ключ на Windows теряет унаследованные права (icacls)", async (t) => {
+  if (process.platform !== "win32") return t.skip("проверка icacls только для Windows");
+  const { execFileSync } = await import("node:child_process");
+  const root = tmpDir();
+  try {
+    const dir = path.join(root, "writes");
+    fs.mkdirSync(dir);
+    fs.writeFileSync(path.join(dir, "key"), "ab".repeat(32));
+    await loadOrCreateKey(dir);
+    const acl = execFileSync("icacls", [path.join(dir, "key")], { encoding: "latin1" });
+    assert.ok(!acl.includes("(I)"), "остались унаследованные записи");
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});

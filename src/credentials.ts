@@ -1,3 +1,4 @@
+import { config as loadDotenv, parse as parseDotenv } from "dotenv";
 import fs from "node:fs";
 
 /** Откуда взят пароль: окружение процесса, системное хранилище, `.env` или нигде. */
@@ -32,13 +33,17 @@ const importModule = (name: string): Promise<unknown> => import(name);
  * Системное хранилище или `null`: пакета нет, он не загрузился (нет бинарника под платформу) либо
  * хранилище недоступно — любая ошибка означает откат на `.env`. На Linux запись привязывается к Secret
  * Service: без него пакет молча ушёл бы в `keyutils`, чьи данные не переживают перезагрузку; для этого
- * на Linux один раз обращаемся к хранилищу, чтобы убедиться, что оно отвечает. Импортёр и платформа
- * вынесены в параметры для проверки без настоящего пакета.
+ * на Linux один раз обращаемся к хранилищу, чтобы убедиться, что оно отвечает (вызов синхронный и при
+ * заблокированной связке ключей или отсутствии D-Bus может надолго задержать запуск; обход —
+ * `HSE_DISABLE_KEYCHAIN=true`, он же нужен CI и серверам без графической сессии). Импортёр, платформа и
+ * окружение вынесены в параметры для проверки без настоящего пакета и хранилища.
  */
 export async function loadKeyStore(
   importer: (name: string) => Promise<unknown> = importModule,
-  platform: NodeJS.Platform = process.platform
+  platform: NodeJS.Platform = process.platform,
+  env: NodeJS.ProcessEnv = process.env
 ): Promise<KeyStore | null> {
+  if (env.HSE_DISABLE_KEYCHAIN?.trim().toLowerCase() === "true") return null;
   try {
     const mod = (await importer("@napi-rs/keyring")) as { Entry?: KeyringEntryCtor } | null;
     const Entry = mod?.Entry;
@@ -97,4 +102,23 @@ export function dotenvPermissionWarning(file: string, platform: NodeJS.Platform 
   } catch {
     return null;
   }
+}
+
+/**
+ * Читает `.env` и применяет его к `env` (как раньше), но запоминает окружение ДО применения: пароль,
+ * пришедший из `.env`, иначе выглядел бы как пришедший из окружения процесса.
+ */
+export function captureCredentialInputs(
+  dotenvFile: string,
+  env: NodeJS.ProcessEnv = process.env
+): { envAtStart: NodeJS.ProcessEnv; dotenv: Record<string, string> } {
+  const envAtStart: NodeJS.ProcessEnv = { ...env };
+  let dotenv: Record<string, string> = {};
+  try {
+    dotenv = parseDotenv(fs.readFileSync(dotenvFile));
+  } catch {
+    /* .env нет или он нечитаем — остаётся окружение и хранилище */
+  }
+  loadDotenv({ path: dotenvFile, processEnv: env as Record<string, string> });
+  return { envAtStart, dotenv };
 }

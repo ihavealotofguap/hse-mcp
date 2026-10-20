@@ -1,7 +1,11 @@
-import { config as loadDotenv, parse as parseDotenv } from "dotenv";
-import fs from "node:fs";
 import path from "node:path";
-import { DOTENV_PASSWORD_WARNING, dotenvPermissionWarning, loadKeyStore, lookupPassword } from "./credentials.js";
+import {
+  DOTENV_PASSWORD_WARNING,
+  captureCredentialInputs,
+  dotenvPermissionWarning,
+  loadKeyStore,
+  lookupPassword,
+} from "./credentials.js";
 import { projectRoot } from "./project-root.js";
 
 // Ищем .env рядом с проектом, а не в process.cwd() — иначе при запуске сервера
@@ -10,14 +14,7 @@ import { projectRoot } from "./project-root.js";
 const dotenvFile = path.join(projectRoot, ".env");
 
 // Окружение процесса до применения .env: пароль, пришедший из .env, не должен выглядеть «окружением».
-const envAtStart: NodeJS.ProcessEnv = { ...process.env };
-let dotenvValues: Record<string, string> = {};
-try {
-  dotenvValues = parseDotenv(fs.readFileSync(dotenvFile));
-} catch {
-  /* .env нет или он нечитаем — остаётся окружение и хранилище */
-}
-loadDotenv({ path: dotenvFile });
+const { envAtStart, dotenv: dotenvValues } = captureCredentialInputs(dotenvFile);
 
 // Системное хранилище грузится один раз при импорте, чтобы hsePassword оставался синхронным геттером.
 // Само хранилище опрашивается лениво — при первом входе, а не на старте сервера.

@@ -12,7 +12,7 @@
     "build": "tsc -p tsconfig.json",
     "start": "node dist/index.js",
     "dev": "tsc -p tsconfig.json --watch",
-    "test": "npm run build && node --test \"test/*.test.mjs\"",
+    "test": "npm run build && node --import ./test/setup-env.mjs --test \"test/*.test.mjs\"",
     "credentials:set": "node dist/cli/credentials.js set",
     "credentials:clear": "node dist/cli/credentials.js clear",
     "credentials:status": "node dist/cli/credentials.js status"

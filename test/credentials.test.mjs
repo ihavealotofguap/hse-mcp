@@ -4,6 +4,7 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { PassThrough } from "node:stream";
 
 const {
   lookupPassword,
@@ -12,9 +13,10 @@ const {
   loadKeyStore,
   KEYCHAIN_SERVICE,
   DOTENV_PASSWORD_WARNING,
+  captureCredentialInputs,
 } = await import(new URL("../dist/credentials.js", import.meta.url).href);
-const { restrictFile } = await import(new URL("../dist/fs-secure.js", import.meta.url).href);
-const { runCli } = await import(new URL("../dist/cli/credentials.js", import.meta.url).href);
+const { restrictFile, restrictDir, windowsAccount } = await import(new URL("../dist/fs-secure.js", import.meta.url).href);
+const { runCli, createLineReader, readSecretFrom } = await import(new URL("../dist/cli/credentials.js", import.meta.url).href);
 
 // Подставные значения: настоящих паролей и адресов в тестах нет.
 const SECRET = "s3cret-test-value";
@@ -176,12 +178,12 @@ test("restrictFile: не бросает на отсутствующем файл
 // --- loadKeyStore -------------------------------------------------------------------------------
 
 test("loadKeyStore: модуля нет (импорт отклонён) — null", async () => {
-  const store = await loadKeyStore(() => Promise.reject(new Error("Cannot find package")));
+  const store = await loadKeyStore(() => Promise.reject(new Error("Cannot find package")), "win32", {});
   assert.equal(store, null);
 });
 
 test("loadKeyStore: модуль без Entry — null", async () => {
-  assert.equal(await loadKeyStore(async () => ({})), null);
+  assert.equal(await loadKeyStore(async () => ({}), "win32", {}), null);
 });
 
 test("loadKeyStore: оборачивает Entry со службой hsemcp и учётной записью", async () => {
@@ -199,7 +201,7 @@ test("loadKeyStore: оборачивает Entry со службой hsemcp и �
       return true;
     }
   }
-  const store = await loadKeyStore(async () => ({ Entry: FakeEntry }), "win32");
+  const store = await loadKeyStore(async () => ({ Entry: FakeEntry }), "win32", {});
   assert.ok(store);
   assert.equal(store.getPassword(EMAIL), SECRET);
   assert.equal(store.getPassword("other"), null);
@@ -223,7 +225,7 @@ test("loadKeyStore: на Linux запись создаётся с secret-service
       return false;
     }
   }
-  const store = await loadKeyStore(async () => ({ Entry: FakeEntry }), "linux");
+  const store = await loadKeyStore(async () => ({ Entry: FakeEntry }), "linux", {});
   assert.ok(store);
   store.getPassword(EMAIL);
   assert.ok(seen.length >= 1);
@@ -234,7 +236,7 @@ test("loadKeyStore: на Linux запись создаётся с secret-service
       throw new Error("secret service is not available");
     }
   }
-  assert.equal(await loadKeyStore(async () => ({ Entry: BrokenEntry }), "linux"), null);
+  assert.equal(await loadKeyStore(async () => ({ Entry: BrokenEntry }), "linux", {}), null);
 });
 
 test("loadKeyStore: getPassword глотает ошибку хранилища (откат на .env), set/delete — нет", async () => {
@@ -249,14 +251,14 @@ test("loadKeyStore: getPassword глотает ошибку хранилища (
       throw new Error("locked");
     }
   }
-  const store = await loadKeyStore(async () => ({ Entry: LockedEntry }), "win32");
+  const store = await loadKeyStore(async () => ({ Entry: LockedEntry }), "win32", {});
   assert.equal(store.getPassword(EMAIL), null);
   assert.throws(() => store.setPassword(EMAIL, SECRET));
   assert.throws(() => store.deletePassword(EMAIL));
 });
 
 test("откат: модуля нет → lookupPassword берёт .env", async () => {
-  const store = await loadKeyStore(() => Promise.reject(new Error("MODULE_NOT_FOUND")));
+  const store = await loadKeyStore(() => Promise.reject(new Error("MODULE_NOT_FOUND")), "win32", {});
   const r = lookupPassword({ env: {}, dotenv: { HSE_PASSWORD: "d" }, account: EMAIL, store });
   assert.deepEqual(r, { password: "d", source: "dotenv" });
 });
@@ -384,4 +386,151 @@ test("CLI: неизвестная или пустая подкоманда — �
     assert.equal(await runCli(argv, deps), 2);
     assert.ok(err.length + out.length > 0);
   }
+});
+
+// --- HSE_DISABLE_KEYCHAIN ------------------------------------------------------------------------
+
+test("loadKeyStore: HSE_DISABLE_KEYCHAIN=true — null, пакет даже не загружается", async () => {
+  for (const value of ["true", " TRUE "]) {
+    let imported = false;
+    const store = await loadKeyStore(
+      async () => {
+        imported = true;
+        return { Entry: class {} };
+      },
+      "linux",
+      { HSE_DISABLE_KEYCHAIN: value }
+    );
+    assert.equal(store, null);
+    assert.equal(imported, false);
+  }
+});
+
+test("loadKeyStore: другое значение HSE_DISABLE_KEYCHAIN не отключает хранилище", async () => {
+  class FakeEntry {
+    getPassword() {
+      return null;
+    }
+    setPassword() {}
+    deleteCredential() {
+      return false;
+    }
+  }
+  const store = await loadKeyStore(async () => ({ Entry: FakeEntry }), "win32", { HSE_DISABLE_KEYCHAIN: "false" });
+  assert.ok(store);
+});
+
+// --- снимок окружения до применения .env ---------------------------------------------------------
+
+test("captureCredentialInputs: пароль из .env — источник dotenv, а не env", () => {
+  const dir = tmpDir();
+  const file = path.join(dir, ".env");
+  fs.writeFileSync(file, `HSE_EMAIL=${EMAIL}\nHSE_PASSWORD=${SECRET}\n`);
+  const env = {};
+  const inputs = captureCredentialInputs(file, env);
+  // .env по-прежнему применяется к окружению (как раньше), но снимок «до» его не содержит.
+  assert.equal(env.HSE_PASSWORD, SECRET);
+  assert.equal(inputs.envAtStart.HSE_PASSWORD, undefined);
+  const r = lookupPassword({ env: inputs.envAtStart, dotenv: inputs.dotenv, account: EMAIL, store: null });
+  assert.deepEqual(r, { password: SECRET, source: "dotenv" });
+});
+
+test("captureCredentialInputs: пароль из окружения процесса — источник env и приоритет над .env", () => {
+  const dir = tmpDir();
+  const file = path.join(dir, ".env");
+  fs.writeFileSync(file, `HSE_PASSWORD=from-dotenv\n`);
+  const env = { HSE_PASSWORD: SECRET };
+  const inputs = captureCredentialInputs(file, env);
+  assert.equal(env.HSE_PASSWORD, SECRET);
+  const r = lookupPassword({ env: inputs.envAtStart, dotenv: inputs.dotenv, account: EMAIL, store: null });
+  assert.deepEqual(r, { password: SECRET, source: "env" });
+});
+
+test("captureCredentialInputs: нет .env — пустой набор, без ошибки", () => {
+  const inputs = captureCredentialInputs(path.join(tmpDir(), "missing"), {});
+  assert.deepEqual(inputs.dotenv, {});
+});
+
+// --- права на каталог и учётная запись Windows ---------------------------------------------------
+
+test("windowsAccount: DOMAIN\\USER, без домена — USER, без пользователя — null", () => {
+  assert.equal(windowsAccount({ USERDOMAIN: "PC", USERNAME: "student" }), "PC\\student");
+  assert.equal(windowsAccount({ USERNAME: "student" }), "student");
+  assert.equal(windowsAccount({ USERDOMAIN: "PC" }), null);
+  assert.equal(windowsAccount({}), null);
+});
+
+test("restrictDir: на POSIX режим 0o700", (t) => {
+  if (isWin) return t.skip("режимы POSIX на Windows не применяются");
+  const dir = path.join(tmpDir(), "storage");
+  fs.mkdirSync(dir, { mode: 0o755 });
+  fs.chmodSync(dir, 0o755);
+  restrictDir(dir);
+  assert.equal(fs.statSync(dir).mode & 0o777, 0o700);
+});
+
+test("restrictDir: на Windows новые файлы наследуют единственную запись владельца, доступ сохраняется", (t) => {
+  if (!isWin) return t.skip("проверка icacls только для Windows");
+  const dir = path.join(tmpDir(), "storage");
+  fs.mkdirSync(dir);
+  restrictDir(dir);
+  const file = path.join(dir, "new");
+  fs.writeFileSync(file, "x");
+  const acl = execFileSync("icacls", [file], { encoding: "latin1" });
+  assert.equal((acl.match(/:\(/g) ?? []).length, 1, "ожидалась одна запись доступа");
+  fs.writeFileSync(file, "y");
+  assert.equal(fs.readFileSync(file, "utf8"), "y");
+  fs.rmSync(dir, { recursive: true });
+});
+
+test("restrictDir: не бросает на отсутствующем каталоге", () => {
+  assert.doesNotThrow(() => restrictDir(path.join(tmpDir(), "missing")));
+});
+
+// --- чтение строк в CLI --------------------------------------------------------------------------
+
+test("createLineReader: читает строки из канала, пустую строку и конец без перевода строки", async () => {
+  const input = new PassThrough();
+  const output = new PassThrough();
+  const reader = createLineReader(input, output);
+  input.write("first\n\nlast");
+  input.end();
+  assert.equal(await reader.readLine("a: "), "first");
+  assert.equal(await reader.readLine("b: "), "");
+  assert.equal(await reader.readLine("c: "), "last");
+  // EOF: дальше пусто, а не зависание.
+  assert.equal(await reader.readLine("d: "), "");
+  reader.close();
+  assert.match(output.read()?.toString() ?? "", /a: /);
+});
+
+test("createLineReader: строки, пришедшие одним куском, не теряются между вызовами", async () => {
+  const input = new PassThrough();
+  const reader = createLineReader(input, new PassThrough());
+  input.write("one\ntwo\n");
+  assert.equal(await reader.readLine(""), "one");
+  assert.equal(await reader.readLine(""), "two");
+  reader.close();
+});
+
+test("createLineReader: строка, пришедшая позже запроса, возвращается как есть", async () => {
+  const input = new PassThrough();
+  const reader = createLineReader(input, new PassThrough());
+  const pending = reader.readLine("");
+  setTimeout(() => input.write("late\n"), 20);
+  assert.equal(await pending, "late");
+  reader.close();
+});
+
+test("readSecretFrom: не терминал — предупреждение без значений и строка из потока", async () => {
+  const input = new PassThrough();
+  const output = new PassThrough();
+  const reader = createLineReader(input, output);
+  input.write(`${SECRET}\n`);
+  const value = await readSecretFrom(input, output, reader, "Пароль: ");
+  assert.equal(value, SECRET);
+  const printed = output.read()?.toString() ?? "";
+  assert.match(printed, /видно|отображ/i);
+  assert.ok(!printed.includes(SECRET));
+  reader.close();
 });

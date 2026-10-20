@@ -101,31 +101,62 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
   }
 }
 
-/** Ввод строки; на неинтерактивном stdin читает одну строку (для сценариев). */
-function readLine(prompt: string): Promise<string> {
-  const rl = readline.createInterface({ input: process.stdin, output: process.stderr, terminal: false });
-  return new Promise((resolve) => {
-    process.stderr.write(prompt);
-    rl.once("line", (line) => {
-      rl.close();
-      resolve(line);
-    });
-    rl.once("close", () => resolve(""));
-  });
+/** Построчное чтение: один интерфейс на поток, чтобы пришедшие одним куском строки не терялись. */
+export interface LineReader {
+  readLine(prompt: string): Promise<string>;
+  close(): void;
 }
 
-/** Ввод без эха: на терминале посимвольно в raw-режиме, иначе — строка из stdin. */
-function readSecret(prompt: string): Promise<string> {
-  const stdin = process.stdin;
-  if (!stdin.isTTY) return readLine(prompt);
+/** Читает строки из `input`; конец потока (с последней строкой без перевода строки или без неё) — пустая строка. */
+export function createLineReader(input: NodeJS.ReadableStream, output: NodeJS.WritableStream): LineReader {
+  const rl = readline.createInterface({ input, terminal: false });
+  const buffered: string[] = [];
+  const waiting: Array<(line: string) => void> = [];
+  let closed = false;
+  rl.on("line", (line) => {
+    const waiter = waiting.shift();
+    if (waiter) waiter(line);
+    else buffered.push(line);
+  });
+  rl.on("close", () => {
+    closed = true;
+    for (const waiter of waiting.splice(0)) waiter("");
+  });
+  return {
+    readLine(prompt) {
+      output.write(prompt);
+      const line = buffered.shift();
+      if (line !== undefined) return Promise.resolve(line);
+      if (closed) return Promise.resolve("");
+      return new Promise((resolve) => waiting.push(resolve));
+    },
+    close: () => rl.close(),
+  };
+}
+
+/**
+ * Ввод без эха: на терминале посимвольно в raw-режиме; иначе (канал, перенаправление) — строка из
+ * `reader`, и об этом предупреждаем: оболочка или источник могут показать или сохранить введённое.
+ */
+export function readSecretFrom(
+  input: NodeJS.ReadableStream & { isTTY?: boolean; setRawMode?: (mode: boolean) => unknown },
+  output: NodeJS.WritableStream,
+  reader: LineReader,
+  prompt: string
+): Promise<string> {
+  if (!input.isTTY || !input.setRawMode) {
+    output.write("ввод идёт не из терминала: введённое может быть видно\n");
+    return reader.readLine(prompt);
+  }
+  const setRaw = input.setRawMode.bind(input);
   return new Promise((resolve, reject) => {
-    process.stderr.write(prompt);
+    output.write(prompt);
     let value = "";
     const finish = (fn: () => void): void => {
-      stdin.setRawMode(false);
-      stdin.pause();
-      stdin.off("data", onData);
-      process.stderr.write("\n");
+      setRaw(false);
+      input.pause();
+      input.off("data", onData);
+      output.write("\n");
       fn();
     };
     const onData = (chunk: Buffer): void => {
@@ -136,10 +167,25 @@ function readSecret(prompt: string): Promise<string> {
         else if (ch >= " ") value += ch;
       }
     };
-    stdin.setRawMode(true);
-    stdin.resume();
-    stdin.on("data", onData);
+    setRaw(true);
+    input.resume();
+    input.on("data", onData);
   });
+}
+
+// Не терминал: один читатель на весь процесс (строки приходят одним куском). Терминал: читатель на
+// каждый вопрос и закрывается сразу, чтобы не перехватывать посимвольный ввод пароля.
+let shared: LineReader | null = null;
+const sharedReader = (): LineReader => (shared ??= createLineReader(process.stdin, process.stderr));
+
+async function lineFromStdin(prompt: string): Promise<string> {
+  if (!process.stdin.isTTY) return sharedReader().readLine(prompt);
+  const reader = createLineReader(process.stdin, process.stderr);
+  try {
+    return await reader.readLine(prompt);
+  } finally {
+    reader.close();
+  }
 }
 
 async function main(): Promise<void> {
@@ -151,8 +197,8 @@ async function main(): Promise<void> {
     dotenvFile: credentialInputs.dotenvFile,
     store: credentialInputs.keyStore,
     email: optionalEmail(),
-    readSecret,
-    readLine,
+    readSecret: (prompt) => readSecretFrom(process.stdin, process.stderr, sharedReader(), prompt),
+    readLine: (prompt) => lineFromStdin(prompt),
     out: (line) => console.log(line),
     err: (line) => console.error(line),
   });

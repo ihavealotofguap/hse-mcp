@@ -21,8 +21,11 @@
 1. Пароль берётся по порядку: переменная окружения процесса `HSE_PASSWORD`, системное хранилище
    (Windows Credential Manager, macOS Keychain, Linux Secret Service; служба `hsemcp`, учётная запись —
    `HSE_EMAIL`), `.env` как запасной путь. Заводится командой `npm run credentials:set`.
-2. Файлы `storage/hse-session.json` и `storage/writes/key` создаются с правами `0o600` (POSIX); на Windows
-   права ограничиваются владельцем через `icacls` (best-effort, ошибки не выводятся).
+   Системное хранилище можно отключить целиком: `HSE_DISABLE_KEYCHAIN=true` (CI, серверы без графической
+   сессии, Linux без Secret Service).
+2. Каталоги `storage/` и `storage/writes/` ограничиваются владельцем (`0o700` на POSIX, `icacls` с
+   наследованием на Windows), файлы `storage/hse-session.json` и `storage/writes/key` — `0o600`
+   (на Windows `icacls`, best-effort, ошибки не выводятся).
 3. Пароль, куки и токены не попадают в ошибки, stderr и ответы тулов. При чтении пароля из `.env`
    сервер пишет в stderr одно предупреждение без значения.
 
@@ -37,7 +40,8 @@
 ## Что делать при утечке
 
 1. Смените пароль учётной записи ВШЭ.
-2. Удалите каталог `storage/` (сессия и ключ создадутся заново).
+2. Удалите `storage/hse-session.json` и `storage/writes/key` (сессия и ключ создадутся заново). Папка
+   `storage/outbox/` и журнал записей — ваши данные, их удалять не нужно.
 3. Выполните `npm run credentials:clear`, затем при необходимости заново `npm run credentials:set`.
 4. Если секрет попал в коммит или в публичный репозиторий, считайте его раскрытым: смена пароля обязательна,
    удаление коммита её не заменяет.
