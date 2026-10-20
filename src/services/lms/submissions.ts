@@ -106,7 +106,7 @@ export interface RawAssignmentPage {
 
 /** Сырой снимок формы правки. */
 export interface RawEditForm {
-  /** На странице есть `input[name="submitbutton"]` — это форма правки. */
+  /** На странице есть `input[name="submitbutton"]` внутри формы — это форма правки. */
   hasForm: boolean;
   hasFileManager: boolean;
   hasTextEditor: boolean;
@@ -619,11 +619,12 @@ export async function readAssignmentView(page: Page, cmid: number): Promise<Assi
 async function extractEditForm(page: Page): Promise<RawEditForm> {
   return page.evaluate(() => {
     const clean = (s: string | null | undefined) => (s ?? "").replace(/\s+/g, " ").trim();
-    const submit = document.querySelector('input[name="submitbutton"]');
-    // Всё ищется внутри формы с «Сохранить»; без неё — по всей странице (тогда hasForm = false).
-    const scope: ParentNode = submit?.closest("form") ?? document;
+    const form = document.querySelector('input[name="submitbutton"]')?.closest("form") ?? null;
+    // Всё ищется внутри формы с «Сохранить» (вне её есть скрытый `.filemanager.fp-select`); без формы —
+    // по всей странице, но тогда hasForm = false и сухой прогон отказывает.
+    const scope: ParentNode = form ?? document;
     return {
-      hasForm: submit !== null,
+      hasForm: form !== null,
       hasFileManager: scope.querySelector(".filemanager") !== null,
       // Atto и TinyMCE в Moodle строятся поверх textarea; любое текстовое поле — не «только файл».
       hasTextEditor: scope.querySelector('textarea, [contenteditable]:not([contenteditable="false"])') !== null,
@@ -652,7 +653,16 @@ const W_FORM_OPENED = "форма правки открывалась и не с
 
 // --- Запись: шаги файлового менеджера (§17, четвёртый и шестой проходы) ---
 
+// Файловый менеджер ищется только в форме с «Сохранить» (§17, второй проход). На живой странице есть
+// второй `.filemanager` — скрытый диалог выбора/правки файла Moodle (`.filemanager.fp-select` в
+// `.moodle-dialogue-bd`, вне формы) со своими `.fp-filename`/`.fp-folder`: по всей странице селекторы
+// менеджера находили бы и его. «Добавить...» — в панели самого менеджера (§17, четвёртый проход).
+const SEL_SUBMIT_FORM = 'form:has(input[name="submitbutton"])';
 const SEL_ADD = 'a[title="Добавить..."]:visible';
+// Диалог выбора/правки файла открывается только кликом по файлу в менеджере; штатный путь его не открывает.
+const SEL_FP_SELECT = ".fp-select:visible";
+// Пикер (`.file-picker`) и его форма загрузки — отдельный диалог Moodle вне формы правки: ищутся по
+// всей странице, но только видимые; скрытый `.fp-select` под них не подходит.
 const SEL_PICKER = ".file-picker:visible";
 // Форма загрузки показывается только на вкладке «Загрузить файл»: её видимость и есть проверка вкладки.
 const SEL_UPLOAD_FORM = ".file-picker:visible .fp-upload-form:visible";
@@ -756,17 +766,30 @@ export async function prepareUpload(file: OutboxFile, n: number, opts: { maxBuff
   }
 }
 
-/** Ровно один элемент по селектору (селекторы с `:visible`), иначе отказ: неожиданная страница. */
-async function exactlyOne(page: Page, selector: string, what: string): Promise<Locator> {
-  const loc = page.locator(selector);
+/** Ровно один элемент по селектору (селекторы с `:visible`) внутри `root`, иначе отказ: неожиданная страница. */
+async function exactlyOne(root: Page | Locator, selector: string, what: string): Promise<Locator> {
+  const loc = root.locator(selector);
   const n = await loc.count();
   if (n !== 1) throw new Refusal(`${what}: ожидался ровно один элемент, найдено ${n}; операция прервана`);
   return loc;
 }
 
 /** Один клик по единственному элементу; повторов нет (урок третьего прохода §17). */
-async function clickOnce(page: Page, selector: string, what: string): Promise<void> {
-  await (await exactlyOne(page, selector, what)).click();
+async function clickOnce(root: Page | Locator, selector: string, what: string): Promise<void> {
+  await (await exactlyOne(root, selector, what)).click();
+}
+
+/**
+ * Файловый менеджер формы правки: ровно одна форма с «Сохранить» и ровно один `.filemanager` в ней,
+ * иначе отказ. Видимый диалог `.fp-select` — тоже отказ: его не открывает ни один шаг записи.
+ */
+async function formManager(page: Page, tail: string): Promise<Locator> {
+  const forms = await page.locator(SEL_SUBMIT_FORM).count();
+  if (forms !== 1) throw new Refusal(`на странице не одна форма с кнопкой «Сохранить» (${forms}); ${tail}`);
+  const manager = page.locator(SEL_SUBMIT_FORM).locator(".filemanager");
+  if ((await manager.count()) !== 1) throw new Refusal(`на форме не один файловый менеджер; ${tail}`);
+  if ((await page.locator(SEL_FP_SELECT).count()) > 0) throw new Refusal(`открыт диалог файла файлового менеджера; ${tail}`);
+  return manager;
 }
 
 const visibleCount = (page: Page, selector: string) => page.locator(selector).count();
@@ -804,10 +827,10 @@ function guardPage(page: Page): () => void {
   };
 }
 
-/** Имена в файловом менеджере формы — тем же способом, что в `extractEditForm`. */
-async function managerNames(page: Page): Promise<string[]> {
-  return page.evaluate(() =>
-    Array.from(document.querySelectorAll(".filemanager .fp-filename"))
+/** Имена в файловом менеджере формы (`formManager`) — тем же способом, что в `extractEditForm`. */
+async function managerNames(manager: Locator): Promise<string[]> {
+  return manager.evaluate((el) =>
+    Array.from(el.querySelectorAll(".fp-filename"))
       .map((e) => (e.textContent ?? "").replace(/\s+/g, " ").trim())
       .filter(Boolean)
   );
@@ -853,7 +876,7 @@ async function uploadPrepared(
   if ((await visibleCount(page, SEL_PICKER)) > 0 || (await dupDialogShown(page))) {
     throw new Refusal("файловый пикер или диалог уже открыт до загрузки; операция прервана");
   }
-  await clickOnce(page, SEL_ADD, "кнопка «Добавить...» файлового менеджера");
+  await clickOnce(await formManager(page, "операция прервана"), SEL_ADD, "кнопка «Добавить...» файлового менеджера");
   await waitShown(page, SEL_PICKER, "файловый пикер не открылся; операция прервана", signal);
   check();
   await waitShown(page, SEL_UPLOAD_FORM, "в файловом пикере не активна вкладка «Загрузить файл»; операция прервана", signal);
@@ -886,7 +909,7 @@ async function uploadPrepared(
       await clickOnce(page, SEL_OVERWRITE, "кнопка «Перезаписать»");
       overwritten = true;
     } else if (!dup && (overwritten || !replace) && (await visibleCount(page, SEL_PICKER)) === 0) {
-      if ((await managerNames(page)).some((x) => fold(x) === fold(name))) return;
+      if ((await managerNames(await formManager(page, "операция прервана"))).some((x) => fold(x) === fold(name))) return;
     }
     if (Date.now() > deadline) throw new Refusal(`файл №${n} не загрузился в файловый менеджер за отведённое время; операция прервана`);
     await page.waitForTimeout(POLL_MS);
@@ -895,18 +918,19 @@ async function uploadPrepared(
 
 /**
  * Предусловие точки невозврата (§17, третий и четвёртый проходы): пикер и диалоги закрыты, ошибок
- * пикера нет, на форме один файловый менеджер, папок нет, имена ровно ожидаемые, «Сохранить» одна.
+ * пикера нет, в форме с «Сохранить» один файловый менеджер, папок в нём нет, имена ровно ожидаемые,
+ * «Сохранить» одна.
  */
 async function assertManagerState(page: Page, expected: string[], check: () => void): Promise<Locator> {
   check();
   if ((await visibleCount(page, SEL_PICKER)) > 0) throw new Refusal("файловый пикер не закрылся; операция прервана до отправки");
   if (await dupDialogShown(page)) throw new Refusal("диалог одноимённого файла не закрылся; операция прервана до отправки");
   if ((await visibleCount(page, SEL_PICKER_ERROR)) > 0) throw new Refusal("файловый пикер показывает ошибку; операция прервана до отправки");
-  if ((await page.locator(".filemanager").count()) !== 1) throw new Refusal("на форме не один файловый менеджер; операция прервана до отправки");
-  if ((await page.locator(".filemanager .fp-folder").count()) > 0) {
+  const manager = await formManager(page, "операция прервана до отправки");
+  if ((await manager.locator(".fp-folder").count()) > 0) {
     throw new Refusal("в файловом менеджере появилась папка; операция прервана до отправки");
   }
-  if (!sameFileSet(await managerNames(page), expected)) {
+  if (!sameFileSet(await managerNames(manager), expected)) {
     throw new Refusal("список файлов в файловом менеджере не совпадает с ожидаемым; операция прервана до отправки");
   }
   return exactlyOne(page, SEL_SAVE, "кнопка «Сохранить»");
