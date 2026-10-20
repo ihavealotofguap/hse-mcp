@@ -13,6 +13,8 @@ const {
   certificateAdapter,
   certificateTestSeams,
   classifyClaimsOutcome,
+  classifyCertificateOutcome,
+  parseClaimCreated,
   expectedFieldValues,
   checkFormState,
 } = m;
@@ -266,6 +268,84 @@ test("classifyClaimsOutcome: ни одного нового — неизвест
   assert.ok(!JSON.stringify(two).includes("B-1") && !JSON.stringify(two).includes("B-2"), "при неоднозначности номеров в ответе нет");
   // Исход проверки — никогда не «отклонено».
   for (const r of [none, fewer, two]) assert.notEqual(r.outcome, "rejected");
+});
+
+test("parseClaimCreated: время создания заявки ЕЛК — без пояса как МСК, с поясом как есть, дата без времени — сутки", () => {
+  assert.deepEqual(parseClaimCreated("2026-10-20T12:00:00"), { at: Date.parse("2026-10-20T09:00:00Z"), dayOnly: false });
+  assert.deepEqual(parseClaimCreated("2026-10-20 12:00"), { at: Date.parse("2026-10-20T09:00:00Z"), dayOnly: false });
+  assert.deepEqual(parseClaimCreated("2026-10-20T12:00:00.123456"), { at: Date.parse("2026-10-20T09:00:00.123Z"), dayOnly: false });
+  assert.deepEqual(parseClaimCreated("2026-10-20T08:00:00Z"), { at: Date.parse("2026-10-20T08:00:00Z"), dayOnly: false });
+  assert.deepEqual(parseClaimCreated("2026-10-20T12:00:00+03:00"), { at: Date.parse("2026-10-20T09:00:00Z"), dayOnly: false });
+  assert.deepEqual(parseClaimCreated("20.10.2026 12:00"), { at: Date.parse("2026-10-20T09:00:00Z"), dayOnly: false });
+  assert.deepEqual(parseClaimCreated("2026-10-20"), { at: Date.parse("2026-10-19T21:00:00Z"), dayOnly: true });
+  for (const bad of ["", "вчера", "2026-13-40T00:00", "2026-02-30", "12:00", null, undefined]) assert.equal(parseClaimCreated(bad), null, String(bad));
+});
+
+const CLICK = Date.parse("2026-10-20T09:00:30Z"); // 12:00:30 МСК
+const claim = (num, over = {}) => ({
+  num,
+  service: "Справка об обучении",
+  created: "2026-10-20T12:00:10",
+  createdByFio: "Иванов Иван",
+  createdByEmail: "Student@Edu.hse.ru",
+  ...over,
+});
+const order = (after, over = {}) =>
+  classifyCertificateOutcome({ before: ["A-1"], after: [claim("A-1"), ...after], submitRequests: 1, clickedAt: CLICK, loginEmail: "student@edu.hse.ru", ...over });
+
+test("classifyCertificateOutcome: подтверждено только при одном замеченном запросе заказа и одной свежей новой заявке", () => {
+  const r = order([claim("A-2")]);
+  assert.equal(r.outcome, "confirmed");
+  assert.deepEqual(r.warnings, []);
+  assert.equal(r.evidence.newClaimNumber, "A-2");
+  assert.equal(r.evidence.newClaimService, "Справка об обучении");
+  assert.equal(r.evidence.newClaimCreated, "2026-10-20T12:00:10");
+  assert.equal(r.evidence.newClaimByLogin, true, "автор — тот же логин (без учёта регистра)");
+  assert.ok(!JSON.stringify(r).includes("Иванов"), "ФИО в ответ не попадает (§8)");
+  assert.equal(order([claim("A-2", { createdByEmail: "other@hse.ru" })]).evidence.newClaimByLogin, false);
+  // Автор — только сведения: другой email подтверждение не отменяет.
+  assert.equal(order([claim("A-2", { createdByEmail: "other@hse.ru" })]).outcome, "confirmed");
+  assert.equal(order([claim("A-2")], { loginEmail: null }).evidence.newClaimByLogin, null);
+  // Создана за 4 минуты до клика (часы могут расходиться) — ещё наша.
+  assert.equal(order([claim("A-2", { created: "2026-10-20T11:56:30" })]).outcome, "confirmed");
+  // Дата без времени — сегодняшняя — наша.
+  assert.equal(order([claim("A-2", { created: "2026-10-20" })]).outcome, "confirmed");
+});
+
+test("classifyCertificateOutcome: запрос заказа не замечен или их несколько — неизвестно с предупреждением", () => {
+  for (const submitRequests of [0, 2, 3]) {
+    const r = order([claim("A-2")], { submitRequests });
+    assert.equal(r.outcome, "unknown", `submitRequests ${submitRequests}`);
+    assert.ok(r.warnings.some((w) => W_MANUAL.test(w)), `submitRequests ${submitRequests}: предупреждение`);
+    // Номер и сведения остаются в ответе: по ним владелец сверяет вручную.
+    assert.equal(r.evidence.newClaimNumber, "A-2");
+  }
+  const none = order([], { submitRequests: 2 });
+  assert.equal(none.outcome, "unknown");
+  assert.ok(none.warnings.some((w) => W_MANUAL.test(w)));
+});
+
+test("classifyCertificateOutcome: новая заявка создана задолго до клика — не наша, неизвестно", () => {
+  for (const created of ["2026-10-20T11:50:00", "2026-10-20T08:00:00Z", "2026-10-18", "19.10.2026 23:59"]) {
+    const r = order([claim("A-2", { created })]);
+    assert.equal(r.outcome, "unknown", created);
+    assert.ok(r.warnings.some((w) => W_MANUAL.test(w)), created);
+  }
+  // Время не распознано — снисходительно: подтверждено, но с предупреждением.
+  const odd = order([claim("A-2", { created: "вчера вечером" })]);
+  assert.equal(odd.outcome, "confirmed");
+  assert.ok(odd.warnings.some((w) => /время создания/.test(w)));
+});
+
+test("classifyCertificateOutcome: ни одной или несколько новых — неизвестно, при нескольких номеров нет", () => {
+  assert.equal(order([]).outcome, "unknown");
+  assert.equal(order([]).evidence.newClaims, 0);
+  const two = order([claim("B-1"), claim("B-2")]);
+  assert.equal(two.outcome, "unknown");
+  assert.ok(two.warnings.some((w) => W_MANUAL.test(w)));
+  assert.ok(!JSON.stringify(two).includes("B-1") && !JSON.stringify(two).includes("B-2"));
+  // Повтор номера в ответе — одна заявка.
+  assert.equal(order([claim("A-2"), claim("A-2")]).outcome, "confirmed");
 });
 
 /** Снимок страницы формы (без вариантов) в состоянии после заполнения обоих обязательных списков. */

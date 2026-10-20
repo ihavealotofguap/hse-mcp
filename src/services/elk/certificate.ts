@@ -5,6 +5,7 @@ import type { ResourceCallOptions } from "../../resource.js";
 import { Refusal, sanitizeCommitError, sanitizeNavigationError } from "../lms/submissions.js";
 import { abortableSleep, type ExecuteContext, type ExecuteResult, type WriteAdapter } from "../writes/runner.js";
 import type { Outcome } from "../writes/types.js";
+import { config } from "../../config.js";
 import { listRequests, type ElkClaim } from "./client.js";
 
 /**
@@ -293,11 +294,18 @@ export function claimNumbersOf(list: { count: number; requests: Array<Pick<ElkCl
 const W_MANUAL =
   "после заказа появилось несколько новых заявок: какая из них создана этим вызовом, не установить — сверьте вручную через elk_list_requests";
 
+const W_NO_START =
+  "запрос заказа после нажатия «Отправить» не замечен: новая заявка может быть не этой — сверьте вручную через elk_list_requests";
+const W_MANY_STARTS = "форма отправила запрос заказа больше одного раза: возможны дубли — сверьте вручную через elk_list_requests";
+const W_CREATED_OLD = "новая заявка создана раньше заказа: вероятно, она не эта — сверьте вручную через elk_list_requests";
+const W_CREATED_UNPARSED = "время создания новой заявки не распознано: сверьте её сервис и время (evidence) с заказом";
+
 /**
- * Исход заказа по истории заявок (§7, §10): ровно один номер, которого не было в снимке до заказа, —
- * подтверждено (номер только в `evidence`, то есть в ответе тула); ни одного — неизвестно (заявка могла
- * появиться позже); больше одного — неизвестно с предупреждением, номеров в ответе нет. Пропавшие из
- * списка старые номера (усечение истории) не учитываются. `rejected` проверка не выносит никогда.
+ * Первый шаг исхода — сравнение номеров (§7, §10): ровно один номер, которого не было в снимке до
+ * заказа, — кандидат в подтверждение (номер только в `evidence`, то есть в ответе тула); ни одного —
+ * неизвестно (заявка могла появиться позже); больше одного — неизвестно с предупреждением, номеров в
+ * ответе нет. Пропавшие из списка старые номера (усечение истории) не учитываются. Окончательный исход
+ * — `classifyCertificateOutcome`. `rejected` проверка не выносит никогда.
  */
 export function classifyClaimsOutcome(
   before: string[],
@@ -307,6 +315,95 @@ export function classifyClaimsOutcome(
   const fresh = [...new Set(after)].filter((num) => !known.has(num));
   if (fresh.length === 1) return { outcome: "confirmed", evidence: { newClaims: 1, newClaimNumber: fresh[0] }, warnings: [] };
   return { outcome: "unknown", evidence: { newClaims: fresh.length }, warnings: fresh.length > 1 ? [W_MANUAL] : [] };
+}
+
+const MSK_OFFSET_MS = 3 * 3_600_000;
+const DAY_MS = 24 * 3_600_000;
+// Новая заявка, созданная раньше клика больше чем на столько, — не наша (запас на расхождение часов).
+const CREATED_SLACK_MS = 5 * 60_000;
+
+/**
+ * Время создания заявки ЕЛК (`created`): ISO-подобное `ГГГГ-ММ-ДД[T ]ЧЧ:ММ[:СС[.доли]]` с поясом
+ * (`Z`, `±ЧЧ:ММ`) или без него — тогда как МСК (UTC+3, наивное время ЕЛК); `ДД.ММ.ГГГГ ЧЧ:ММ` — МСК;
+ * дата без времени — начало суток МСК с `dayOnly`. Не распознано — `null`. Формат поля вживую не
+ * зафиксирован, поэтому разбор снисходителен, а отказ разбора не отказывает заказ.
+ */
+export function parseClaimCreated(raw: unknown): { at: number; dayOnly: boolean } | null {
+  if (typeof raw !== "string") return null;
+  const s = raw.trim();
+  let y: number, mo: number, d: number, h = 0, mi = 0, sec = 0, ms = 0;
+  let zone: string | undefined;
+  let dayOnly = false;
+  const iso = /^(\d{4})-(\d{2})-(\d{2})(?:[T ](\d{2}):(\d{2})(?::(\d{2})(?:\.(\d+))?)?\s*(Z|[+-]\d{2}:?\d{2})?)?$/.exec(s);
+  const ru = /^(\d{2})\.(\d{2})\.(\d{4})(?:,?\s+(\d{2}):(\d{2})(?::(\d{2}))?)?$/.exec(s);
+  if (iso) {
+    [y, mo, d] = [Number(iso[1]), Number(iso[2]), Number(iso[3])];
+    dayOnly = iso[4] === undefined;
+    if (!dayOnly) [h, mi, sec, ms] = [Number(iso[4]), Number(iso[5]), Number(iso[6] ?? 0), Number((iso[7] ?? "0").slice(0, 3).padEnd(3, "0"))];
+    zone = iso[8];
+  } else if (ru) {
+    [d, mo, y] = [Number(ru[1]), Number(ru[2]), Number(ru[3])];
+    dayOnly = ru[4] === undefined;
+    if (!dayOnly) [h, mi, sec] = [Number(ru[4]), Number(ru[5]), Number(ru[6] ?? 0)];
+  } else return null;
+  if (h > 23 || mi > 59 || sec > 59) return null;
+  const utc = Date.UTC(y, mo - 1, d, h, mi, sec, ms);
+  const check = new Date(utc);
+  if (check.getUTCFullYear() !== y || check.getUTCMonth() !== mo - 1 || check.getUTCDate() !== d) return null;
+  let offset = MSK_OFFSET_MS;
+  if (zone === "Z") offset = 0;
+  else if (zone) {
+    const m = /^([+-])(\d{2}):?(\d{2})$/.exec(zone);
+    if (!m) return null;
+    offset = (m[1] === "-" ? -1 : 1) * (Number(m[2]) * 3_600_000 + Number(m[3]) * 60_000);
+  }
+  return { at: utc - offset, dayOnly };
+}
+
+/**
+ * Окончательный исход заказа (§7, §10). Подтверждено, только если одновременно: (1) ровно одна новая
+ * заявка; (2) запрос `process/start` замечен ровно один раз — сам факт запроса, не его статус (ответ
+ * 2xx — только сигнал); (3) заявка не создана раньше клика больше чем на 5 минут (время не распознано —
+ * предупреждение, но не отказ). Иначе — неизвестно с предупреждением «сверьте вручную». Так чужая
+ * заявка (сотрудник, другая вкладка, автоматический процесс), появившаяся при проглоченном клике, не
+ * даёт ложного `confirmed`. Номер, сервис и время новой заявки остаются в ответе для ручной сверки;
+ * автор — только признаком «тот же логин» (ФИО в ответ не попадает, §8), условием не служит.
+ *
+ * Отступление от §10 («новая заявка с подходящим сервисом»): у заявки ЕЛК есть только название сервиса
+ * (`service`), его соответствие `serviceId` формы (`components`) не установлено ни разведкой (§17), ни
+ * данными API, поэтому сервис показывается владельцу в `evidence`, но в решении не участвует.
+ */
+export function classifyCertificateOutcome(input: {
+  before: string[];
+  after: Array<Pick<ElkClaim, "num" | "service" | "created" | "createdByEmail">>;
+  submitRequests: number;
+  clickedAt: number;
+  loginEmail: string | null;
+}): { outcome: Outcome; evidence: Record<string, unknown>; warnings: string[] } {
+  const { before, after, submitRequests, clickedAt, loginEmail } = input;
+  const byNumber = claimNumbersOf({ count: after.length, requests: after });
+  const step = classifyClaimsOutcome(before, byNumber);
+  const startWarning = submitRequests > 1 ? [W_MANY_STARTS] : [];
+  if (step.outcome !== "confirmed" || step.evidence.newClaimNumber === undefined) {
+    return { outcome: "unknown", evidence: step.evidence, warnings: [...step.warnings, ...startWarning] };
+  }
+  const num = step.evidence.newClaimNumber;
+  const claim = after.find((c) => typeof c.num === "string" && c.num.trim() === num);
+  const fold = (s: unknown) => (typeof s === "string" ? s.trim().toLowerCase() : "");
+  const evidence = {
+    ...step.evidence,
+    newClaimService: typeof claim?.service === "string" ? claim.service : null,
+    newClaimCreated: typeof claim?.created === "string" ? claim.created : null,
+    newClaimByLogin: loginEmail && fold(claim?.createdByEmail) ? fold(claim?.createdByEmail) === fold(loginEmail) : null,
+  };
+  if (submitRequests === 0) return { outcome: "unknown", evidence, warnings: [W_NO_START] };
+  if (submitRequests > 1) return { outcome: "unknown", evidence, warnings: startWarning };
+  const created = parseClaimCreated(claim?.created);
+  if (!created) return { outcome: "confirmed", evidence, warnings: [W_CREATED_UNPARSED] };
+  // Дата без времени — заявка «старая», только если её сутки закончились до клика.
+  const latest = created.dayOnly ? created.at + DAY_MS : created.at;
+  if (latest < clickedAt - CREATED_SLACK_MS) return { outcome: "unknown", evidence, warnings: [W_CREATED_OLD] };
+  return { outcome: "confirmed", evidence, warnings: [] };
 }
 
 /** Значения формы, которые должны стоять перед «Отправить»: выбранные варианты поверх прочитанных в сухом прогоне. */
@@ -580,6 +677,8 @@ interface SubmitTrace {
   clickError: boolean;
   submitRequests: number;
   submitStatus: number | null;
+  /** После точки невозврата страница показала JS-диалог (он отклонён): объясняет неизвестный исход. */
+  dialogAfterCommit: boolean;
 }
 
 /**
@@ -610,8 +709,12 @@ async function fillAndSubmit(
   };
   await page.route("**/*", blocker);
   let dialog = false;
+  // После проверок `guard` уже не действует: диалог (например, `confirm` на «Отправить») отклоняется и
+  // фиксируется в следе — без замеченного запроса заказа исход будет «неизвестно».
+  let guarded = true;
   page.on("dialog", (d) => {
-    dialog = true;
+    if (guarded) dialog = true;
+    else trace.dialogAfterCommit = true;
     d.dismiss().catch(() => {});
   });
   const guard = () => {
@@ -633,13 +736,15 @@ async function fillAndSubmit(
   await page.waitForLoadState("networkidle", { timeout: 5_000 }).catch(() => {});
   if ((await visibleDropdowns(page).count()) !== 0) throw new Refusal(`после заполнения раскрыт список вариантов; ${tail}`);
   checkFormState(expectedFieldValues(form, plan), await readFormSnapshot(page, submit), "filled");
-  await page.unroute("**/*", blocker);
-  guard();
-  pageCtx.signal.throwIfAborted();
-
+  // Счётчик — до снятия перехвата: запрос заказа, ушедший в этом промежутке, тоже будет учтён.
   page.on("request", (req) => {
     if (isStartRequest(req)) trace.submitRequests++;
   });
+  await page.unroute("**/*", blocker);
+  guard();
+  pageCtx.signal.throwIfAborted();
+  guarded = false;
+
   // Точка невозврата: дальше только один клик, ожидание и чтение.
   try {
     await ctx.commitPoint(pageCtx);
@@ -662,16 +767,19 @@ async function fillAndSubmit(
 }
 
 /**
- * Опрос истории заявок после клика (`maxAgeMs: 0`) до `claimsWaitMs` от клика: первая новая заявка
- * (или несколько) завершает опрос. Сбой чтения — следующая попытка; ни одного удачного чтения — `null`.
+ * Опрос истории заявок после клика (`maxAgeMs: 0`) до `claimsWaitMs` от клика: первое чтение с новой
+ * заявкой (или несколькими) завершает опрос. Возвращается последний удачно прочитанный список (номера
+ * распознаны); сбой чтения — следующая попытка; ни одного удачного чтения — `null`.
  */
-async function pollNewClaims(before: string[], since: number, signal: AbortSignal): Promise<ReturnType<typeof classifyClaimsOutcome> | null> {
+async function pollNewClaims(before: string[], since: number, signal: AbortSignal): Promise<ElkClaim[] | null> {
   const deadline = since + certificateTestSeams.claimsWaitMs;
-  let last: ReturnType<typeof classifyClaimsOutcome> | null = null;
+  let last: ElkClaim[] | null = null;
   for (;;) {
     try {
-      last = classifyClaimsOutcome(before, claimNumbersOf(await certificateTestSeams.listRequests({ maxAgeMs: 0, signal })));
-      if (last.evidence.newClaims > 0) return last;
+      const list = await certificateTestSeams.listRequests({ maxAgeMs: 0, signal });
+      const nums = claimNumbersOf(list);
+      last = list.requests;
+      if (classifyClaimsOutcome(before, nums).evidence.newClaims > 0) return last;
     } catch {
       // Неудачное чтение — не исход: пробуем снова до конца окна.
     }
@@ -728,22 +836,47 @@ const W_DEPENDENT =
   "поля, которые появляются после выбора варианта, сухой прогон не видит: форма может потребовать больше данных, чем показано здесь";
 const W_READ_ONLY ="форма открывалась только для чтения: списки раскрывались и закрывались без выбора, «Отправить» не нажималась";
 const W_NOT_READ = "история заявок ЕЛК после заказа не прочиталась: сверьте вручную через elk_list_requests";
-const W_MANY_STARTS = "форма отправила запрос заказа больше одного раза: возможны дубли — сверьте вручную через elk_list_requests";
+const W_DIALOG_AFTER_COMMIT =
+  "после нажатия «Отправить» страница показала диалог, он отклонён: заказ мог не уйти — сверьте вручную через elk_list_requests";
 // Снимок номеров до заказа живёт только в памяти записи, поэтому повтор не может доказать, чья заявка новая.
 const W_VERIFY_ONLY =
   "проверка повтора не может установить, создал ли заявку прежний вызов (снимок заявок до заказа не хранится): сверьте вручную через elk_list_requests; число заявок сейчас — evidence.requestsNow";
 
-/**
- * Исход записи по следу отправки и опросу заявок. Несколько запросов `process/start` от одного клика —
- * неизвестно с предупреждением, даже если новая заявка одна (дубль мог появиться позже).
- */
-function certificateResult(trace: SubmitTrace, claims: ReturnType<typeof classifyClaimsOutcome> | null): ExecuteResult {
-  const sent = { clicked: !trace.clickError, submitRequests: trace.submitRequests, submitStatus: trace.submitStatus };
-  if (!claims) return { stage: "sent", outcome: "unknown", evidence: { ...sent, newClaims: null }, warnings: [W_NOT_READ] };
-  if (trace.submitRequests > 1) {
-    return { stage: "verified", outcome: "unknown", evidence: { ...sent, newClaims: claims.evidence.newClaims }, warnings: [W_MANY_STARTS] };
+/** Email входа — только для признака «заявку создал тот же логин»; не задан — `null` (признак неизвестен). */
+function loginEmailOrNull(): string | null {
+  try {
+    return config.hseEmail;
+  } catch {
+    return null;
   }
-  return { stage: "verified", outcome: claims.outcome, evidence: { ...sent, ...claims.evidence }, warnings: claims.warnings };
+}
+
+/**
+ * Исход записи по следу отправки и опросу заявок (`classifyCertificateOutcome`). Диалог после точки
+ * невозврата отмечается в `evidence` и при неизвестном исходе объясняется предупреждением.
+ */
+function certificateResult(trace: SubmitTrace, before: string[], claims: ElkClaim[] | null): ExecuteResult {
+  const sent = {
+    clicked: !trace.clickError,
+    submitRequests: trace.submitRequests,
+    submitStatus: trace.submitStatus,
+    dialogAfterCommit: trace.dialogAfterCommit,
+  };
+  const dialogWarning = trace.dialogAfterCommit ? [W_DIALOG_AFTER_COMMIT] : [];
+  if (!claims) return { stage: "sent", outcome: "unknown", evidence: { ...sent, newClaims: null }, warnings: [W_NOT_READ, ...dialogWarning] };
+  const r = classifyCertificateOutcome({
+    before,
+    after: claims,
+    submitRequests: trace.submitRequests,
+    clickedAt: trace.clickedAt,
+    loginEmail: loginEmailOrNull(),
+  });
+  return {
+    stage: "verified",
+    outcome: r.outcome,
+    evidence: { ...sent, ...r.evidence },
+    warnings: r.outcome === "unknown" ? [...r.warnings, ...dialogWarning] : r.warnings,
+  };
 }
 
 export const certificateAdapter: WriteAdapter<CertificateArgs, CertificateObserved> = {
@@ -786,7 +919,10 @@ export const certificateAdapter: WriteAdapter<CertificateArgs, CertificateObserv
   },
   async execute(args, observed, ctx) {
     checkCertificateArgs(args);
-    const trace: SubmitTrace = { clickedAt: 0, clickError: false, submitRequests: 0, submitStatus: null };
+    // Второй снимок номеров перед открытием страницы сужает окно, в котором чужая заявка сошла бы за новую:
+    // заявка, появившаяся между сухим прогоном и записью, новой не считается. Сбой чтения — отказ до отправки.
+    const before = [...new Set([...observed.claimNumbers, ...(await readClaimNumbers(ctx.signal))])];
+    const trace: SubmitTrace = { clickedAt: 0, clickError: false, submitRequests: 0, submitStatus: null, dialogAfterCommit: false };
     let committed = false;
     try {
       // Без перехвата чтения (`readFormPage`): своя страница, свой перехват до точки невозврата.
@@ -809,7 +945,7 @@ export const certificateAdapter: WriteAdapter<CertificateArgs, CertificateObserv
     }
     // Опрос — после закрытия страницы: чтение истории ЕЛК может само открыть страницу (запасной путь
     // client.ts), а вложенный `withPage` запрещён.
-    return certificateResult(trace, await pollNewClaims(observed.claimNumbers, trace.clickedAt, ctx.signal));
+    return certificateResult(trace, before, await pollNewClaims(before, trace.clickedAt, ctx.signal));
   },
   async verifyOnly(_args, signal) {
     let requestsNow: number | null = null;
