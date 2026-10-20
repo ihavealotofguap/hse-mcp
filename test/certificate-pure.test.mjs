@@ -140,7 +140,7 @@ test("planCertificate: предусловия — все обязательны�
     assert.match(err.message, /не заданы обязательные поля: «Наименование организации»/);
     assert.ok(!err.message.includes("«Формат получения»"));
   }
-  refuses(() => planCertificate(form, {}), /«Формат получения», «Наименование организации»/);
+  refuses(() => planCertificate(form, {}), /«Формат получения».*«Наименование организации»/);
   refuses(() => planCertificate(form, { ...FULL, "Формат получения": "Факс" }), /«Формат получения»: значения нет среди вариантов/);
   refuses(() => planCertificate(form, { ...FULL, Паспорт: "1" }), /неизвестные поля формы: «Паспорт»/);
   refuses(() => planCertificate(form, { ...FULL, "Образовательная программа": "Программа" }), /заполняется автоматически/);
@@ -160,6 +160,69 @@ test("planCertificate: предусловия — все обязательны�
     rawForm({ items: rawForm().items.map((it) => (it.label.startsWith("Формат") ? { ...it, options: [FORMAT[0], FORMAT[0]] } : it)) })
   );
   refuses(() => planCertificate(dupOpt, FULL), /вариант.*повторяется/);
+});
+
+test("planCertificate: отказ о недостающих обязательных полях перечисляет подписи и варианты (разведка формы пустым fields)", () => {
+  const form = buildCertificateForm(rawForm());
+  let msg = "";
+  try {
+    planCertificate(form, {});
+    assert.fail("ожидался отказ");
+  } catch (err) {
+    assert.ok(err instanceof Refusal);
+    msg = err.message;
+  }
+  assert.match(msg, /^не заданы обязательные поля: /);
+  // Подписи и тексты вариантов обоих полей.
+  for (const text of [...FORMAT, "Формат получения", "Наименование организации", ORG[0]]) assert.ok(msg.includes(`«${text}»`), text);
+  // Вариант, требующий дополнительного поля, помечен как неподдерживаемый, обычные — нет.
+  assert.match(msg, /«Полное наименование организации \(указать в дополнительном поле\)» \(не поддерживается\)/);
+  assert.ok(!msg.includes(`«${ORG[0]}» (не поддерживается)`));
+  assert.ok(!msg.includes(`«${FORMAT[0]}» (не поддерживается)`));
+  // Что делать дальше, и что ничего не отправлено.
+  assert.match(msg, /задайте их в fields и повторите сухой прогон — ничего не отправлено/);
+  // Автозаполненные значения и подписи в отказ не попадают.
+  for (const secret of ["Программа", "Факультет", "Образовательная программа"]) assert.ok(!msg.includes(secret), secret);
+  // Заданное поле в перечень недостающих не входит и вариантов не раскрывает.
+  try {
+    planCertificate(form, { "Формат получения": FORMAT[0] });
+    assert.fail("ожидался отказ");
+  } catch (err) {
+    assert.ok(err.message.includes("«Наименование организации»") && err.message.includes(`«${ORG[0]}»`));
+    assert.ok(!err.message.includes("«Формат получения»") && !err.message.includes(`«${FORMAT[1]}»`));
+  }
+  // Обязательное поле-ввод без значения: подпись есть, вариантов нет.
+  const reqInput = buildCertificateForm(
+    rawForm({ requiredLeft: [3], items: [...rawForm().items, { label: "Телефон*", requiredMark: true, kind: "input", disabled: false, value: "", options: null }] })
+  );
+  try {
+    planCertificate(reqInput, FULL);
+    assert.fail("ожидался отказ");
+  } catch (err) {
+    assert.match(err.message, /не заданы обязательные поля: «Телефон»; задайте/);
+    assert.ok(!err.message.includes("вариант"));
+  }
+});
+
+test("planCertificate: значение не из вариантов — отказ перечисляет варианты этого поля и только их", () => {
+  const form = buildCertificateForm(rawForm());
+  try {
+    planCertificate(form, { ...FULL, "Формат получения": "Факс" });
+    assert.fail("ожидался отказ");
+  } catch (err) {
+    assert.ok(err instanceof Refusal);
+    assert.match(err.message, /^поле «Формат получения»: значения нет среди вариантов формы \(варианты: /);
+    for (const o of FORMAT) assert.ok(err.message.includes(`«${o}»`), o);
+    for (const o of ORG) assert.ok(!err.message.includes(o), "варианты чужого поля");
+    for (const secret of ["Программа", "Факультет"]) assert.ok(!err.message.includes(secret), secret);
+  }
+  // Неподдерживаемые варианты в списке помечены и здесь.
+  try {
+    planCertificate(form, { ...FULL, "Наименование организации": "Иное" });
+    assert.fail("ожидался отказ");
+  } catch (err) {
+    assert.match(err.message, /«Полное наименование организации \(указать в дополнительном поле\)» \(не поддерживается\)/);
+  }
 });
 
 test("needsExtraInput: вариант, отсылающий к дополнительному полю, распознаётся без учёта регистра", () => {

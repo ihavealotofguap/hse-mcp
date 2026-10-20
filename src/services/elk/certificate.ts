@@ -150,6 +150,15 @@ export function needsExtraInput(option: string): boolean {
 
 const quoted = (labels: string[]) => labels.map((l) => `«${l}»`).join(", ");
 
+/**
+ * Варианты поля для отказа сухого прогона: подпись и тексты берутся из определения формы (личных данных
+ * там нет); вариант, требующий дополнительного поля, помечен — выбрать его нельзя.
+ */
+const optionsHint = (options: string[]): string =>
+  options.length === 0
+    ? ""
+    : ` (варианты: ${options.map((o) => `«${o}»${needsExtraInput(o) ? " (не поддерживается)" : ""}`).join(", ")})`;
+
 /** Отказы по самим аргументам — до любого обращения к системе. */
 export function checkCertificateArgs(args: CertificateArgs): void {
   const { serviceId, fields } = args as { serviceId: unknown; fields: unknown };
@@ -233,7 +242,7 @@ export function planCertificate(form: CertificateForm, fields: Record<string, st
     if (field.disabled) throw new Refusal(`поле ${quoted([field.label])} заполняется автоматически и не меняется`);
     if (field.kind !== "select") throw new Refusal(`поле ${quoted([field.label])}: в v1 заполняются только выпадающие списки`);
     const matches = field.options.filter((o) => o === value).length;
-    if (matches === 0) throw new Refusal(`поле ${quoted([field.label])}: значения нет среди вариантов формы`);
+    if (matches === 0) throw new Refusal(`поле ${quoted([field.label])}: значения нет среди вариантов формы${optionsHint(field.options)}`);
     if (matches > 1) throw new Refusal(`поле ${quoted([field.label])}: вариант в списке формы повторяется — выбор неоднозначен`);
     chosen.push({ label: field.label, value, current: field.value });
   }
@@ -246,8 +255,12 @@ export function planCertificate(form: CertificateForm, fields: Record<string, st
       );
     }
   });
-  const missing = form.fields.filter((f) => f.required && !f.value && !given.has(f.label)).map((f) => f.label);
-  if (missing.length > 0) throw new Refusal(`не заданы обязательные поля: ${quoted(missing)}`);
+  // Сухой прогон с пустым `fields` — разведка формы: отказ перечисляет, что выбирать (подписи и варианты).
+  const missing = form.fields.filter((f) => f.required && !f.value && !given.has(f.label));
+  if (missing.length > 0) {
+    const list = missing.map((f) => `${quoted([f.label])}${optionsHint(f.options)}`).join("; ");
+    throw new Refusal(`не заданы обязательные поля: ${list}; задайте их в fields и повторите сухой прогон — ничего не отправлено`);
+  }
   return {
     chosen,
     autofilled: form.fields.filter((f) => f.value && !given.has(f.label)).map((f) => ({ label: f.label, value: f.value })),
