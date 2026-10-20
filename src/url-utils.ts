@@ -45,8 +45,9 @@ export function assertReadOnlyPath(url: string): void {
 
   // Имя переменной PHP/Moodle нормализует: ведущие пробелы (`%20sesskey`, `+action`) отбрасывает, а всё
   // от первой `[` (`sesskey[]`, `sesskey[a][b]`, `sesskey[]x`, `action[0]`, они же в `%5B`) читает как
-  // индекс массива. Режем от первой `[` целиком — строже PHP, зато без обхода хвостом после скобок.
-  const normKey = (k: string): string => k.replace(/^ +/, "").replace(/\[[\s\S]*$/, "").toLowerCase();
+  // индекс массива; кроме того, имя читается лишь до первого NUL (`sesskey%00x` для Moodle — `sesskey`).
+  // Режем от первой `[` или NUL целиком — строже PHP, зато без обхода хвостом после них.
+  const normKey = (k: string): string => k.replace(/^ +/, "").replace(/[\0[][\s\S]*$/, "").toLowerCase();
   const keysOf = (query: string): string[] => [...new URLSearchParams(query).keys()].map(normKey);
 
   // Фрагмент не уходит на сервер, но SPA читают из него «query» (`#/путь?a=b` или `#a=b`).

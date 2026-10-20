@@ -155,6 +155,29 @@ test("нормализация ключей не задевает обычные
   assert.doesNotThrow(() => assertReadOnlyPath(`${BASE}/mod/assign/view.php?id=5&%20action=`));
 });
 
+// PHP не бинарно-безопасен в именах переменных: имя читается только до первого NUL.
+test("NUL в ключе обрезает имя: sesskey%00x, action%00, %20sesskey%00 не обходят проверку", () => {
+  assert.throws(() => assertReadOnlyPath(`${BASE}/x?sesskey%00x=1`), /sesskey/);
+  assert.throws(() => assertReadOnlyPath(`${BASE}/x?sesskey%00=1`), /sesskey/);
+  assert.throws(() => assertReadOnlyPath(`${BASE}/x?%20sesskey%00=1`), /sesskey/);
+  assert.throws(() => assertReadOnlyPath(`${BASE}/x?SESSKEY%00[a]=1`), /sesskey/);
+  assert.throws(() => assertReadOnlyPath(`${BASE}/x#a=1&sesskey%00x=1`), /sesskey/);
+  assert.throws(() => assertReadOnlyPath(`${BASE}/mod/assign/view.php?id=5&action%00=submit`), /action/);
+  assert.throws(() => assertReadOnlyPath(`${BASE}/mod/assign/view.php?action%00x=editsubmission`), /action/);
+  assert.throws(() => assertReadOnlyPath(`${BASE}/mod/assign?action%00=submit`), /action/);
+  assert.throws(() => assertReadOnlyPath(`${BASE}/mod/assign/?%20ACTION%00junk=submit`), /action/);
+});
+
+test("NUL: ключ, начинающийся с NUL, и NUL в значении не дают ложных срабатываний", () => {
+  assert.doesNotThrow(() => assertReadOnlyPath(`${BASE}/x?%00sesskey=1`));
+  assert.doesNotThrow(() => assertReadOnlyPath(`${BASE}/mod/assign/view.php?id=5&%00action=submit`));
+  assert.doesNotThrow(() => assertReadOnlyPath(`${BASE}/mod/assign/view.php?id=5%00`));
+  assert.doesNotThrow(() => assertReadOnlyPath(`${BASE}/x?id=5&mysesskey=1&mysesskey%00x=2`));
+  assert.doesNotThrow(() => assertReadOnlyPath(`${BASE}/mod/assign/view.php?id=5&action=&x=%00`));
+  // NUL в значении sesskey не мешает отказу
+  assert.throws(() => assertReadOnlyPath(`${BASE}/x?sesskey=1%00`), /sesskey/);
+});
+
 test("сообщение при нормализованных ключах не повторяет URL и значение", () => {
   const secret = "SECRETVALUE456";
   for (const url of [`${BASE}/x?%20sesskey=${secret}`, `${BASE}/mod/assign/view.php?id=5&action[0]=${secret}`]) {
