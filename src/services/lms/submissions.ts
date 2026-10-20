@@ -1115,7 +1115,8 @@ export const submitAdapter: WriteAdapter<SubmitArgs, SubmitObserved> = {
   targetOf,
   async observe(args, signal) {
     checkSubmitArgs(args);
-    const files = await resolveOutboxFiles(args.files);
+    // Файл крупнее предела проверки всё равно будет отклонён (`planSubmission`): отказ до хеширования целиком.
+    const files = await resolveOutboxFiles(args.files, { maxBytes: MAX_VERIFY_DOWNLOAD });
     const view = await readPage(viewUrl(args.cmid), (page) => readAssignmentView(page, args.cmid), signal);
     checkSubmittable(view);
     const form = await readPage(

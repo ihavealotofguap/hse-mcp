@@ -830,3 +830,34 @@ test("checkButtonForm: «Удалить ответ» — GET на removesubmissi
     assertRefusal(() => checkButtonForm(raw, "continue", 42), /Продолжить/, ["42", "sesskey"]);
   }
 });
+
+test("submitAdapter.observe: файл крупнее предела проверки отклоняется до хеширования и до открытия страницы", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "hsemcp-outbox-big-"));
+  const saved = process.env.HSE_OUTBOX_DIR;
+  process.env.HSE_OUTBOX_DIR = dir;
+  // Браузер не должен стартовать ни при каких условиях: запуск отклоняется и считается.
+  const { chromium } = await import("playwright");
+  const realLaunch = chromium.launch;
+  let launches = 0;
+  chromium.launch = async () => {
+    launches++;
+    throw new Error("запуск браузера отключён в тесте");
+  };
+  try {
+    const fd = fs.openSync(path.join(dir, "big.bin"), "w");
+    fs.ftruncateSync(fd, 64 * 1024 * 1024 + 1); // разреженный: байты не пишутся
+    fs.closeSync(fd);
+    const t0 = Date.now();
+    await assert.rejects(
+      () => submitAdapter.observe({ cmid: 1, mode: "draft", files: ["big.bin"] }),
+      (err) => /^Файл №1: размер больше допустимых \d+ байт$/.test(err.message) && !err.message.includes("big.bin") && !err.message.includes(dir)
+    );
+    assert.ok(Date.now() - t0 < 5_000);
+    assert.equal(launches, 0, "страница не открывалась");
+  } finally {
+    chromium.launch = realLaunch;
+    if (saved === undefined) delete process.env.HSE_OUTBOX_DIR;
+    else process.env.HSE_OUTBOX_DIR = saved;
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
