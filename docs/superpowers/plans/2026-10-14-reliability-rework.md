@@ -1,7 +1,5 @@
 # Переработка подпроекта 1 «Надёжность и скорость» — план реализации
 
-*Примечание от 2026-10-18: корпоративная почта ВШЭ (`mail_*`, IMAP/SMTP, `HSE_MAIL_APP_PASSWORD`) исключена из проекта и удалена из кода; упоминания о ней ниже исторические и не обновлялись.*
-
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Заменить кэш/лимитер/доступ к ЕЛК из `d98fbe6` на декларативные ресурсы, `withPage` с дедлайном и арендой слота, узкий замок входа и выключатель прямого пути ЕЛК — без изменения публичных сигнатур клиентов и MCP-тулов.
@@ -15,12 +13,12 @@
 ## Global Constraints
 
 - Тестов и линтера в проекте нет **по решению проекта** (CLAUDE.md) — не добавлять и не коммитить. Проверка: `npm run build`, изолированные скрипты через `dist/`, живая проверка. Скрипты лежат в scratchpad сессии (ниже `$SCRATCH`) и в репозиторий не попадают.
-- Рабочая директория — worktree `C:/Users/alexk/hsemcp/.claude/worktrees/reliability-rework` (ниже `$WT`), ветка `reliability-rework`. Команды запускать оттуда, без `cd` в другие каталоги.
+- Рабочая директория — worktree `<путь-к-проекту>/.claude/worktrees/reliability-rework` (ниже `$WT`), ветка `reliability-rework`. Команды запускать оттуда, без `cd` в другие каталоги.
 - Публичные сигнатуры клиентских функций (`getSchedule(from, to)`, `listMessages(limit)`, `getNotifications(limit)` и т.д.) и MCP-тулов **не меняются**.
 - Домен кэша — префикс `elk:` / `lms:` / `istudy:`; `clearCache("<домен>:")` и `hse_clear_cache({scope})` сохраняют смысл.
 - Пороги лимитера остаются **3 страницы / ≥300 мс** (не измерены); аренда слота = `deadlineMs` + 5 с; дедлайн загрузки по умолчанию 45 с; выключатель прямого пути — 10 мин.
 - Кэш только в памяти, на диск не пишется; единый `hse_clear_cache`, параметра `refresh` в тулах нет.
-- Живые скрипты читают `HSE_EMAIL`/`HSE_PASSWORD` из `C:\Users\alexk\hsemcp\.env` в `process.env`, ничего не печатают; токены, пароли, ФИО, email, query-строки URL в вывод не попадают. `.env` и `storage/` в worktree не копировать (`storage/` создаётся логином и в .gitignore).
+- Живые скрипты читают `HSE_EMAIL`/`HSE_PASSWORD` из `.env` проекта в `process.env`, ничего не печатают; токены, пароли, ФИО, email, query-строки URL в вывод не попадают. `.env` и `storage/` в worktree не копировать (`storage/` создаётся логином и в .gitignore).
 - Комментарии, сообщения об ошибках и документация — на русском; импорты с суффиксом `.js`.
 - Каждый коммит заканчивается трейлером `Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>`.
 - В документах честно разделять «проверено вживую» и «не проверено». Отдельного `PROGRESS.md` нет: итоги — раздел «Результаты живой проверки» в спецификации.
@@ -91,12 +89,12 @@
 import fs from "node:fs";
 import { pathToFileURL } from "node:url";
 
-export const WT = process.env.WT ?? "C:/Users/alexk/hsemcp/.claude/worktrees/reliability-rework";
+export const WT = process.env.WT ?? "<путь-к-проекту>/.claude/worktrees/reliability-rework";
 export const imp = (rel) => import(pathToFileURL(`${WT}/dist/${rel}`).href);
 export const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 export function loadEnv() {
-  for (const line of fs.readFileSync("C:/Users/alexk/hsemcp/.env", "utf8").split(/\r?\n/)) {
+  for (const line of fs.readFileSync("<путь-к-проекту>/.env", "utf8").split(/\r?\n/)) {
     const m = line.match(/^\s*([A-Z_]+)\s*=\s*(.*)\s*$/);
     if (m && !line.trim().startsWith("#")) process.env[m[1]] ??= m[2].replace(/^["']|["']$/g, "");
   }
@@ -2488,8 +2486,7 @@ const lmsMessages = defineResource<number, RawMailMessageSummary[], LmsMessageSu
 
 /**
  * Внутренняя почта SmartLMS (плагин local_mail, edu.hse.ru/local/mail/) — переписка с
- * преподавателями внутри курсов, полностью отдельная от корпоративной почты Яндекс 360
- * (см. src/services/mail/). Реверс-инжинирено 2026-09-15 через тот же внутренний AJAX-сервис
+ * преподавателями внутри курсов. Реверс-инжинирено 2026-09-15 через тот же внутренний AJAX-сервис
  * Moodle (fetchMoodleAjax), метод local_mail_search_messages с ролями to/cc/bcc — это входящие.
  */
 export function listMessages(limit = 50): Promise<LmsMessageSummary[]> {

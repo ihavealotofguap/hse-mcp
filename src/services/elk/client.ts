@@ -26,7 +26,7 @@ const stripHtmlElk = (s: string) => s.replace(/<[^>]+>/g, " ").replace(/\s+/g, "
  *   /api/get-academic-data (тот же Bearer-токен), см. getAcademicData().
  * - "Заказ справок" (зачётка, подтверждение обучения и т.п.) живёт на
  *   /student-services?section=documents&subsection=certificates — конкретные кнопки не
- *   расковырены (форма отправки), см. docs/recon.md.
+ *   расковырены (форма отправки), см. локальные заметки разведки (не в репозитории).
  */
 
 // Токен берём один раз через страницу /profile и дальше ходим в API напрямую (без страницы) до

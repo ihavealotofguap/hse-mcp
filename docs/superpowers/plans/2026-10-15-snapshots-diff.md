@@ -1,7 +1,5 @@
 # Подпроект №3 «Проактивность: снапшоты и diff» — план реализации
 
-*Примечание от 2026-10-18: корпоративная почта ВШЭ (`mail_*`, IMAP/SMTP, `HSE_MAIL_APP_PASSWORD`) исключена из проекта и удалена из кода; упоминания о ней ниже исторические и не обновлялись.*
-
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Тул `hse_changes` отвечает на «что изменилось с прошлого раза» по дедлайнам, расписанию, входящему, заявкам и (по явной просьбе) оценкам: базы по источникам + журнал событий с курсором `ack`, хранимые в `storage/changes/state.json`.
@@ -27,12 +25,11 @@
 - Права файла: `0o600`, но на Windows это не защита — реальная защита ACL профиля (§7).
 - Записывающих операций нет; `hse_changes_reset` требует `confirm: true` (§13).
 - Язык: комментарии, сообщения об ошибках и описания тулов — русские, по образцу кодовой базы; идентификаторы — английские.
-- Сборка (в worktree нет `node_modules`, он находится выше по дереву), из корня worktree: Git Bash — `node C:/Users/alexk/hsemcp/node_modules/typescript/bin/tsc -p tsconfig.json` (прямые слэши: в Git Bash обратные съедаются); PowerShell — та же запись либо `node C:\Users\alexk\hsemcp\node_modules\typescript\bin\tsc -p tsconfig.json`. Далее — «**сборка**». Во всех командах плана, предназначенных для Git Bash, пути пишутся с прямыми слэшами.
+- Сборка (в worktree нет `node_modules`, он находится выше по дереву), из корня worktree: Git Bash — `node <путь-к-проекту>/node_modules/typescript/bin/tsc -p tsconfig.json` (прямые слэши: в Git Bash обратные съедаются); PowerShell — та же запись либо `node <путь-к-проекту>\node_modules\typescript\bin\tsc -p tsconfig.json`. Далее — «**сборка**». Во всех командах плана, предназначенных для Git Bash, пути пишутся с прямыми слэшами.
 - `ack` (П1): `ack`, больший наибольшего когда-либо выданного `seq` (`max(issued[*])` по всем областям), игнорируется целиком с предупреждением; иначе для каждой области вызова `seen = max(seen, min(ack, issued[scope] ?? 0))`. `issued` — карта по областям.
 
 ## Что вне плана (явно)
 
-- **(а) Удаление корпоративной почты** — отдельная ветка и PR **до** №3. Зависимостей у этого плана от него нет: код `changes` не импортирует `services/mail`. Пока PR не сделан, почта остаётся в `src/index.ts` — задача 10 добавляет регистрацию рядом и не трогает её.
 - **(б) istudy вне №3 по недостижимости** (§12). Вход проходит без MAX, но данные зачётки за двухфакторным подтверждением через MAX (HTTP 412 на `/api/auth/two-factor/required`), API профиля переехал на `POST /api/student/profile?studentId=`; пользователь MAX не использует, поэтому зачётка недоступна. В плане `istudy` не затрагивается, кроме правки устаревшего описания в документации (задача 11); задач по istudy нет.
 - **(в) Три решения приняты по умолчанию и помечены оспариваемыми** (шапка спеки): заголовки входящего хранятся как есть; оценки — новым парсером с `unsupported`; защита процессов — lock-файл. Если пользователь оспорит, затронуты: (1) задача 8 (`title` во входящем), (2) задача 5 и 8 (оценки), (3) задача 7 (`withStateLock`).
 - **(г) Долг №4 не чинится** (§14): `invalidates` с неизвестным именем и режим «не кэшировать».
@@ -80,7 +77,7 @@
 | `src/mcp-utils.ts` | изменить | `runTool(fn, signal?)` |
 | `src/services/changes/tools.ts` | создать | `hse_changes`, `hse_changes_reset` |
 | `src/index.ts` | изменить | `registerChangesTools(server)` |
-| `docs/requirements.md`, `CLAUDE.md`, `README.md`, `docs/recon.md` | изменить | Документация |
+| `docs/requirements.md`, `CLAUDE.md`, `README.md`, локальные заметки разведки (не в репозитории) | изменить | Документация |
 | `docs/superpowers/specs/2026-10-15-snapshots-diff-design.md` | изменить | Поправки П1–П5 (задача 9), §18 (задача 12) |
 
 ## Зависимости и параллельность
@@ -114,7 +111,7 @@ Expected: `snapshots-diff`, вывод `git status` пуст.
 
 - [ ] **Step 2: Базовая сборка**
 
-Run (из корня worktree, Git Bash): `node C:/Users/alexk/hsemcp/node_modules/typescript/bin/tsc -p tsconfig.json`
+Run (из корня worktree, Git Bash): `node <путь-к-проекту>/node_modules/typescript/bin/tsc -p tsconfig.json`
 Expected: код возврата 0, без вывода.
 
 - [ ] **Step 3: Создать каркас проверок**
@@ -124,8 +121,8 @@ Expected: код возврата 0, без вывода.
 ```js
 import { pathToFileURL } from "node:url";
 
-export const ROOT = "C:/Users/alexk/hsemcp/.claude/worktrees/update";
-export const NODE_MODULES = "C:/Users/alexk/hsemcp/node_modules";
+export const ROOT = "<путь-к-проекту>/.claude/worktrees/update";
+export const NODE_MODULES = "<путь-к-проекту>/node_modules";
 export const dist = (rel) => import(pathToFileURL(`${ROOT}/dist/${rel}`).href);
 export const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -3044,7 +3041,7 @@ Expected: `ALL PASSED`. (`hse_changes_reset` с `confirm: false` отказыв�
 
 - [ ] **Step 6: Модуль тулов загружается и подключён в `index.ts`**
 
-Run (Git Bash, из корня worktree): `node -e "import('file:///C:/Users/alexk/hsemcp/.claude/worktrees/update/dist/services/changes/tools.js').then(()=>console.log('ok'))"`
+Run (Git Bash, из корня worktree): `node -e "import('file:///<путь-к-проекту>/.claude/worktrees/update/dist/services/changes/tools.js').then(()=>console.log('ok'))"`
 Expected: `ok`.
 
 Run: `grep -n "registerChangesTools" dist/index.js`
@@ -3064,7 +3061,7 @@ Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>"
 ### Task 11: Документация
 
 **Files:**
-- Modify: `docs/requirements.md` (после п. 10 раздела «Реализовано», нефункциональные), `CLAUDE.md` (архитектура, istudy, roadmap), `README.md` (таблица тулов, «Как это устроено»), `docs/recon.md` (находки)
+- Modify: `docs/requirements.md` (после п. 10 раздела «Реализовано», нефункциональные), `CLAUDE.md` (архитектура, istudy, roadmap), `README.md` (таблица тулов, «Как это устроено»), локальные заметки разведки (не в репозитории) (находки)
 
 **Interfaces:** нет кода.
 
@@ -3138,7 +3135,7 @@ Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>"
 
 В «Как это устроено» после пункта «Сводки» добавить пункт «**Изменения** (`hse_changes`)» с описанием: локальный файл `storage/changes/state.json`, `ack`, первый вызов создаёт базу, оценки только из журнала LMS и дорогие (десятки секунд). Пункт про istudy привести к формулировке из `CLAUDE.md` (в части «причина отказа»).
 
-- [ ] **Step 4: `docs/recon.md`**
+- [ ] **Step 4: локальные заметки разведки (не в репозитории)**
 
 Перед разделом «## Учёба» добавить раздел:
 
@@ -3171,13 +3168,13 @@ Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>"
 Run: `git diff --stat docs/ CLAUDE.md README.md`
 Expected: изменены только четыре файла из списка.
 
-Run (Git Bash): `git diff -U0 docs/requirements.md CLAUDE.md README.md docs/recon.md | grep -nE "^\+.*(TBD|TODO)"`
+Run (Git Bash): `git diff -U0 docs/requirements.md CLAUDE.md README.md | grep -nE "^\+.*(TBD|TODO)"`
 Expected: пустой вывод (ни одной добавленной строки с `TBD`/`TODO`; прежние вхождения не считаются).
 
 - [ ] **Step 6: Коммит**
 
 ```bash
-git add docs/requirements.md CLAUDE.md README.md docs/recon.md
+git add docs/requirements.md CLAUDE.md README.md
 git commit -m "Document subproject 3: changes tools, state file, istudy finding
 
 Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>"
@@ -3193,7 +3190,7 @@ Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>"
 
 **Interfaces:** нет кода в репозитории.
 
-> **Разрешения.** Скрипт читает `HSE_EMAIL`/`HSE_PASSWORD` из `C:\Users\alexk\hsemcp\.env` и входит в реальный аккаунт. Предыдущая живая проверка этой ветки была отклонена системой прав у субагента (`[PII Data Handling]`) и выполнена основной сессией по прямому поручению пользователя. Если запуск отклонён — **остановиться** и вернуть пользователю команду `! node …`; не обходить, не менять настройки разрешений.
+> **Разрешения.** Скрипт читает `HSE_EMAIL`/`HSE_PASSWORD` из `.env` проекта и входит в реальный аккаунт. Предыдущая живая проверка этой ветки была отклонена системой прав у субагента (`[PII Data Handling]`) и выполнена основной сессией по прямому поручению пользователя. Если запуск отклонён — **остановиться** и вернуть пользователю команду `! node …`; не обходить, не менять настройки разрешений.
 
 - [ ] **Step 1: Скрипт** `$SCRATCH/verify-3/live-changes.mjs`
 
@@ -3216,7 +3213,7 @@ Expected: выполняется без остановки по 403/429; фай�
 
 - [ ] **Step 4: Итоговая сборка и чистота**
 
-Run (Git Bash): `node C:/Users/alexk/hsemcp/node_modules/typescript/bin/tsc -p tsconfig.json` и `git status --short`
+Run (Git Bash): `node <путь-к-проекту>/node_modules/typescript/bin/tsc -p tsconfig.json` и `git status --short`
 Expected: код 0; в `git status` только правка спеки; `storage/changes/` не отслеживается (`git check-ignore -v storage/changes/state.json` показывает правило из `.gitignore`).
 
 - [ ] **Step 5: Коммит**

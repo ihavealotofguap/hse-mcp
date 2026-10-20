@@ -1,7 +1,5 @@
 # Сводки и планирование (`my_today` / `my_week` / `my_deadlines`) — план реализации
 
-*Примечание от 2026-10-18: корпоративная почта ВШЭ (`mail_*`, IMAP/SMTP, `HSE_MAIL_APP_PASSWORD`) исключена из проекта и удалена из кода; упоминания о ней ниже исторические и не обновлялись.*
-
 *Исторический документ: план писался до живых замеров; итоговое поведение (календарь без fallback, таймаут 40 с, просроченные видны всегда) — в спецификации.*
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
@@ -42,15 +40,15 @@
 
 - **Тестов и линтера в проекте нет по решению проекта (CLAUDE.md) — не добавлять** (ни фреймворк, ни `tests/`, ни скрипты в `package.json`). «Тесты» этого плана — одноразовые скрипты в scratchpad, они **не коммитятся**.
 - Проверка: `npm run build` (чисто), изолированные скрипты через `dist/`, живая проверка.
-- Записывающих операций не добавлять; `mail_*`/IMAP в агрегаторах **не использовать**; `HSE_MAIL_APP_PASSWORD` им не нужен.
+- Записывающих операций не добавлять.
 - Страницы открывать только через `openAuthenticatedPage` (внутри клиентских функций); не держать несколько страниц в одном вызове. Лимитер: 3 одновременных, ≥300 мс между открытиями.
 - RUZ не кэшируется; агрегат сам не кэшируется.
-- Не копировать `.env` и `storage/` в воркtree. `.env` лежит в `C:\Users\alexk\hsemcp\.env`; скрипты читают из него только `HSE_EMAIL`/`HSE_PASSWORD` в `process.env`, ничего не печатают.
+- Не копировать `.env` и `storage/` в воркtree. `.env` лежит в `.env` проекта; скрипты читают из него только `HSE_EMAIL`/`HSE_PASSWORD` в `process.env`, ничего не печатают.
 - В вывод скриптов не попадают токены, пароли, ФИО, email. Письма и их отправители не печатаются; в текстах ошибок email маскируется.
 - Комментарии и документация — по-русски, в стиле окружающего кода. Время — локальное (как `src/date-utils.ts`), ISO со смещением.
 - Коммиты — с трейлером `Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>`.
-- Рабочий каталог: `C:\Users\alexk\hsemcp\.claude\worktrees\update` (ветка `worktree-update`).
-- Scratchpad: `C:/Users/alexk/AppData/Local/Temp/claude/C--Users-alexk-hsemcp/485276c7-15d8-4d67-b960-d3782532e1c8/scratchpad` (далее `$SP`). Там уже лежат `common.mjs`, `probe.mjs`, `probe2.mjs`, `probe3.mjs`.
+- Рабочий каталог: `<путь-к-проекту>\.claude\worktrees\update` (ветка `worktree-update`).
+- Scratchpad: `<scratchpad>` (далее `$SP`). Там уже лежат `common.mjs`, `probe.mjs`, `probe2.mjs`, `probe3.mjs`.
 
 ## Review Focus
 
@@ -77,7 +75,7 @@
 - [ ] **Step 1: Проверить базовую сборку**
 
 Run: `npm run build`
-Expected: без ошибок (node_modules резолвятся из `C:\Users\alexk\hsemcp\node_modules`). Если `tsc` не найден — остановиться и сообщить пользователю, `node_modules` не копировать.
+Expected: без ошибок (node_modules резолвятся из `<путь-к-проекту>\node_modules`). Если `tsc` не найден — остановиться и сообщить пользователю, `node_modules` не копировать.
 
 - [ ] **Step 2: Экспортировать `fetchMoodleAjax`**
 
@@ -95,12 +93,12 @@ import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 
-export const WT = "C:/Users/alexk/hsemcp/.claude/worktrees/update";
+export const WT = "<путь-к-проекту>/.claude/worktrees/update";
 export const dist = (p) => import(pathToFileURL(path.join(WT, "dist", p)).href);
 
 // Берём только логин/пароль SSO; ничего не печатаем. Почтовый пароль агрегаторам не нужен.
 export function loadEnv() {
-  const text = fs.readFileSync("C:/Users/alexk/hsemcp/.env", "utf8");
+  const text = fs.readFileSync("<путь-к-проекту>/.env", "utf8");
   for (const line of text.split(/\r?\n/)) {
     const m = line.match(/^\s*(HSE_EMAIL|HSE_PASSWORD)\s*=\s*(.*?)\s*$/);
     if (m) process.env[m[1]] = m[2].replace(/^["']|["']$/g, "");
@@ -988,7 +986,7 @@ assert.match(overdue.when, /^2026-10-0[56]T\d\d:\d\d:\d\d[+-]\d\d:\d\d$/);
 // Будущий тест: lms_activity, без флага overdue; actionable=false (до открытия) не скрывает
 const quiz = s.actionEventToItem({
   id: 2, name: "Экзамен 26 октября", module: "quiz", course: "Основы государственности",
-  courseId: 295601, due: "2026-10-26T07:30:00.000Z", overdue: false, actionable: false,
+  courseId: 1001, due: "2026-10-26T07:30:00.000Z", overdue: false, actionable: false,
   actionName: "", url: null,
 });
 assert.equal(quiz.kind, "lms_activity");
@@ -1405,7 +1403,7 @@ const RESULT_NOTE =
   "overdue, unread, source, ...), отсортированный: просроченные несданные первыми, затем по " +
   "времени, затем без даты; sources — статус каждого источника (ok/error/skipped, текст " +
   "ошибки, warnings). Если источник недоступен (например, РУЗ вне сети ВШЭ), сводка всё " +
-  "равно возвращается — смотрите sources. Корпоративная почта (mail_*) в сводку не входит.";
+  "равно возвращается — смотрите sources.";
 
 export function registerDigestTools(server: McpServer): void {
   server.registerTool(
@@ -1664,12 +1662,12 @@ EOF
 
 - [ ] **Step 3: `REQUIREMENTS.md`**
 
-- Функциональные требования (Реализовано): добавить пункт 10 — сводки `my_today`/`my_week`/`my_deadlines` (состав, горизонты, просроченные несданные видны, корпоративная почта не входит).
-- Нефункциональные: «Агрегаторы возвращают частичный результат — отказ одного источника не роняет сводку и явно отражается в `sources`; таймаут источника 20 с; агрегат не кэшируется и не использует почту/IMAP».
+- Функциональные требования (Реализовано): добавить пункт 10 — сводки `my_today`/`my_week`/`my_deadlines` (состав, горизонты, просроченные несданные видны).
+- Нефункциональные: «Агрегаторы возвращают частичный результат — отказ одного источника не роняет сводку и явно отражается в `sources`; таймаут источника 20 с; агрегат не кэшируется».
 
 - [ ] **Step 4: `CLAUDE.md`**
 
-В раздел «Архитектура» добавить абзац про `services/digest/`: сервис вызывает клиентские функции (не MCP-тулы), `buildDigest` с внедряемыми `Collectors`, единая модель `DigestItem`, `sources` со статусами, дедлайны LMS — календарь Moodle, РУЗ — только запасной, IMAP не используется. В «Roadmap» отметить подпроект 2 как готовый.
+В раздел «Архитектура» добавить абзац про `services/digest/`: сервис вызывает клиентские функции (не MCP-тулы), `buildDigest` с внедряемыми `Collectors`, единая модель `DigestItem`, `sources` со статусами, дедлайны LMS — календарь Moodle, РУЗ — только запасной. В «Roadmap» отметить подпроект 2 как готовый.
 
 - [ ] **Step 5: `README.md`**
 

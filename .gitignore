@@ -10,3 +10,4 @@ storage/
 .idea/
 .DS_Store
 Thumbs.db
+docs/recon.md

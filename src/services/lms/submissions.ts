@@ -30,7 +30,7 @@ const viewUrl = (cmid: number) => `${BASE_URL}/mod/assign/view.php?id=${cmid}`;
 // «Отмена» сухой прогон не нажимает, страница закрывается `page.close()` из `withPage`.
 const editUrl = (cmid: number) => `${BASE_URL}/mod/assign/view.php?id=${cmid}&action=editsubmission`;
 
-// Подписи строк таблицы статуса и кнопок (§17; разведка — `docs/recon.md`, подпроект 4).
+// Подписи строк таблицы статуса и кнопок (§17 спеки, подпроект 4).
 const ROW_STATUS = "Состояние ответа на задание";
 const ROW_REMAINING = "Оставшееся время";
 const ROW_MODIFIED = "Последнее изменение";
