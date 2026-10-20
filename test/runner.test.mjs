@@ -629,3 +629,86 @@ test("r. commitDeadlineMs шва ограничен конечным полож�
     assert.equal(res.sent, true);
   }
 });
+
+// --- M1/M2: журнал и служебные файлы на пути записи ---
+
+/** Временный каталог записей: HSE_WRITES_DIR читается при каждом вызове, поэтому подмена локальна для теста. */
+async function withWritesDir(fn) {
+  const saved = process.env.HSE_WRITES_DIR;
+  const d = fs.mkdtempSync(path.join(os.tmpdir(), "hsemcp-runner-m-"));
+  process.env.HSE_WRITES_DIR = d;
+  try {
+    return await fn(d);
+  } finally {
+    process.env.HSE_WRITES_DIR = saved;
+    fs.rmSync(d, { recursive: true, force: true });
+  }
+}
+
+const readJournalIn = (d) => JSON.parse(fs.readFileSync(path.join(d, "journal.json"), "utf8"));
+
+test("M1a. токен уже записан в журнал другим процессом между проверкой и точкой невозврата: отправки нет, отказ без id", async () => {
+  await withWritesDir(async (d) => {
+    const fake = makeFake("test_write_m1a");
+    const args = { id: "s1", value: "ответ-s" };
+    const dry = await fake.write(args);
+    // «Другой процесс»: запись sending с тем же токеном появляется после проверки журнала раннером.
+    fake.behavior.beforeCommit = () => {
+      fs.writeFileSync(
+        path.join(d, "journal.json"),
+        JSON.stringify([{ at: new Date().toISOString(), op: "test_write_m1a", tokenId: tokenIdOf(dry.previewToken), targetId: "000000000000", stage: "sending" }])
+      );
+    };
+    await assert.rejects(
+      fake.write({ ...args, confirm: true, previewToken: dry.previewToken }),
+      (err) => /этот previewToken уже использован; запись не выполнена/.test(err.message) && !err.message.includes(tokenIdOf(dry.previewToken))
+    );
+    assert.equal(fake.system.has("s1"), false, "запись в систему не дошла");
+    assert.equal(readJournalIn(d).length, 1, "второй sending не добавлен");
+  });
+});
+
+test("M1b. повреждённый журнал: запись отказывает до наблюдения и отправки, сухой прогон работает", async () => {
+  await withWritesDir(async (d) => {
+    const fake = makeFake("test_write_m1b");
+    const args = { id: "t1", value: "ответ-t" };
+    const dry = await fake.write(args);
+    fs.writeFileSync(path.join(d, "journal.json"), "{ не json");
+    const observeBefore = fake.calls.observe;
+    await assert.rejects(
+      fake.write({ ...args, confirm: true, previewToken: dry.previewToken }),
+      /^Error: журнал записей повреждён; запись не выполнена — восстановите или удалите storage\/writes\/journal\.json вручную после проверки сайта$/
+    );
+    assert.equal(fake.calls.execute, 0);
+    assert.equal(fake.calls.observe, observeBefore, "до наблюдения страницы дело не дошло");
+    assert.equal(fs.readFileSync(path.join(d, "journal.json"), "utf8"), "{ не json");
+    // Сухой прогон не блокируется.
+    assert.equal((await fake.write(args)).stage, "preview");
+  });
+});
+
+test("M2. ошибки файловой системы раннера: в тексте нет абсолютных путей, есть код ошибки", async () => {
+  const fake = makeFake("test_write_m1c");
+  const args = { id: "u1", value: "ответ-u" };
+  const noPaths = (err, root) => {
+    assert.ok(!err.message.includes(root), `путь в тексте: ${err.message}`);
+    assert.ok(!/[A-Za-z]:\\|\/tmp\/|\/var\//.test(err.message), `путь в тексте: ${err.message}`);
+    assert.match(err.message, /служебные файлы записи недоступны \([A-Z]+\); запись не выполнена/);
+    return true;
+  };
+  // Ключ: каталог записей лежит «внутри файла».
+  await withWritesDir(async (d) => {
+    const blocker = path.join(d, "blocker");
+    fs.writeFileSync(blocker, "x");
+    process.env.HSE_WRITES_DIR = path.join(blocker, "sub");
+    await assert.rejects(fake.write(args), (err) => noPaths(err, d));
+    await assert.rejects(fake.write({ ...args, confirm: true, previewToken: "1.abc" }), (err) => noPaths(err, d));
+  });
+  // Журнал: journal.json — каталог (чтение даёт EISDIR с путём).
+  await withWritesDir(async (d) => {
+    const dry = await fake.write(args);
+    fs.mkdirSync(path.join(d, "journal.json"));
+    await assert.rejects(fake.write({ ...args, confirm: true, previewToken: dry.previewToken }), (err) => noPaths(err, d));
+    await assert.rejects(fake.write(args), (err) => noPaths(err, d));
+  });
+});

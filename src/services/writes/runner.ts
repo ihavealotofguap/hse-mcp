@@ -1,4 +1,5 @@
 import type { PageCallContext } from "../../auth/browser-session.js";
+import { errCode } from "../../fs-lock.js";
 import { defineResource, type LoadContext } from "../../resource.js";
 import { findUnresolvedByTarget, latestByToken, recordJournal, type JournalEntry } from "./journal.js";
 import { loadOrCreateKey, PREVIEW_TTL_MS, signPreview, targetIdOf, tokenIdOf, verifyPreview } from "./token.js";
@@ -147,6 +148,21 @@ function notSent(err: unknown): Error {
   return new Error(`${message}; ${NOT_SENT}`, { cause: err });
 }
 
+/**
+ * Ошибки файловой системы служебных файлов записи (ключ, журнал) приходят с абсолютными путями в тексте:
+ * наружу уходит нейтральное сообщение с кодом ошибки. Собственные отказы без кода (повреждённый журнал,
+ * использованный токен, повреждённый ключ) проходят как есть.
+ */
+async function guardFs<T>(fn: () => Promise<T>): Promise<T> {
+  try {
+    return await fn();
+  } catch (err) {
+    const code = errCode(err);
+    if (code === undefined) throw err;
+    throw new Error(`служебные файлы записи недоступны (${code}); запись не выполнена`, { cause: err });
+  }
+}
+
 let queue: Promise<void> = Promise.resolve();
 
 /** Не более одной записи одновременно в процессе: следующий вызов ждёт завершения предыдущего. */
@@ -186,7 +202,7 @@ function commitPointFor(call: WriteCall, ctx: LoadContext, deadlineMs?: number):
         if (call.done || ctx.signal.aborted || pageCtx.signal.aborted) {
           throw ctx.signal.reason ?? pageCtx.signal.reason ?? new Error("вызов уже завершён, точка невозврата недоступна");
         }
-        const pending = recordJournal({ ...call.ids, at: new Date().toISOString(), stage: "sending" }).then(() => {
+        const pending = guardFs(() => recordJournal({ ...call.ids, at: new Date().toISOString(), stage: "sending" })).then(() => {
           call.sending = true;
         });
         call.pending = pending;
@@ -232,7 +248,7 @@ export function defineWrite<A extends object, Obs>(
   });
 
   async function preview(args: A, signal?: AbortSignal): Promise<PreviewResponse> {
-    const key = await loadOrCreateKey();
+    const key = await guardFs(loadOrCreateKey);
     const observed = await adapter.observe(args, signal);
     const payload = payloadFor(args, observed);
     let now = new Date();
@@ -240,14 +256,14 @@ export function defineWrite<A extends object, Obs>(
     // Токен детерминирован секундой и данными: тот же сухой прогон в ту же секунду после записи дал бы
     // уже использованный токен (повтор из журнала вместо новой записи) — ждём следующую секунду.
     const issuedId = tokenIdOf(previewToken);
-    if (issuedId && (await latestByToken(issuedId))) {
+    if (issuedId && (await guardFs(() => latestByToken(issuedId)))) {
       // Отмена прерывает ожидание: сухой прогон ничего не журналирует, отклоняемся причиной отмены.
       await testSeams.sleep(1000 - (Date.now() % 1000) + 5, signal);
       now = new Date();
       previewToken = signPreview(key, payload, now);
     }
     const { preview, warnings } = adapter.describe(args, observed);
-    const priorUnknown = (await findUnresolvedByTarget(targetIdOf(key, adapter.op, payload.target))).length > 0;
+    const priorUnknown = (await guardFs(() => findUnresolvedByTarget(targetIdOf(key, adapter.op, payload.target)))).length > 0;
     return {
       stage: "preview",
       previewToken,
@@ -281,10 +297,11 @@ export function defineWrite<A extends object, Obs>(
 
   async function write(args: A, token: string, acknowledgeUnknown: boolean, signal?: AbortSignal): Promise<WriteResponse> {
     if (signal?.aborted) throw notSent(signal.reason ?? new Error("операция отменена"));
-    const key = await loadOrCreateKey();
+    const key = await guardFs(loadOrCreateKey);
     const targetId = targetIdOf(key, adapter.op, adapter.targetOf(args));
     const priorTokenId = tokenIdOf(token);
-    const prior = priorTokenId ? await latestByToken(priorTokenId) : undefined;
+    // Строго: повреждённый журнал не считается пустым — иначе уже использованный токен ушёл бы в новую отправку.
+    const prior = priorTokenId ? await guardFs(() => latestByToken(priorTokenId, undefined, true)) : undefined;
     if (prior) return replay(args, prior, targetId, signal);
 
     let observed: Obs;
@@ -296,7 +313,7 @@ export function defineWrite<A extends object, Obs>(
     const verdict = verifyPreview(key, token, payloadFor(args, observed));
     if (!verdict.ok) throw new Error(`${TOKEN_REFUSAL[verdict.reason]}; ${NOT_SENT}`);
     const tokenId = verdict.tokenId;
-    if (!acknowledgeUnknown && (await findUnresolvedByTarget(targetId, undefined, tokenId)).length > 0) {
+    if (!acknowledgeUnknown && (await guardFs(() => findUnresolvedByTarget(targetId, undefined, tokenId, true))).length > 0) {
       throw new Error(
         "По этой цели есть запись с неизвестным исходом: проверьте состояние сухим прогоном и повторите " +
           `с acknowledgeUnknown: true; ${NOT_SENT}`

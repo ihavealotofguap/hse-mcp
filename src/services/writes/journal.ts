@@ -19,6 +19,16 @@ export interface JournalEntry {
   errorClass?: ErrorClass;
 }
 
+/**
+ * Отказ журнала с нейтральным текстом (без путей и id): повреждён либо токен уже использован. Имя класса
+ * остаётся `Error`, текст показывается пользователю как есть.
+ */
+export class JournalError extends Error {}
+
+const CORRUPT_MESSAGE =
+  "журнал записей повреждён; запись не выполнена — восстановите или удалите storage/writes/journal.json вручную после проверки сайта";
+const TOKEN_REUSED_MESSAGE = "этот previewToken уже использован; запись не выполнена";
+
 const journalFile = (dir: string): string => path.join(dir, "journal.json");
 const lockFile = (dir: string): string => path.join(dir, "journal.json.lock");
 
@@ -73,10 +83,19 @@ function corruptName(file: string): string {
  * `journal.json` атомарно заменяется (с валидными записями, если они были). Копия, а не переименование:
  * читатели работают без блокировки, и между переименованием и записью они видели бы отсутствующий файл,
  * то есть пустой журнал, и пропустили бы неразрешённую запись.
+ *
+ * Запись `sending` — точка невозврата необратимой операции, поэтому под тем же lock-файлом она отказывает,
+ * если журнал повреждён (его содержимое неизвестно: токен мог быть использован) или запись с таким
+ * `tokenId` уже есть (токен одноразовый и между процессами). Остальные стадии — исходы после отправки —
+ * пишутся всегда, как и раньше.
  */
 export async function recordJournal(entry: JournalEntry, dir: string = writesDir(), now: Date = new Date()): Promise<void> {
   await withFileLock(lockFile(dir), async () => {
     const { entries, corrupt } = await readEntries(dir);
+    if (entry.stage === "sending") {
+      if (corrupt) throw new JournalError(CORRUPT_MESSAGE);
+      if (entries.some((e) => e.tokenId === entry.tokenId)) throw new JournalError(TOKEN_REUSED_MESSAGE);
+    }
     // COPYFILE_EXCL: существующий карантин не затирается даже при гонке имён (имя уже уникально по `corruptName`).
     if (corrupt) await retryIo(() => fs.copyFileSync(journalFile(dir), corruptName(journalFile(dir)), fs.constants.COPYFILE_EXCL));
     const cutoff = now.getTime() - JOURNAL_MAX_AGE_MS;
@@ -85,23 +104,30 @@ export async function recordJournal(entry: JournalEntry, dir: string = writesDir
   });
 }
 
-/** Последняя запись по токену (журнал упорядочен по времени добавления). */
-export async function latestByToken(tokenId: string, dir: string = writesDir()): Promise<JournalEntry | undefined> {
-  const { entries } = await readEntries(dir);
+/**
+ * Последняя запись по токену (журнал упорядочен по времени добавления). `strict` — для решений «повторить
+ * или отправить»: повреждённый журнал отказывает, а не считается пустым; сухой прогон читает без него.
+ */
+export async function latestByToken(tokenId: string, dir: string = writesDir(), strict = false): Promise<JournalEntry | undefined> {
+  const { entries, corrupt } = await readEntries(dir);
+  if (strict && corrupt) throw new JournalError(CORRUPT_MESSAGE);
   for (let i = entries.length - 1; i >= 0; i--) if (entries[i].tokenId === tokenId) return entries[i];
   return undefined;
 }
 
 /**
  * Неразрешённые записи по цели: по каждому `tokenId` берётся последняя; «не разрешено» — стадия не
- * `verified` либо исход `unknown`. `exceptTokenId` исключает токен текущей операции.
+ * `verified` либо исход `unknown`. `exceptTokenId` исключает токен текущей операции. `strict` — как у
+ * `latestByToken`: повреждённый журнал отказывает вместо «неразрешённых записей нет».
  */
 export async function findUnresolvedByTarget(
   targetId: string,
   dir: string = writesDir(),
-  exceptTokenId?: string
+  exceptTokenId?: string,
+  strict = false
 ): Promise<JournalEntry[]> {
-  const { entries } = await readEntries(dir);
+  const { entries, corrupt } = await readEntries(dir);
+  if (strict && corrupt) throw new JournalError(CORRUPT_MESSAGE);
   const last = new Map<string, JournalEntry>();
   for (const e of entries) last.set(e.tokenId, e);
   return [...last.values()].filter(
