@@ -1,8 +1,14 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { config } from "../../config.js";
 import { runTool } from "../../mcp-utils.js";
 import { addDays } from "../../date-utils.js";
+import { CONFIRM_SCHEMA, WRITE_ANNOTATIONS, noteWritesDisabled } from "../writes/gate.js";
+import { defineWrite } from "../writes/runner.js";
 import * as elk from "./client.js";
+import { certificateAdapter } from "./certificate.js";
+
+const orderCertificate = defineWrite(certificateAdapter);
 
 export function registerElkTools(server: McpServer): void {
   server.registerTool(
@@ -258,5 +264,44 @@ export function registerElkTools(server: McpServer): void {
       },
     },
     async ({ path }) => runTool(() => elk.openPage(path))
+  );
+
+  if (!config.writesEnabled) {
+    noteWritesDisabled();
+    return;
+  }
+
+  server.registerTool(
+    "elk_order_certificate",
+    {
+      title: "Заказать справку в ЕЛК",
+      description:
+        "ЗАПИСЬ в ЕЛК: заказывает справку через форму сервиса (lk.hse.ru, student-service) по serviceId " +
+        "из elk_search_services. Без confirm — сухой прогон: только чтение, показывает поля формы, их " +
+        "варианты, какие обязательные поля не заданы, предупреждения и previewToken; ничего не " +
+        "отправляет. Автозаполненные формой значения (из личных данных ЕЛК) показываются только " +
+        "владельцу, в ответе сухого прогона. Для заказа нужны confirm: true И previewToken из сухого " +
+        "прогона (токен привязан к сервису, выбранным значениям, автозаполнению и числу уже поданных " +
+        "заявок, действует 15 минут, одноразовый). fields — словарь «подпись поля формы → точный текст " +
+        "варианта списка»; пустой fields допустим для сухого прогона, чтобы увидеть форму. ЗАКАЗ " +
+        "НЕОБРАТИМ: отмены заявки в ЕЛК нет. За раз выполняется один заказ. Поддерживаются только поля-" +
+        "выпадающие списки: форма со свободным текстом, датой, файлом и т.п. и варианты, требующие " +
+        "заполнить «дополнительное поле», тул отклоняет. Результат проверяется по истории заявок: " +
+        "outcome confirmed (появилась ровно одна новая заявка), rejected (система отказала) или " +
+        "unknown (неизвестно); после unknown НЕ повторяйте заказ — сначала сверьте историю вручную " +
+        "через elk_list_requests; новый заказ той же справки после unknown требует acknowledgeUnknown: " +
+        "true. Клиент спросит разрешение на каждый вызов — присутствие человека обеспечивает он, а не " +
+        "сервер. Тул доступен только при HSE_ENABLE_WRITES=true. Возвращает JSON: stage, outcome, " +
+        "evidence, warnings, sent.",
+      inputSchema: {
+        serviceId: z.number().int().positive().describe("id сервиса-справки (из elk_search_services)"),
+        fields: z
+          .record(z.string(), z.string())
+          .describe("Подпись поля формы → точный текст варианта выпадающего списка; для сухого прогона можно {}."),
+        ...CONFIRM_SCHEMA,
+      },
+      annotations: WRITE_ANNOTATIONS,
+    },
+    async (args, extra) => runTool((signal) => orderCertificate(args, signal), extra.signal)
   );
 }

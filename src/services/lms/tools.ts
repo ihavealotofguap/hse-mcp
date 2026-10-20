@@ -2,33 +2,13 @@ import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { config } from "../../config.js";
 import { runTool } from "../../mcp-utils.js";
+import { CONFIRM_SCHEMA, WRITE_ANNOTATIONS, noteWritesDisabled } from "../writes/gate.js";
 import { defineWrite } from "../writes/runner.js";
 import * as lms from "./client.js";
 import { deleteAdapter, submitAdapter } from "./submissions.js";
 
-// Аннотации тулов записи: клиент не должен разрешать вызов автоматически (спека №4 §5).
-const WRITE_ANNOTATIONS = { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true };
-
-const CONFIRM_SCHEMA = {
-  confirm: z.boolean().optional().describe("true — выполнить запись; требует previewToken из сухого прогона."),
-  previewToken: z.string().max(200).optional().describe("Токен из ответа сухого прогона (действует 15 минут)."),
-  acknowledgeUnknown: z
-    .boolean()
-    .optional()
-    .describe("true — подтвердить новую запись по цели, где прошлая закончилась исходом unknown."),
-};
-
 const submitAssignment = defineWrite(submitAdapter);
 const deleteSubmission = defineWrite(deleteAdapter);
-
-let writesOffNoted = false;
-
-/** Один раз за процесс сообщает в stderr, что тулов записи нет (без личных данных). */
-function noteWritesDisabled(): void {
-  if (writesOffNoted) return;
-  writesOffNoted = true;
-  console.error("hsemcp: тулы записи выключены (HSE_ENABLE_WRITES не задан)");
-}
 
 export function registerLmsTools(server: McpServer): void {
   server.registerTool(
