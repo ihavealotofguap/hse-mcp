@@ -239,7 +239,9 @@ test("elk_order_certificate: аннотации, описание и схема"
   assert.match(t.description, /previewToken/);
   assert.match(t.description, /unknown/);
   assert.match(t.description, /необратим/i);
-  assert.match(t.description, /elk_list_requests/);
+  assert.match(t.description, /странице «Заявки» в lk\.hse\.ru/);
+  assert.match(t.description, /newClaims: 0 НЕ означает/);
+  assert.doesNotMatch(t.description, /сверьте[^.]*через elk_list_requests/);
   const { properties, required } = t.inputSchema;
   assert.deepEqual([...required].sort(), ["fields", "serviceId"]);
   assert.equal(properties.serviceId.type, "integer");

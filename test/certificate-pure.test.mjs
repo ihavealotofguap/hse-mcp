@@ -11,6 +11,8 @@ const {
   certificateFingerprint,
   claimNumbersOf,
   certificateAdapter,
+  certificateResult,
+  MANUAL_CHECK_WARNING,
   certificateTestSeams,
   classifyClaimsOutcome,
   classifyCertificateOutcome,
@@ -317,7 +319,7 @@ test("certificateAdapter: цель, операция, сброс заявок; �
   assert.equal(commits, 0);
 });
 
-const W_MANUAL = /сверьте вручную через elk_list_requests/;
+const W_MANUAL = /сверьте вручную на странице «Заявки» в lk\.hse\.ru/;
 
 test("classifyClaimsOutcome: ровно один новый номер — подтверждено, номер только в evidence", () => {
   const r = classifyClaimsOutcome(["A-1", "A-2"], ["A-3", "A-1", "A-2"]);
@@ -530,7 +532,7 @@ test("verifyOnly: только чтение, всегда «неизвестно
     const r2 = await certificateAdapter.verifyOnly({ serviceId: 1, fields: {} });
     assert.equal(r2.outcome, "unknown");
     assert.equal(r2.evidence.requestsNow, null);
-    assert.ok(!JSON.stringify(r2).includes("lk.hse.ru"));
+    assert.ok(!JSON.stringify(r2).includes("/api/claims") && !JSON.stringify(r2).includes("username"), "текст ошибки чтения в ответ не попадает");
     assert.ok(r2.warnings.some((w) => W_MANUAL.test(w)));
   } finally {
     certificateTestSeams.listRequests = original;
@@ -553,4 +555,46 @@ test("describe: необратимость, поля и варианты; ном
   const payload = certificateAdapter.payloadOf({ serviceId: 1, fields: FULL }, observed);
   assert.deepEqual(payload.files, []);
   assert.equal(payload.state, certificateFingerprint({ claimNumbers: observed.claimNumbers, chosen: plan.chosen, autofilled: plan.autofilled }));
+});
+
+test("certificateResult: каждый неизвестный исход несёт предупреждение «newClaims: 0 не означает…», историю заявок не советуют", () => {
+  const trace = (over = {}) => ({ clickedAt: CLICK, clickError: false, submitRequests: 1, submitStatus: 200, dialogAfterCommit: false, ...over });
+  const after = (...more) => [claim("A-1"), ...more];
+  const unknowns = [
+    ["newClaims 0, запрос замечен один раз (случай живой справки)", certificateResult(trace(), ["A-1"], after())],
+    ["история не прочиталась", certificateResult(trace(), ["A-1"], null)],
+    ["запрос отправки не замечен", certificateResult(trace({ submitRequests: 0 }), ["A-1"], after(claim("A-2")))],
+    ["два запроса отправки", certificateResult(trace({ submitRequests: 2 }), ["A-1"], after(claim("A-2")))],
+    ["несколько новых заявок", certificateResult(trace(), ["A-1"], after(claim("A-2"), claim("A-3")))],
+    ["заявка старая", certificateResult(trace(), ["A-1"], after(claim("A-2", { created: "2026-10-19T12:00:00" })))],
+    ["диалог после отправки", certificateResult(trace({ dialogAfterCommit: true }), ["A-1"], after())],
+  ];
+  for (const [what, r] of unknowns) {
+    assert.equal(r.outcome, "unknown", what);
+    assert.ok(r.warnings.includes(MANUAL_CHECK_WARNING), `${what}: предупреждение есть`);
+    assert.ok(r.warnings.every((w) => !/elk_list_requests/.test(w)), `${what}: elk_list_requests не советуют`);
+  }
+  assert.match(MANUAL_CHECK_WARNING, /newClaims: 0 не означает, что заказ не прошёл/);
+  assert.match(MANUAL_CHECK_WARNING, /Сервиса Студент в истории заявок через API не видны/);
+  assert.match(MANUAL_CHECK_WARNING, /странице «Заявки» в lk\.hse\.ru/);
+  assert.match(MANUAL_CHECK_WARNING, /не повторяйте заказ без этой проверки/);
+  // Подтверждённый исход (формы, чьи заявки видны в /api/claims) предупреждения не получает.
+  const ok = certificateResult(trace(), ["A-1"], after(claim("A-2")));
+  assert.equal(ok.outcome, "confirmed");
+  assert.ok(!ok.warnings.includes(MANUAL_CHECK_WARNING));
+});
+
+test("certificateAdapter.verifyOnly: исход неизвестен, предупреждение «newClaims: 0 не означает…» есть, elk_list_requests не советуют", async () => {
+  const saved = certificateTestSeams.listRequests;
+  try {
+    for (const seam of [async () => ({ count: 1, requests: [{ num: "A-1" }] }), async () => { throw new Error("сеть"); }]) {
+      certificateTestSeams.listRequests = seam;
+      const r = await certificateAdapter.verifyOnly({ serviceId: 1, fields: {} }, undefined);
+      assert.equal(r.outcome, "unknown");
+      assert.ok(r.warnings.includes(MANUAL_CHECK_WARNING));
+      assert.ok(r.warnings.every((w) => !/elk_list_requests/.test(w)));
+    }
+  } finally {
+    certificateTestSeams.listRequests = saved;
+  }
 });

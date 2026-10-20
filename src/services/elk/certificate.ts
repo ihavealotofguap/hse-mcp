@@ -310,13 +310,18 @@ export function claimNumbersOf(list: { count: number; requests: Array<Pick<ElkCl
     .sort();
 }
 
-const W_MANUAL =
-  "после заказа появилось несколько новых заявок: какая из них создана этим вызовом, не установить — сверьте вручную через elk_list_requests";
+// Живая проверка (§17, одиннадцатый проход): заявки «Сервиса Студент» в `/api/claims` (то, что читает
+// `elk_list_requests`) не видны, поэтому сверка возможна только вручную на странице «Заявки» в ЕЛК.
+const MANUAL_WHERE = "сверьте вручную на странице «Заявки» в lk.hse.ru";
+/** Предупреждение каждого неизвестного исхода заказа: «0 новых заявок» не значит, что заказ не прошёл. */
+export const MANUAL_CHECK_WARNING =
+  "newClaims: 0 не означает, что заказ не прошёл: справки Сервиса Студент в истории заявок через API не видны; проверьте вручную на странице «Заявки» в lk.hse.ru, не повторяйте заказ без этой проверки";
 
-const W_NO_START =
-  "запрос заказа после нажатия «Отправить» не замечен: новая заявка может быть не этой — сверьте вручную через elk_list_requests";
-const W_MANY_STARTS = "форма отправила запрос заказа больше одного раза: возможны дубли — сверьте вручную через elk_list_requests";
-const W_CREATED_OLD = "новая заявка создана раньше заказа: вероятно, она не эта — сверьте вручную через elk_list_requests";
+const W_MANUAL = `после заказа появилось несколько новых заявок: какая из них создана этим вызовом, не установить — ${MANUAL_WHERE}`;
+
+const W_NO_START = `запрос заказа после нажатия «Отправить» не замечен: новая заявка может быть не этой — ${MANUAL_WHERE}`;
+const W_MANY_STARTS = `форма отправила запрос заказа больше одного раза: возможны дубли — ${MANUAL_WHERE}`;
+const W_CREATED_OLD = `новая заявка создана раньше заказа: вероятно, она не эта — ${MANUAL_WHERE}`;
 const W_CREATED_UNPARSED = "время создания новой заявки не распознано: сверьте её сервис и время (evidence) с заказом";
 
 /**
@@ -700,7 +705,7 @@ const isStartRequest = (req: Request): boolean => {
 };
 
 /** Что известно об отправке после точки невозврата; заполняется по ходу, чтобы пережить сбой страницы. */
-interface SubmitTrace {
+export interface SubmitTrace {
   clickedAt: number;
   clickError: boolean;
   submitRequests: number;
@@ -863,12 +868,10 @@ const W_AUTOFILL = "автозаполненные значения форма �
 const W_DEPENDENT =
   "поля, которые появляются после выбора варианта, сухой прогон не видит: форма может потребовать больше данных, чем показано здесь";
 const W_READ_ONLY ="форма открывалась только для чтения: списки раскрывались и закрывались без выбора, «Отправить» не нажималась";
-const W_NOT_READ = "история заявок ЕЛК после заказа не прочиталась: сверьте вручную через elk_list_requests";
-const W_DIALOG_AFTER_COMMIT =
-  "после нажатия «Отправить» страница показала диалог, он отклонён: заказ мог не уйти — сверьте вручную через elk_list_requests";
+const W_NOT_READ = `история заявок ЕЛК после заказа не прочиталась: ${MANUAL_WHERE}`;
+const W_DIALOG_AFTER_COMMIT = `после нажатия «Отправить» страница показала диалог, он отклонён: заказ мог не уйти — ${MANUAL_WHERE}`;
 // Снимок номеров до заказа живёт только в памяти записи, поэтому повтор не может доказать, чья заявка новая.
-const W_VERIFY_ONLY =
-  "проверка повтора не может установить, создал ли заявку прежний вызов (снимок заявок до заказа не хранится): сверьте вручную через elk_list_requests; число заявок сейчас — evidence.requestsNow";
+const W_VERIFY_ONLY = `проверка повтора не может установить, создал ли заявку прежний вызов (снимок заявок до заказа не хранится): ${MANUAL_WHERE}; число заявок сейчас — evidence.requestsNow`;
 
 /** Email входа — только для признака «заявку создал тот же логин»; не задан — `null` (признак неизвестен). */
 function loginEmailOrNull(): string | null {
@@ -883,7 +886,7 @@ function loginEmailOrNull(): string | null {
  * Исход записи по следу отправки и опросу заявок (`classifyCertificateOutcome`). Диалог после точки
  * невозврата отмечается в `evidence` и при неизвестном исходе объясняется предупреждением.
  */
-function certificateResult(trace: SubmitTrace, before: string[], claims: ElkClaim[] | null): ExecuteResult {
+export function certificateResult(trace: SubmitTrace, before: string[], claims: ElkClaim[] | null): ExecuteResult {
   const sent = {
     clicked: !trace.clickError,
     submitRequests: trace.submitRequests,
@@ -891,7 +894,9 @@ function certificateResult(trace: SubmitTrace, before: string[], claims: ElkClai
     dialogAfterCommit: trace.dialogAfterCommit,
   };
   const dialogWarning = trace.dialogAfterCommit ? [W_DIALOG_AFTER_COMMIT] : [];
-  if (!claims) return { stage: "sent", outcome: "unknown", evidence: { ...sent, newClaims: null }, warnings: [W_NOT_READ, ...dialogWarning] };
+  if (!claims) {
+    return { stage: "sent", outcome: "unknown", evidence: { ...sent, newClaims: null }, warnings: [MANUAL_CHECK_WARNING, W_NOT_READ, ...dialogWarning] };
+  }
   const r = classifyCertificateOutcome({
     before,
     after: claims,
@@ -903,7 +908,7 @@ function certificateResult(trace: SubmitTrace, before: string[], claims: ElkClai
     stage: "verified",
     outcome: r.outcome,
     evidence: { ...sent, ...r.evidence },
-    warnings: r.outcome === "unknown" ? [...r.warnings, ...dialogWarning] : r.warnings,
+    warnings: r.outcome === "unknown" ? [MANUAL_CHECK_WARNING, ...r.warnings, ...dialogWarning] : r.warnings,
   };
 }
 
@@ -982,6 +987,6 @@ export const certificateAdapter: WriteAdapter<CertificateArgs, CertificateObserv
     } catch {
       // Число заявок неизвестно; исход и так «неизвестно».
     }
-    return { outcome: "unknown", evidence: { requestsNow }, warnings: [W_VERIFY_ONLY] };
+    return { outcome: "unknown", evidence: { requestsNow }, warnings: [MANUAL_CHECK_WARNING, W_VERIFY_ONLY] };
   },
 };
