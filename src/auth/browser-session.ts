@@ -5,6 +5,7 @@ import { chromium, type APIRequestContext, type Browser, type BrowserContext, ty
 import { config } from "../config.js";
 import { waitForRenderedBody } from "../dom-utils.js";
 import { COMMIT_DEADLINE_MS } from "../commit.js";
+import { restrictFile } from "../fs-secure.js";
 import { acquirePageSlot, LEASE_GRACE_MS, type PageSlotRelease } from "../limiter.js";
 import { projectRoot } from "../project-root.js";
 
@@ -169,8 +170,9 @@ async function needsLogin(page: Page): Promise<boolean> {
 async function saveStorageState(context: BrowserContext): Promise<void> {
   const state = await context.storageState();
   const tmp = `${STORAGE_STATE_PATH}.${process.pid}.tmp`;
-  fs.writeFileSync(tmp, JSON.stringify(state));
+  fs.writeFileSync(tmp, JSON.stringify(state), { mode: 0o600 });
   fs.renameSync(tmp, STORAGE_STATE_PATH);
+  restrictFile(STORAGE_STATE_PATH);
 }
 
 /**

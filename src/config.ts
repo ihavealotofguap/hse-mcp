@@ -1,11 +1,37 @@
-import { config as loadDotenv } from "dotenv";
+import { config as loadDotenv, parse as parseDotenv } from "dotenv";
+import fs from "node:fs";
 import path from "node:path";
+import { DOTENV_PASSWORD_WARNING, dotenvPermissionWarning, loadKeyStore, lookupPassword } from "./credentials.js";
 import { projectRoot } from "./project-root.js";
 
 // Ищем .env рядом с проектом, а не в process.cwd() — иначе при запуске сервера
 // сторонним хостом (Claude Desktop и т.п.) с произвольной рабочей директорией
 // файл просто не найдётся.
-loadDotenv({ path: path.join(projectRoot, ".env") });
+const dotenvFile = path.join(projectRoot, ".env");
+
+// Окружение процесса до применения .env: пароль, пришедший из .env, не должен выглядеть «окружением».
+const envAtStart: NodeJS.ProcessEnv = { ...process.env };
+let dotenvValues: Record<string, string> = {};
+try {
+  dotenvValues = parseDotenv(fs.readFileSync(dotenvFile));
+} catch {
+  /* .env нет или он нечитаем — остаётся окружение и хранилище */
+}
+loadDotenv({ path: dotenvFile });
+
+// Системное хранилище грузится один раз при импорте, чтобы hsePassword оставался синхронным геттером.
+// Само хранилище опрашивается лениво — при первом входе, а не на старте сервера.
+const keyStore = await loadKeyStore();
+
+/** Входные данные поиска пароля — для команд `credentials:*`. */
+export const credentialInputs = { env: envAtStart, dotenv: dotenvValues, dotenvFile, keyStore };
+
+/** `HSE_EMAIL` без ошибки при отсутствии (для команд, которые умеют спросить его сами). */
+export function optionalEmail(): string | null {
+  return process.env.HSE_EMAIL || null;
+}
+
+let dotenvWarned = false;
 
 function required(name: string): string {
   const value = process.env[name];
@@ -17,12 +43,34 @@ function required(name: string): string {
   return value;
 }
 
+function resolvePassword(): string {
+  const { password, source } = lookupPassword({
+    env: envAtStart,
+    dotenv: dotenvValues,
+    account: process.env.HSE_EMAIL ?? "",
+    store: keyStore,
+  });
+  if (password === null) {
+    throw new Error(
+      "Не найден пароль ВШЭ: выполните npm run credentials:set (системное хранилище) или задайте HSE_PASSWORD в .env."
+    );
+  }
+  if (source === "dotenv" && !dotenvWarned) {
+    dotenvWarned = true;
+    // stderr: stdout занят протоколом MCP. Без значений и без пути.
+    console.error(DOTENV_PASSWORD_WARNING);
+    const perm = dotenvPermissionWarning(dotenvFile);
+    if (perm) console.error(perm);
+  }
+  return password;
+}
+
 export const config = {
   get hseEmail(): string {
     return required("HSE_EMAIL");
   },
   get hsePassword(): string {
-    return required("HSE_PASSWORD");
+    return resolvePassword();
   },
   get browserHeadless(): boolean {
     return process.env.HSE_BROWSER_HEADLESS !== "false";

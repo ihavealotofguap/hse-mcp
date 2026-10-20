@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { errCode, withFileLock, writeFileAtomic } from "../../fs-lock.js";
+import { restrictFile } from "../../fs-secure.js";
 import { projectRoot } from "../../project-root.js";
 import type { PreviewPayload } from "./types.js";
 
@@ -57,6 +58,7 @@ export async function loadOrCreateKey(dir: string = writesDir()): Promise<Buffer
     if (again) return again;
     const key = crypto.randomBytes(32);
     await writeFileAtomic(file, key.toString("hex"));
+    restrictFile(file);
     return key;
   });
 }
