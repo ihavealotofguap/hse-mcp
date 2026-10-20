@@ -84,7 +84,11 @@ export function registerLmsTools(server: McpServer): void {
     "lms_get_grades",
     {
       title: "Оценки по курсу",
-      description: "Таблица оценок студента по курсу SmartLMS (отчёт по пользователю).",
+      description:
+        "Оценки студента по курсу SmartLMS (отчёт по пользователю): items — строки журнала по " +
+        "порядку, у каждой name (название элемента или категории), level (уровень вложенности), " +
+        "path (категории-предки), isCategory и grade (текст оценки; null у категории, «-» если " +
+        "оценки ещё нет). Если вёрстка журнала курса не распознана — ошибка.",
       inputSchema: {
         courseId: z.number().int().positive().describe("id курса на edu.hse.ru"),
       },
