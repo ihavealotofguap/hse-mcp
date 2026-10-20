@@ -1,16 +1,17 @@
 import crypto from "node:crypto";
-import type { Locator, Page } from "playwright";
+import type { Locator, Page, Request, Route } from "playwright";
 import { withPage, type PageCallContext } from "../../auth/browser-session.js";
 import type { ResourceCallOptions } from "../../resource.js";
-import { Refusal, sanitizeNavigationError } from "../lms/submissions.js";
-import type { WriteAdapter } from "../writes/runner.js";
+import { Refusal, sanitizeCommitError, sanitizeNavigationError } from "../lms/submissions.js";
+import { abortableSleep, type ExecuteContext, type ExecuteResult, type WriteAdapter } from "../writes/runner.js";
+import type { Outcome } from "../writes/types.js";
 import { listRequests, type ElkClaim } from "./client.js";
 
 /**
- * Заказ справки в ЕЛК (спека №4 §10, §17, седьмой и восьмой проходы): читающая половина — разбор
- * формы `/student-service/student-service-first?components=<serviceId>`, предусловия сухого прогона,
- * описание для владельца, отпечаток состояния для `previewToken`. Запись (`execute`/`verifyOnly`) —
- * отдельный шаг, здесь не реализована.
+ * Заказ справки в ЕЛК (спека №4 §10, §17, седьмой и восьмой проходы): разбор формы
+ * `/student-service/student-service-first?components=<serviceId>`, предусловия сухого прогона,
+ * описание для владельца, отпечаток состояния для `previewToken`, сама запись (заполнение формы и
+ * один клик её «Отправить») и проверка по истории заявок (§7, §10).
  *
  * Форма — Formily поверх Element Plus: поля `.el-form-item` с подписью `.el-form-item__label`,
  * выпадающие списки раскрываются кликом по обёртке `.el-select` (не по `input`), варианты —
@@ -23,6 +24,13 @@ import { listRequests, type ElkClaim } from "./client.js";
  * «Отправить», индикатор обязательных полей не сходится с распознанным) — отказ, а не догадка.
  * Тексты отказов о форме ссылаются на поля по номеру, без значений; номера заявок (снимок до заказа)
  * живут только в памяти наблюдения и в ответ, журнал и ошибки не попадают.
+ *
+ * Запись покадровая (урок третьего прохода §17): каждый выбор — клик по обёртке списка, клик ровно
+ * одного варианта с точным текстом, проверка значения. Перед точкой невозврата форма перечитывается
+ * целиком (поля те же, что в сухом прогоне, значения ожидаемые, обязательных пустых нет, «Отправить»
+ * одна и активна); первое расхождение — отказ до отправки. Необратимо одно действие — клик «Отправить»,
+ * он не повторяется никогда. Ответ `process/start` (даже 2xx) — только сигнал: исход решает появление
+ * ровно одной новой заявки в свежей истории (номер — только в ответе тула).
  */
 
 const BASE_URL = "https://lk.hse.ru";
@@ -41,9 +49,18 @@ const REQUIRED_LEFT_RE = /Заполните обязательные поля \
 const UNSUPPORTED_CONTROLS =
   ".el-date-editor, .el-switch, .el-upload, .el-checkbox, .el-radio, .el-cascader, .el-input-number, .el-slider, .el-rate, .el-color-picker, .el-transfer, .el-tree-select";
 
+// Submit формы (§17, восьмой проход): единственный запрос по «Отправить».
+const START_PATH = "/rest-api/camunda-gateway/process/start";
+
 const FORM_WAIT_MS = 15_000;
 const SUBMIT_WAIT_MS = 5_000;
 const DROPDOWN_WAIT_MS = 5_000;
+// После точки невозврата всё укладывается в дедлайн коммита (20 с): клик, ответ `process/start`, опрос
+// истории заявок до 15 с от клика (ожидание ответа входит в эти 15 с).
+const CLICK_TIMEOUT_MS = 5_000;
+const START_RESPONSE_WAIT_MS = 10_000;
+const CLAIMS_WAIT_MS = 15_000;
+const CLAIMS_POLL_MS = 1_000;
 const MAX_FIELDS = 50;
 const MAX_LABEL = 200;
 const MAX_VALUE = 500;
@@ -273,10 +290,82 @@ export function claimNumbersOf(list: { count: number; requests: Array<Pick<ElkCl
     .sort();
 }
 
-/** Шов только для проверок: подмена чтения истории заявок (одноразовые скрипты на заготовках). */
+const W_MANUAL =
+  "после заказа появилось несколько новых заявок: какая из них создана этим вызовом, не установить — сверьте вручную через elk_list_requests";
+
+/**
+ * Исход заказа по истории заявок (§7, §10): ровно один номер, которого не было в снимке до заказа, —
+ * подтверждено (номер только в `evidence`, то есть в ответе тула); ни одного — неизвестно (заявка могла
+ * появиться позже); больше одного — неизвестно с предупреждением, номеров в ответе нет. Пропавшие из
+ * списка старые номера (усечение истории) не учитываются. `rejected` проверка не выносит никогда.
+ */
+export function classifyClaimsOutcome(
+  before: string[],
+  after: string[]
+): { outcome: Outcome; evidence: { newClaims: number; newClaimNumber?: string }; warnings: string[] } {
+  const known = new Set(before);
+  const fresh = [...new Set(after)].filter((num) => !known.has(num));
+  if (fresh.length === 1) return { outcome: "confirmed", evidence: { newClaims: 1, newClaimNumber: fresh[0] }, warnings: [] };
+  return { outcome: "unknown", evidence: { newClaims: fresh.length }, warnings: fresh.length > 1 ? [W_MANUAL] : [] };
+}
+
+/** Значения формы, которые должны стоять перед «Отправить»: выбранные варианты поверх прочитанных в сухом прогоне. */
+export function expectedFieldValues(form: CertificateForm, plan: CertificatePlan): Array<{ label: string; value: string }> {
+  const chosen = new Map(plan.chosen.map((c) => [c.label, c.value]));
+  return form.fields.map((f) => ({ label: f.label, value: chosen.get(f.label) ?? f.value }));
+}
+
+/** Снимок формы на странице записи: поля без вариантов, кнопки «Отправить», индикатор. */
+export interface FormSnapshot {
+  items: Array<Omit<RawFormItem, "options">>;
+  submitButtons: number;
+  submitDisabled: boolean;
+  requiredLeft: number[];
+}
+
+/**
+ * Перепроверка формы на странице записи. `loaded` — страница только открыта: поля (подписи и порядок)
+ * те же, что в сухом прогоне, значения прочитанные, «Отправить» одна. `filled` — перед точкой
+ * невозврата: то же с ожидаемыми значениями плюс индикатор обязательных пуст или 0, обязательных пустых
+ * нет, ни одно значение не требует дополнительного поля, «Отправить» активна. Новое поле, появившееся
+ * после выбора варианта, — расхождение набора полей. Тексты — по номерам полей, без подписей и значений.
+ */
+export function checkFormState(expected: Array<{ label: string; value: string }>, snap: FormSnapshot, stage: "loaded" | "filled"): void {
+  const fail = (problem: string): never => {
+    throw new Refusal(`${problem}; операция прервана до отправки`);
+  };
+  const labels = snap.items.map((it) => normalizeLabel(it.label));
+  if (labels.length !== expected.length || labels.some((label, i) => label !== expected[i].label)) {
+    fail(`набор полей формы не совпадает с сухим прогоном (было ${expected.length}, сейчас ${labels.length}): форма изменилась — выполните сухой прогон заново`);
+  }
+  snap.items.forEach((it, i) => {
+    if (it.kind === "unknown") fail(`поле №${i + 1}: тип поля не поддерживается`);
+  });
+  snap.items.forEach((it, i) => {
+    if (collapse(it.value) !== expected[i].value) fail(`поле №${i + 1}: значение не совпадает с ожидаемым`);
+  });
+  if (snap.submitButtons !== 1) fail(`кнопка «${SUBMIT_TEXT}»: ожидалась ровно одна, найдено ${snap.submitButtons}`);
+  if (stage === "loaded") return;
+  const indicator = [...new Set(snap.requiredLeft)];
+  if (indicator.length > 1) fail("индикатор обязательных полей формы показывает разные числа");
+  if (indicator.length === 1 && indicator[0] !== 0) fail(`форма считает незаполненными обязательных полей: ${indicator[0]}`);
+  const empty = snap.items.filter((it) => (it.requiredMark || it.label.includes("*")) && !collapse(it.value)).length;
+  if (empty > 0) fail(`обязательных полей не заполнено: ${empty}`);
+  snap.items.forEach((it, i) => {
+    if (needsExtraInput(it.value)) fail(`поле №${i + 1}: выбранный вариант требует заполнить дополнительное поле`);
+  });
+  if (snap.submitDisabled) fail(`кнопка «${SUBMIT_TEXT}» неактивна после заполнения формы`);
+}
+
+/**
+ * Шов только для проверок (одноразовые скрипты на заготовках): подмена чтения истории заявок и
+ * сокращение ожидания новой заявки. В рабочем коде не меняется.
+ */
 export const certificateTestSeams: {
   listRequests: (opts: ResourceCallOptions) => Promise<{ count: number; requests: ElkClaim[] }>;
-} = { listRequests: (opts) => listRequests(CLAIMS_LIMIT, opts) };
+  claimsWaitMs: number;
+  claimsPollMs: number;
+} = { listRequests: (opts) => listRequests(CLAIMS_LIMIT, opts), claimsWaitMs: CLAIMS_WAIT_MS, claimsPollMs: CLAIMS_POLL_MS };
 
 // --- Чтение страницы ---
 
@@ -360,7 +449,8 @@ async function readTitle(page: Page): Promise<string> {
  * Сначала структура без кликов (поля, «Отправить», индикатор) — неожиданная форма отказывает до
  * раскрытия списков; затем варианты каждого доступного списка. Ничего не выбирает и не отправляет.
  */
-export async function readCertificateForm(page: Page): Promise<CertificateForm> {
+/** Ожидание отрисовки формы и автозаполнения; возвращает локатор «Отправить» (точное имя). */
+async function waitForForm(page: Page): Promise<Locator> {
   try {
     await page.locator(SEL_ITEM).filter({ visible: true }).first().waitFor({ state: "visible", timeout: FORM_WAIT_MS });
   } catch {
@@ -370,6 +460,11 @@ export async function readCertificateForm(page: Page): Promise<CertificateForm> 
   await page.waitForLoadState("networkidle", { timeout: 8_000 }).catch(() => {});
   const submit = page.getByRole("button", { name: SUBMIT_TEXT, exact: true });
   await submit.first().waitFor({ state: "attached", timeout: SUBMIT_WAIT_MS }).catch(() => {});
+  return submit;
+}
+
+export async function readCertificateForm(page: Page): Promise<CertificateForm> {
+  const submit = await waitForForm(page);
 
   const items = page.locator(SEL_LEAF_ITEM).filter({ visible: true });
   const count = await items.count();
@@ -389,6 +484,205 @@ export async function readCertificateForm(page: Page): Promise<CertificateForm> 
   // Число полей не изменилось за время чтения (раскрытие списков не дорисовало новых).
   if ((await items.count()) !== count) throw new Refusal("набор полей формы изменился во время чтения");
   return buildCertificateForm({ title: await readTitle(page), items: raw, submitButtons, submitDisabled, requiredLeft });
+}
+
+// --- Запись: заполнение формы и перепроверка ---
+
+const leafItems = (page: Page) => page.locator(SEL_LEAF_ITEM).filter({ visible: true });
+
+/** «Отправить» неактивна: атрибут `disabled`/`aria-disabled` или класс Element Plus `is-disabled`. */
+async function buttonDisabled(button: Locator): Promise<boolean> {
+  if (await button.isDisabled()) return true;
+  return button.evaluate((el) => el.classList.contains("is-disabled") || el.getAttribute("aria-disabled") === "true");
+}
+
+/** Снимок формы на странице записи для `checkFormState`; ничего не нажимает. */
+async function readFormSnapshot(page: Page, submit: Locator): Promise<FormSnapshot> {
+  const items = leafItems(page);
+  const count = await items.count();
+  const raw: FormSnapshot["items"] = [];
+  for (let i = 0; i < count; i++) raw.push(await readItem(items.nth(i)));
+  const submitButtons = await submit.count();
+  const submitDisabled = submitButtons === 1 ? await buttonDisabled(submit) : true;
+  const bodyText = await page.locator("body").innerText();
+  const requiredLeft = [...bodyText.matchAll(REQUIRED_LEFT_RE)].map((m) => Number(m[1]));
+  return { items: raw, submitButtons, submitDisabled, requiredLeft };
+}
+
+/**
+ * Выбор одного варианта (§17, восьмой проход): поле — ровно одно с этой подписью; открытых списков
+ * нет → один клик по обёртке `.el-select` → ровно одно видимое окно → ровно один доступный вариант с
+ * точным текстом → один клик по нему → окно закрылось (не закрылось само — один `Escape`) → значение
+ * поля равно выбранному. `n` — номер поля в сухом прогоне: тексты отказов без подписей и значений.
+ */
+async function selectOption(page: Page, label: string, value: string, n: number, signal: AbortSignal): Promise<void> {
+  const tail = "операция прервана до отправки";
+  const items = leafItems(page);
+  const labels = (await items.evaluateAll((els) => els.map((el) => el.querySelector(".el-form-item__label")?.textContent ?? ""))).map(
+    normalizeLabel
+  );
+  const at = labels.flatMap((l, i) => (l === label ? [i] : []));
+  if (at.length !== 1) throw new Refusal(`поле №${n}: на форме найдено полей с этой подписью — ${at.length}, ожидалось одно; ${tail}`);
+  const item = items.nth(at[0]);
+  if ((await visibleDropdowns(page).count()) !== 0) throw new Refusal(`перед выбором в поле №${n} уже раскрыт другой список; ${tail}`);
+  const select = item.locator(SEL_SELECT);
+  if ((await select.count()) !== 1) throw new Refusal(`поле №${n}: ожидался ровно один выпадающий список; ${tail}`);
+  await select.click();
+  try {
+    await visibleDropdowns(page).first().waitFor({ state: "visible", timeout: DROPDOWN_WAIT_MS });
+  } catch (err) {
+    if (signal.aborted) throw err;
+    throw new Refusal(`список вариантов поля №${n} не раскрылся; ${tail}`);
+  }
+  const open = visibleDropdowns(page);
+  if ((await open.count()) !== 1) throw new Refusal(`при выборе в поле №${n} раскрыт не один список вариантов; ${tail}`);
+  const options = open.locator(SEL_OPTION);
+  const texts = await options.evaluateAll((els) =>
+    els.map((e) => ({
+      text: (e.textContent ?? "").replace(/\s+/g, " ").trim(),
+      usable: !e.classList.contains("is-disabled") && e.getClientRects().length > 0,
+    }))
+  );
+  const match = texts.flatMap((o, i) => (o.usable && o.text === value ? [i] : []));
+  if (match.length !== 1) throw new Refusal(`поле №${n}: нужный вариант в списке найден ${match.length} раз, ожидался один; ${tail}`);
+  signal.throwIfAborted();
+  await options.nth(match[0]).click();
+  // Element Plus закрывает список одиночного выбора сам; если нет — один `Escape` (он ничего не отправляет).
+  const closed = () =>
+    visibleDropdowns(page)
+      .first()
+      .waitFor({ state: "hidden", timeout: DROPDOWN_WAIT_MS })
+      .then(
+        () => true,
+        () => false
+      );
+  if (!(await closed())) {
+    signal.throwIfAborted();
+    await page.keyboard.press("Escape");
+    if (!(await closed())) throw new Refusal(`список вариантов поля №${n} не закрылся после выбора; ${tail}`);
+  }
+  if (collapse((await readItem(item)).value) !== value) throw new Refusal(`поле №${n}: выбранный вариант не встал в поле; ${tail}`);
+}
+
+const isStartRequest = (req: Request): boolean => {
+  if (req.method() !== "POST") return false;
+  try {
+    const u = new URL(req.url());
+    return u.origin === BASE_URL && u.pathname === START_PATH;
+  } catch {
+    return false;
+  }
+};
+
+/** Что известно об отправке после точки невозврата; заполняется по ходу, чтобы пережить сбой страницы. */
+interface SubmitTrace {
+  clickedAt: number;
+  clickError: boolean;
+  submitRequests: number;
+  submitStatus: number | null;
+}
+
+/**
+ * Страница записи: заполнение → перепроверка → `commitPoint` → один клик «Отправить» → ожидание ответа
+ * `process/start`. До точки невозврата не-GET запросы страницы отклоняются (страховка: Service Worker
+ * этот перехват обходит), и любая такая попытка к ЕЛК — отказ; перехват снимается до `commitPoint`,
+ * чтобы настоящий клик дошёл до системы. Исключение `commitPoint` пробрасывается (очищенным), клика нет.
+ */
+async function fillAndSubmit(
+  page: Page,
+  pageCtx: PageCallContext,
+  observed: CertificateObserved,
+  ctx: ExecuteContext,
+  trace: SubmitTrace,
+  onCommitted: () => void
+): Promise<void> {
+  const tail = "операция прервана до отправки";
+  let blocked = 0;
+  const blocker = (route: Route) => {
+    const req = route.request();
+    if (req.method() === "GET") return route.fallback();
+    try {
+      if (new URL(req.url()).origin === BASE_URL) blocked++;
+    } catch {
+      blocked++;
+    }
+    return route.abort("blockedbyclient");
+  };
+  await page.route("**/*", blocker);
+  let dialog = false;
+  page.on("dialog", (d) => {
+    dialog = true;
+    d.dismiss().catch(() => {});
+  });
+  const guard = () => {
+    if (dialog) throw new Refusal(`страница показала неожиданный диалог; ${tail}`);
+    if (blocked > 0) throw new Refusal(`форма попыталась отправить данные до нажатия «${SUBMIT_TEXT}»; ${tail}`);
+  };
+
+  const { form, plan } = observed;
+  const submit = await waitForForm(page);
+  // Страница открыта заново: форма та же, что в сухом прогоне (поля, порядок, автозаполнение).
+  checkFormState(expectedFieldValues(form, { ...plan, chosen: [] }), await readFormSnapshot(page, submit), "loaded");
+  const numberOf = new Map(form.fields.map((f, i) => [f.label, i + 1]));
+  for (const c of plan.chosen) {
+    pageCtx.signal.throwIfAborted();
+    guard();
+    await selectOption(page, c.label, c.value, numberOf.get(c.label) ?? 0, pageCtx.signal);
+  }
+  // Дорисовка зависимых полей и пересчёт индикатора — после выбора.
+  await page.waitForLoadState("networkidle", { timeout: 5_000 }).catch(() => {});
+  if ((await visibleDropdowns(page).count()) !== 0) throw new Refusal(`после заполнения раскрыт список вариантов; ${tail}`);
+  checkFormState(expectedFieldValues(form, plan), await readFormSnapshot(page, submit), "filled");
+  await page.unroute("**/*", blocker);
+  guard();
+  pageCtx.signal.throwIfAborted();
+
+  page.on("request", (req) => {
+    if (isStartRequest(req)) trace.submitRequests++;
+  });
+  // Точка невозврата: дальше только один клик, ожидание и чтение.
+  try {
+    await ctx.commitPoint(pageCtx);
+  } catch (err) {
+    throw sanitizeCommitError(err);
+  }
+  onCommitted();
+  const response = page.waitForResponse((r) => isStartRequest(r.request()), { timeout: START_RESPONSE_WAIT_MS }).then(
+    (r) => r.status(),
+    () => null
+  );
+  trace.clickedAt = Date.now();
+  try {
+    await submit.click({ timeout: CLICK_TIMEOUT_MS });
+  } catch {
+    // Дошёл ли клик до страницы, неизвестно: повтора нет, исход решит история заявок.
+    trace.clickError = true;
+  }
+  trace.submitStatus = await response;
+}
+
+/**
+ * Опрос истории заявок после клика (`maxAgeMs: 0`) до `claimsWaitMs` от клика: первая новая заявка
+ * (или несколько) завершает опрос. Сбой чтения — следующая попытка; ни одного удачного чтения — `null`.
+ */
+async function pollNewClaims(before: string[], since: number, signal: AbortSignal): Promise<ReturnType<typeof classifyClaimsOutcome> | null> {
+  const deadline = since + certificateTestSeams.claimsWaitMs;
+  let last: ReturnType<typeof classifyClaimsOutcome> | null = null;
+  for (;;) {
+    try {
+      last = classifyClaimsOutcome(before, claimNumbersOf(await certificateTestSeams.listRequests({ maxAgeMs: 0, signal })));
+      if (last.evidence.newClaims > 0) return last;
+    } catch {
+      // Неудачное чтение — не исход: пробуем снова до конца окна.
+    }
+    const left = deadline - Date.now();
+    if (left <= 0 || signal.aborted) return last;
+    try {
+      await abortableSleep(Math.min(certificateTestSeams.claimsPollMs, left), signal);
+    } catch {
+      return last;
+    }
+  }
 }
 
 // --- Адаптер ---
@@ -433,7 +727,24 @@ const W_AUTOFILL = "автозаполненные значения форма �
 const W_DEPENDENT =
   "поля, которые появляются после выбора варианта, сухой прогон не видит: форма может потребовать больше данных, чем показано здесь";
 const W_READ_ONLY ="форма открывалась только для чтения: списки раскрывались и закрывались без выбора, «Отправить» не нажималась";
-const NOT_IMPLEMENTED = "заказ справки в ЕЛК ещё не реализован: доступен только сухой прогон";
+const W_NOT_READ = "история заявок ЕЛК после заказа не прочиталась: сверьте вручную через elk_list_requests";
+const W_MANY_STARTS = "форма отправила запрос заказа больше одного раза: возможны дубли — сверьте вручную через elk_list_requests";
+// Снимок номеров до заказа живёт только в памяти записи, поэтому повтор не может доказать, чья заявка новая.
+const W_VERIFY_ONLY =
+  "проверка повтора не может установить, создал ли заявку прежний вызов (снимок заявок до заказа не хранится): сверьте вручную через elk_list_requests; число заявок сейчас — evidence.requestsNow";
+
+/**
+ * Исход записи по следу отправки и опросу заявок. Несколько запросов `process/start` от одного клика —
+ * неизвестно с предупреждением, даже если новая заявка одна (дубль мог появиться позже).
+ */
+function certificateResult(trace: SubmitTrace, claims: ReturnType<typeof classifyClaimsOutcome> | null): ExecuteResult {
+  const sent = { clicked: !trace.clickError, submitRequests: trace.submitRequests, submitStatus: trace.submitStatus };
+  if (!claims) return { stage: "sent", outcome: "unknown", evidence: { ...sent, newClaims: null }, warnings: [W_NOT_READ] };
+  if (trace.submitRequests > 1) {
+    return { stage: "verified", outcome: "unknown", evidence: { ...sent, newClaims: claims.evidence.newClaims }, warnings: [W_MANY_STARTS] };
+  }
+  return { stage: "verified", outcome: claims.outcome, evidence: { ...sent, ...claims.evidence }, warnings: claims.warnings };
+}
 
 export const certificateAdapter: WriteAdapter<CertificateArgs, CertificateObserved> = {
   op: "elk_order_certificate",
@@ -473,10 +784,40 @@ export const certificateAdapter: WriteAdapter<CertificateArgs, CertificateObserv
   payloadOf(_args, { plan, claimNumbers }) {
     return { files: [], state: certificateFingerprint({ claimNumbers, chosen: plan.chosen, autofilled: plan.autofilled }) };
   },
-  async execute() {
-    throw new Refusal(NOT_IMPLEMENTED);
+  async execute(args, observed, ctx) {
+    checkCertificateArgs(args);
+    const trace: SubmitTrace = { clickedAt: 0, clickError: false, submitRequests: 0, submitStatus: null };
+    let committed = false;
+    try {
+      // Без перехвата чтения (`readFormPage`): своя страница, свой перехват до точки невозврата.
+      await withPage(
+        formUrl(args.serviceId),
+        (page, pageCtx) =>
+          fillAndSubmit(page, pageCtx, observed, ctx, trace, () => {
+            committed = true;
+          }),
+        { signal: ctx.signal }
+      );
+    } catch (err) {
+      // До точки невозврата — отказ (ничего не отправлено); после — исход решает проверка, а не ошибка.
+      if (!committed) throw sanitizeNavigationError(err, "форма заказа справки");
+      if (!trace.clickedAt) {
+        // Сбой между точкой невозврата и кликом: клика, скорее всего, не было, но проверка всё равно идёт.
+        trace.clickedAt = Date.now();
+        trace.clickError = true;
+      }
+    }
+    // Опрос — после закрытия страницы: чтение истории ЕЛК может само открыть страницу (запасной путь
+    // client.ts), а вложенный `withPage` запрещён.
+    return certificateResult(trace, await pollNewClaims(observed.claimNumbers, trace.clickedAt, ctx.signal));
   },
-  async verifyOnly() {
-    throw new Refusal(NOT_IMPLEMENTED);
+  async verifyOnly(_args, signal) {
+    let requestsNow: number | null = null;
+    try {
+      requestsNow = claimNumbersOf(await certificateTestSeams.listRequests({ maxAgeMs: 0, signal })).length;
+    } catch {
+      // Число заявок неизвестно; исход и так «неизвестно».
+    }
+    return { outcome: "unknown", evidence: { requestsNow }, warnings: [W_VERIFY_ONLY] };
   },
 };

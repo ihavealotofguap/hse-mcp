@@ -2,7 +2,20 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 
 const m = await import(new URL("../dist/services/elk/certificate.js", import.meta.url).href);
-const { normalizeLabel, needsExtraInput, checkCertificateArgs, buildCertificateForm, planCertificate, certificateFingerprint, claimNumbersOf, certificateAdapter } = m;
+const {
+  normalizeLabel,
+  needsExtraInput,
+  checkCertificateArgs,
+  buildCertificateForm,
+  planCertificate,
+  certificateFingerprint,
+  claimNumbersOf,
+  certificateAdapter,
+  certificateTestSeams,
+  classifyClaimsOutcome,
+  expectedFieldValues,
+  checkFormState,
+} = m;
 const { Refusal } = await import(new URL("../dist/services/lms/submissions.js", import.meta.url).href);
 
 const FORMAT = ["Электронный документ", "Документ на бумажном носителе"];
@@ -210,19 +223,161 @@ test("claimNumbersOf: номера заявок из ответа listRequests, 
   refuses(() => claimNumbersOf({ count: 1 }), /истори/);
 });
 
-test("certificateAdapter: цель, операция, сброс заявок; запись ещё не реализована", async () => {
+test("certificateAdapter: цель, операция, сброс заявок; неверные аргументы записи — отказ до точки невозврата", async () => {
   assert.equal(certificateAdapter.op, "elk_order_certificate");
   assert.equal(certificateAdapter.targetOf({ serviceId: 14605, fields: {} }), "service:14605");
   assert.deepEqual(certificateAdapter.invalidates, ["elk.claims"]);
+  assert.equal(certificateAdapter.commitDeadlineMs, undefined, "дедлайн коммита — значение раннера по умолчанию");
   // Неверные аргументы — отказ до любого обращения к странице и к истории заявок.
   await assert.rejects(() => certificateAdapter.observe({ serviceId: 0, fields: {} }), /serviceId/);
   let commits = 0;
   await assert.rejects(
-    () => certificateAdapter.execute({ serviceId: 1, fields: {} }, {}, { signal: new AbortController().signal, commitPoint: async () => void commits++ }),
-    /не реализован/
+    () => certificateAdapter.execute({ serviceId: 0, fields: {} }, {}, { signal: new AbortController().signal, commitPoint: async () => void commits++ }),
+    (err) => err instanceof Refusal && /serviceId/.test(err.message)
   );
   assert.equal(commits, 0);
-  await assert.rejects(() => certificateAdapter.verifyOnly({ serviceId: 1, fields: {} }), /не реализован/);
+});
+
+const W_MANUAL = /сверьте вручную через elk_list_requests/;
+
+test("classifyClaimsOutcome: ровно один новый номер — подтверждено, номер только в evidence", () => {
+  const r = classifyClaimsOutcome(["A-1", "A-2"], ["A-3", "A-1", "A-2"]);
+  assert.equal(r.outcome, "confirmed");
+  assert.equal(r.evidence.newClaims, 1);
+  assert.equal(r.evidence.newClaimNumber, "A-3");
+  assert.deepEqual(r.warnings, []);
+  // Порядок, повторы и пропавшие старые номера (список усечён) не мешают.
+  const r2 = classifyClaimsOutcome(["A-1", "A-2", "A-0"], ["A-2", "A-9", "A-1", "A-9"]);
+  assert.equal(r2.outcome, "confirmed");
+  assert.equal(r2.evidence.newClaimNumber, "A-9");
+});
+
+test("classifyClaimsOutcome: ни одного нового — неизвестно; больше одного — неизвестно с предупреждением, без номеров", () => {
+  const none = classifyClaimsOutcome(["A-1"], ["A-1"]);
+  assert.equal(none.outcome, "unknown");
+  assert.equal(none.evidence.newClaims, 0);
+  assert.ok(!("newClaimNumber" in none.evidence));
+  const fewer = classifyClaimsOutcome(["A-1", "A-2"], []);
+  assert.equal(fewer.outcome, "unknown");
+  const two = classifyClaimsOutcome(["A-1"], ["A-1", "B-1", "B-2"]);
+  assert.equal(two.outcome, "unknown");
+  assert.equal(two.evidence.newClaims, 2);
+  assert.ok(two.warnings.some((w) => W_MANUAL.test(w)));
+  assert.ok(!JSON.stringify(two).includes("B-1") && !JSON.stringify(two).includes("B-2"), "при неоднозначности номеров в ответе нет");
+  // Исход проверки — никогда не «отклонено».
+  for (const r of [none, fewer, two]) assert.notEqual(r.outcome, "rejected");
+});
+
+/** Снимок страницы формы (без вариантов) в состоянии после заполнения обоих обязательных списков. */
+function snapshot(overrides = {}) {
+  const raw = rawForm();
+  return {
+    items: raw.items.map(({ options: _o, ...it }) =>
+      it.label.startsWith("Формат") ? { ...it, value: FORMAT[0] } : it.label.startsWith("Наименование") ? { ...it, value: ORG[0] } : it
+    ),
+    submitButtons: 1,
+    submitDisabled: false,
+    requiredLeft: [],
+    ...overrides,
+  };
+}
+
+test("expectedFieldValues: значения формы после заполнения — выбранные поверх прочитанных", () => {
+  const form = buildCertificateForm(rawForm());
+  const plan = planCertificate(form, FULL);
+  assert.deepEqual(expectedFieldValues(form, plan), [
+    { label: "Образовательная программа", value: "Программа" },
+    { label: "Факультет", value: "Факультет" },
+    { label: "Формат получения", value: FORMAT[0] },
+    { label: "Наименование организации", value: ORG[0] },
+  ]);
+  // Без выбора — ровно прочитанные значения.
+  assert.deepEqual(expectedFieldValues(form, { chosen: [], autofilled: [], requiredEmpty: [] }).map((f) => f.value), ["Программа", "Факультет", "", ""]);
+});
+
+test("checkFormState: заполненная форма, совпадающая с ожиданием, проходит", () => {
+  const form = buildCertificateForm(rawForm());
+  const expected = expectedFieldValues(form, planCertificate(form, FULL));
+  checkFormState(expected, snapshot(), "filled");
+  // Индикатор «(0)» допустим.
+  checkFormState(expected, snapshot({ requiredLeft: [0] }), "filled");
+  // До заполнения (страница только открыта): обязательные пусты, «Отправить» неактивна — это норма.
+  const loaded = expectedFieldValues(form, { chosen: [], autofilled: [], requiredEmpty: [] });
+  checkFormState(loaded, { ...snapshot(), items: rawForm().items.map(({ options: _o, ...it }) => it), submitDisabled: true, requiredLeft: [2] }, "loaded");
+});
+
+test("checkFormState: расхождение перед точкой невозврата — отказ без подписей и значений", () => {
+  const form = buildCertificateForm(rawForm());
+  const expected = expectedFieldValues(form, planCertificate(form, FULL));
+  const base = snapshot();
+  const extra = { label: "Полное наименование организации", requiredMark: true, kind: "input", disabled: false, value: "" };
+  const cases = [
+    [{ items: [...base.items, extra] }, /набор полей формы/, "новое поле после выбора"],
+    [{ items: base.items.slice(0, 3) }, /набор полей формы/, "поле пропало"],
+    [{ items: base.items.map((it, i) => (i === 0 ? { ...it, label: "Другая подпись" } : it)) }, /набор полей формы/, "подпись другая"],
+    [{ items: [base.items[1], base.items[0], ...base.items.slice(2)] }, /набор полей формы/, "порядок другой"],
+    [{ items: base.items.map((it, i) => (i === 2 ? { ...it, value: FORMAT[1] } : it)) }, /поле №3: значение/, "другой вариант"],
+    [{ items: base.items.map((it, i) => (i === 3 ? { ...it, value: "" } : it)) }, /поле №4: значение/, "поле не заполнилось"],
+    [{ items: base.items.map((it, i) => (i === 0 ? { ...it, value: "Секрет" } : it)) }, /поле №1: значение/, "автозаполнение изменилось"],
+    [{ items: base.items.map((it, i) => (i === 1 ? { ...it, kind: "unknown" } : it)) }, /поле №2: тип поля/, "тип поля"],
+    [{ requiredLeft: [1] }, /обязательных полей: 1/, "индикатор обязательных"],
+    [{ requiredLeft: [0, 1] }, /обязательных полей/, "индикатор с разными числами"],
+    [{ submitDisabled: true }, /«Отправить».*неактивна/, "кнопка неактивна"],
+    [{ submitButtons: 2 }, /«Отправить».*ровно одна.*2/, "вторая «Отправить»"],
+    [{ submitButtons: 0 }, /«Отправить».*ровно одна.*0/, "нет «Отправить»"],
+  ];
+  for (const [over, re, what] of cases) {
+    try {
+      checkFormState(expected, { ...base, ...over }, "filled");
+      assert.fail(`ожидался отказ: ${what}`);
+    } catch (err) {
+      assert.ok(err instanceof Refusal, `${what}: ${err?.message}`);
+      assert.match(err.message, re, what);
+      assert.match(err.message, /до отправки/, `${what}: сказано, что ничего не отправлено`);
+      for (const s of ["Секрет", "Программа", "Формат", "Наименование", "Полное", "Другая", FORMAT[0], FORMAT[1], ORG[0]]) {
+        assert.ok(!err.message.includes(s), `${what}: в тексте нет «${s}»`);
+      }
+    }
+  }
+  // Обязательное поле пустое при отсутствии индикатора — тоже отказ.
+  const emptyRequired = { label: "Телефон*", requiredMark: false, kind: "input", disabled: false, value: "" };
+  const withPhone = [...expected, { label: "Телефон", value: "" }];
+  refuses(() => checkFormState(withPhone, { ...base, items: [...base.items, emptyRequired] }, "filled"), /обязательн.*не заполнен/);
+  // Итоговое значение требует дополнительного поля — отказ.
+  const extraExpected = expected.map((f, i) => (i === 3 ? { ...f, value: ORG[1] } : f));
+  const extraSnap = { ...base, items: base.items.map((it, i) => (i === 3 ? { ...it, value: ORG[1] } : it)) };
+  refuses(() => checkFormState(extraExpected, extraSnap, "filled"), /поле №4: .*дополнительное поле/);
+  // На только что открытой странице «Отправить» может быть неактивна, но не может быть двух.
+  refuses(() => checkFormState(expected, { ...base, submitButtons: 2 }, "loaded"), /ровно одна/);
+});
+
+test("verifyOnly: только чтение, всегда «неизвестно» с предупреждением сверить вручную", async () => {
+  const original = certificateTestSeams.listRequests;
+  const calls = [];
+  try {
+    certificateTestSeams.listRequests = async (opts) => {
+      calls.push(opts);
+      return { count: 3, requests: [{ num: "Z-1" }, { num: "Z-2" }, { num: "Z-3" }] };
+    };
+    const r = await certificateAdapter.verifyOnly({ serviceId: 1, fields: {} });
+    assert.equal(r.outcome, "unknown");
+    assert.ok(r.warnings.some((w) => W_MANUAL.test(w)));
+    assert.equal(r.evidence.requestsNow, 3);
+    assert.ok(!JSON.stringify(r).includes("Z-"), "номеров заявок в ответе проверки нет");
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].maxAgeMs, 0, "свежее чтение мимо кэша");
+    // История не прочиталась — всё равно «неизвестно», без исключения и без текста ошибки.
+    certificateTestSeams.listRequests = async () => {
+      throw new Error("https://lk.hse.ru/api/claims?username=x 500");
+    };
+    const r2 = await certificateAdapter.verifyOnly({ serviceId: 1, fields: {} });
+    assert.equal(r2.outcome, "unknown");
+    assert.equal(r2.evidence.requestsNow, null);
+    assert.ok(!JSON.stringify(r2).includes("lk.hse.ru"));
+    assert.ok(r2.warnings.some((w) => W_MANUAL.test(w)));
+  } finally {
+    certificateTestSeams.listRequests = original;
+  }
 });
 
 test("describe: необратимость, поля и варианты; номеров заявок нет", () => {
