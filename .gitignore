@@ -11,3 +11,6 @@ storage/
 .DS_Store
 Thumbs.db
 docs/recon.md
+
+# Локальные заметки разведки (не публикуются)
+docs/superpowers/specs/*.local.md
