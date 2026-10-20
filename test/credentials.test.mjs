@@ -16,7 +16,7 @@ const {
   captureCredentialInputs,
 } = await import(new URL("../dist/credentials.js", import.meta.url).href);
 const { restrictFile, restrictDir, windowsAccount } = await import(new URL("../dist/fs-secure.js", import.meta.url).href);
-const { runCli, createLineReader, readSecretFrom } = await import(new URL("../dist/cli/credentials.js", import.meta.url).href);
+const { runCli, createLineReader, readSecretFrom, createStdinIo } = await import(new URL("../dist/cli/credentials.js", import.meta.url).href);
 
 // Подставные значения: настоящих паролей и адресов в тестах нет.
 const SECRET = "s3cret-test-value";
@@ -520,6 +520,47 @@ test("createLineReader: строка, пришедшая позже запрос
   setTimeout(() => input.write("late\n"), 20);
   assert.equal(await pending, "late");
   reader.close();
+});
+
+function fakeTty() {
+  const input = new PassThrough();
+  input.isTTY = true;
+  input.rawModes = [];
+  input.setRawMode = (mode) => void input.rawModes.push(mode);
+  return input;
+}
+
+test("createStdinIo: на терминале общий читатель не создаётся, пароль читается посимвольно", async () => {
+  const input = fakeTty();
+  const output = new PassThrough();
+  const io = createStdinIo(input, output);
+  assert.equal(input.listenerCount("data"), 0);
+  const pending = io.readSecret("Пароль: ");
+  // Только наш обработчик посимвольного ввода: постоянного readline на потоке нет.
+  assert.equal(input.listenerCount("data"), 1);
+  input.write(`${SECRET}\r`);
+  assert.equal(await pending, SECRET);
+  assert.deepEqual(input.rawModes, [true, false]);
+  assert.equal(input.listenerCount("data"), 0);
+  assert.ok(!(output.read()?.toString() ?? "").includes(SECRET));
+});
+
+test("createStdinIo: на терминале строка читается отдельным читателем и он закрывается", async () => {
+  const input = fakeTty();
+  const io = createStdinIo(input, new PassThrough());
+  const pending = io.readLine("Email: ");
+  setTimeout(() => input.write("someone\n"), 10);
+  assert.equal(await pending, "someone");
+  assert.equal(input.listenerCount("data"), 0);
+});
+
+test("createStdinIo: не терминал — общий читатель создаётся лениво и один на процесс", async () => {
+  const input = new PassThrough();
+  const io = createStdinIo(input, new PassThrough());
+  assert.equal(input.listenerCount("data"), 0);
+  input.write("a@x\nsecret-line\n");
+  assert.equal(await io.readLine(""), "a@x");
+  assert.equal(await io.readSecret(""), "secret-line");
 });
 
 test("readSecretFrom: не терминал — предупреждение без значений и строка из потока", async () => {

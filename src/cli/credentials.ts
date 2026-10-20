@@ -173,32 +173,46 @@ export function readSecretFrom(
   });
 }
 
-// Не терминал: один читатель на весь процесс (строки приходят одним куском). Терминал: читатель на
-// каждый вопрос и закрывается сразу, чтобы не перехватывать посимвольный ввод пароля.
-let shared: LineReader | null = null;
-const sharedReader = (): LineReader => (shared ??= createLineReader(process.stdin, process.stderr));
-
-async function lineFromStdin(prompt: string): Promise<string> {
-  if (!process.stdin.isTTY) return sharedReader().readLine(prompt);
-  const reader = createLineReader(process.stdin, process.stderr);
-  try {
-    return await reader.readLine(prompt);
-  } finally {
-    reader.close();
-  }
+/**
+ * Ввод для команд. Не терминал: один читатель на весь процесс, создаётся лениво при первом чтении
+ * (строки приходят одним куском). Терминал: читатель на каждый вопрос, закрывается сразу, а пароль
+ * читается посимвольно без readline, чтобы постоянный читатель не копил его в буфере.
+ */
+export function createStdinIo(
+  input: NodeJS.ReadableStream & { isTTY?: boolean; setRawMode?: (mode: boolean) => unknown },
+  output: NodeJS.WritableStream
+): { readLine(prompt: string): Promise<string>; readSecret(prompt: string): Promise<string> } {
+  let shared: LineReader | null = null;
+  const lazyShared: LineReader = {
+    readLine: (prompt) => (shared ??= createLineReader(input, output)).readLine(prompt),
+    close: () => shared?.close(),
+  };
+  return {
+    async readLine(prompt) {
+      if (!input.isTTY) return lazyShared.readLine(prompt);
+      const reader = createLineReader(input, output);
+      try {
+        return await reader.readLine(prompt);
+      } finally {
+        reader.close();
+      }
+    },
+    readSecret: (prompt) => readSecretFrom(input, output, lazyShared, prompt),
+  };
 }
 
 async function main(): Promise<void> {
   // Конфигурация подключается здесь, а не в начале файла: проверкам нужен только `runCli`.
   const { credentialInputs, optionalEmail } = await import("../config.js");
+  const io = createStdinIo(process.stdin, process.stderr);
   const code = await runCli(process.argv.slice(2), {
     env: credentialInputs.env,
     dotenv: credentialInputs.dotenv,
     dotenvFile: credentialInputs.dotenvFile,
     store: credentialInputs.keyStore,
     email: optionalEmail(),
-    readSecret: (prompt) => readSecretFrom(process.stdin, process.stderr, sharedReader(), prompt),
-    readLine: (prompt) => lineFromStdin(prompt),
+    readSecret: io.readSecret,
+    readLine: io.readLine,
     out: (line) => console.log(line),
     err: (line) => console.error(line),
   });
