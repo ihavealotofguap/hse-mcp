@@ -121,6 +121,15 @@ export function normalizeLabel(raw: string): string {
   return collapse(raw.replace(/\*/g, " ")).replace(/\s*:$/, "").trim();
 }
 
+/**
+ * Вариант отсылает к дополнительному полю, которое форма показывает после выбора (§17: «Полное
+ * наименование организации (указать в дополнительном поле)»). Признак консервативный — текст
+ * «в дополнительном поле» без учёта регистра.
+ */
+export function needsExtraInput(option: string): boolean {
+  return /в дополнительном поле/i.test(option);
+}
+
 const quoted = (labels: string[]) => labels.map((l) => `«${l}»`).join(", ");
 
 /** Отказы по самим аргументам — до любого обращения к системе. */
@@ -210,6 +219,15 @@ export function planCertificate(form: CertificateForm, fields: Record<string, st
     if (matches > 1) throw new Refusal(`поле ${quoted([field.label])}: вариант в списке формы повторяется — выбор неоднозначен`);
     chosen.push({ label: field.label, value, current: field.value });
   }
+  // Итоговое значение каждого поля (выбранное или уже стоящее на форме) не должно требовать
+  // дополнительного поля: его сухой прогон не видит, а v1 текстовые поля не заполняет.
+  form.fields.forEach((field, i) => {
+    if (needsExtraInput(given.get(field.label) ?? field.value)) {
+      throw new Refusal(
+        `поле №${i + 1}: выбранный вариант требует заполнить дополнительное поле, а v1 текстовые поля не заполняет — выберите другой вариант`
+      );
+    }
+  });
   const missing = form.fields.filter((f) => f.required && !f.value && !given.has(f.label)).map((f) => f.label);
   if (missing.length > 0) throw new Refusal(`не заданы обязательные поля: ${quoted(missing)}`);
   return {
@@ -410,7 +428,11 @@ async function readClaimNumbers(signal?: AbortSignal): Promise<string[]> {
 
 const W_IRREVERSIBLE = "заказ необратим: способа отмены в ЕЛК нет";
 const W_AUTOFILL = "автозаполненные значения форма берёт из личных данных ЕЛК и отправит как есть; они показаны только в этом ответе";
-const W_READ_ONLY = "форма открывалась только для чтения: списки раскрывались и закрывались без выбора, «Отправить» не нажималась";
+// Чтение ничего не выбирает, поэтому поля, которые форма дорисовывает по выбранному варианту, в
+// снимок не попадают: список полей и незаполненных обязательных может быть неполным.
+const W_DEPENDENT =
+  "поля, которые появляются после выбора варианта, сухой прогон не видит: форма может потребовать больше данных, чем показано здесь";
+const W_READ_ONLY ="форма открывалась только для чтения: списки раскрывались и закрывались без выбора, «Отправить» не нажималась";
 const NOT_IMPLEMENTED = "заказ справки в ЕЛК ещё не реализован: доступен только сухой прогон";
 
 export const certificateAdapter: WriteAdapter<CertificateArgs, CertificateObserved> = {
@@ -425,7 +447,7 @@ export const certificateAdapter: WriteAdapter<CertificateArgs, CertificateObserv
     return { serviceId: args.serviceId, form, plan, claimNumbers };
   },
   describe(_args, { serviceId, form, plan, claimNumbers }) {
-    const warnings = [W_IRREVERSIBLE, W_AUTOFILL, W_READ_ONLY];
+    const warnings = [W_IRREVERSIBLE, W_DEPENDENT, W_AUTOFILL, W_READ_ONLY];
     return {
       preview: {
         serviceId,

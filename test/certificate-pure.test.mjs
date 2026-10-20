@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 
 const m = await import(new URL("../dist/services/elk/certificate.js", import.meta.url).href);
-const { normalizeLabel, checkCertificateArgs, buildCertificateForm, planCertificate, certificateFingerprint, claimNumbersOf, certificateAdapter } = m;
+const { normalizeLabel, needsExtraInput, checkCertificateArgs, buildCertificateForm, planCertificate, certificateFingerprint, claimNumbersOf, certificateAdapter } = m;
 const { Refusal } = await import(new URL("../dist/services/lms/submissions.js", import.meta.url).href);
 
 const FORMAT = ["Электронный документ", "Документ на бумажном носителе"];
@@ -103,10 +103,10 @@ test("buildCertificateForm: неожиданная форма — отказ, а
 
 test("planCertificate: выбранные значения, автозаполнение, незаполненные обязательные", () => {
   const form = buildCertificateForm(rawForm());
-  const plan = planCertificate(form, { "Формат получения*": ` ${FORMAT[1]} `, "Наименование организации": ORG[1] });
+  const plan = planCertificate(form, { "Формат получения*": ` ${FORMAT[1]} `, "Наименование организации": ORG[0] });
   assert.deepEqual(plan.chosen, [
     { label: "Формат получения", value: FORMAT[1], current: "" },
-    { label: "Наименование организации", value: ORG[1], current: "" },
+    { label: "Наименование организации", value: ORG[0], current: "" },
   ]);
   assert.deepEqual(plan.autofilled, [
     { label: "Образовательная программа", value: "Программа" },
@@ -145,6 +145,35 @@ test("planCertificate: предусловия — все обязательны�
     rawForm({ items: rawForm().items.map((it) => (it.label.startsWith("Формат") ? { ...it, options: [FORMAT[0], FORMAT[0]] } : it)) })
   );
   refuses(() => planCertificate(dupOpt, FULL), /вариант.*повторяется/);
+});
+
+test("needsExtraInput: вариант, отсылающий к дополнительному полю, распознаётся без учёта регистра", () => {
+  assert.equal(needsExtraInput(ORG[1]), true);
+  assert.equal(needsExtraInput("Иное (УКАЗАТЬ В ДОПОЛНИТЕЛЬНОМ ПОЛЕ)"), true);
+  assert.equal(needsExtraInput(ORG[0]), false);
+  assert.equal(needsExtraInput(FORMAT[0]), false);
+  assert.equal(needsExtraInput("Дополнительное соглашение"), false);
+});
+
+test("planCertificate: вариант, требующий дополнительного поля, — отказ (v1 не заполняет текстовые поля)", () => {
+  const form = buildCertificateForm(rawForm());
+  try {
+    planCertificate(form, { ...FULL, "Наименование организации": ORG[1] });
+    assert.fail("ожидался отказ");
+  } catch (err) {
+    assert.ok(err instanceof Refusal);
+    assert.match(err.message, /^поле №4: выбранный вариант требует заполнить дополнительное поле/);
+    // Ни подписи, ни текста варианта в отказе нет.
+    assert.ok(!err.message.includes("Наименование") && !err.message.includes("Полное наименование"));
+  }
+  // Обычный вариант того же списка принимается.
+  assert.deepEqual(planCertificate(form, FULL).chosen.map((c) => c.value), [FORMAT[0], ORG[0]]);
+  // Такой вариант, уже выбранный самой формой и не заданный в fields, — тоже отказ: дополнительное поле не видно.
+  const items = rawForm().items.map((it) => (it.label.startsWith("Наименование") ? { ...it, value: ORG[1] } : it));
+  const prefilled = buildCertificateForm(rawForm({ items, requiredLeft: [1] }));
+  refuses(() => planCertificate(prefilled, { "Формат получения": FORMAT[0] }), /^поле №4: выбранный вариант требует заполнить дополнительное поле/);
+  // Переопределение обычным вариантом снимает отказ.
+  assert.equal(planCertificate(prefilled, FULL).chosen.length, 2);
 });
 
 test("planCertificate: обязательное поле уже заполнено формой — можно не задавать", () => {
@@ -202,6 +231,10 @@ test("describe: необратимость, поля и варианты; ном
   const observed = { serviceId: 1, form, plan, claimNumbers: ["Z-77", "Z-78"] };
   const d = certificateAdapter.describe({ serviceId: 1, fields: FULL }, observed);
   assert.ok(d.warnings.includes("заказ необратим: способа отмены в ЕЛК нет"));
+  assert.ok(
+    d.warnings.some((w) => /поля, которые появляются после выбора варианта, сухой прогон не видит/.test(w) && /больше/.test(w)),
+    "предупреждение о зависимых полях"
+  );
   const json = JSON.stringify(d);
   assert.ok(json.includes(ORG[1]) && json.includes("Программа"));
   assert.ok(!json.includes("Z-77") && !json.includes("Z-78"));
