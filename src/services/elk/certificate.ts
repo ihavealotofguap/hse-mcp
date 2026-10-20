@@ -68,6 +68,9 @@ const CLICK_TIMEOUT_MS = 5_000;
 const START_RESPONSE_WAIT_MS = 10_000;
 const CLAIMS_WAIT_MS = 15_000;
 const CLAIMS_POLL_MS = 1_000;
+// Дедлайн коммита заказа: клик, ожидание ответа `process/start` (до 10 с) и опрос истории (до 15 с) с запасом.
+const CERTIFICATE_COMMIT_DEADLINE_MS = 45_000;
+const CLAIMS_READ_RESERVE_MS = 5_000;
 const MAX_FIELDS = 50;
 const MAX_LABEL = 200;
 const MAX_VALUE = 500;
@@ -804,10 +807,15 @@ async function fillAndSubmit(
  * заявкой (или несколькими) завершает опрос. Возвращается последний удачно прочитанный список (номера
  * распознаны); сбой чтения — следующая попытка; ни одного удачного чтения — `null`.
  */
-async function pollNewClaims(before: string[], since: number, signal: AbortSignal): Promise<ElkClaim[] | null> {
+export async function pollNewClaims(before: string[], since: number, signal: AbortSignal): Promise<ElkClaim[] | null> {
   const deadline = since + certificateTestSeams.claimsWaitMs;
+  // Дедлайн коммита отсчитывается от точки невозврата (клик следует сразу за ней): новое чтение не начинаем,
+  // если до него осталось меньше запаса — медленное чтение (повторный вход, запасной путь) не должно
+  // превратить исход в «не уложился в дедлайн»; первое чтение делается всегда.
+  const hardStop = since + CERTIFICATE_COMMIT_DEADLINE_MS - CLAIMS_READ_RESERVE_MS;
   let last: ElkClaim[] | null = null;
   for (;;) {
+    if (last !== null && Date.now() >= hardStop) return last;
     try {
       const list = await certificateTestSeams.listRequests({ maxAgeMs: 0, signal });
       const nums = claimNumbersOf(list);
@@ -915,6 +923,9 @@ export function certificateResult(trace: SubmitTrace, before: string[], claims: 
 export const certificateAdapter: WriteAdapter<CertificateArgs, CertificateObserved> = {
   op: "elk_order_certificate",
   invalidates: ["elk.claims"],
+  commitDeadlineMs: CERTIFICATE_COMMIT_DEADLINE_MS,
+  // Любой неизвестный исход заказа несёт предупреждение о ручной сверке (в том числе при сбое или дедлайне).
+  unknownWarnings: [MANUAL_CHECK_WARNING],
   targetOf: (args) => `service:${args.serviceId}`,
   async observe(args, signal) {
     checkCertificateArgs(args);

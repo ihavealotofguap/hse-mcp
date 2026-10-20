@@ -712,3 +712,62 @@ test("M2. ошибки файловой системы раннера: в тек
     await assert.rejects(fake.write(args), (err) => noPaths(err, d));
   });
 });
+
+test("M4. предупреждения адаптера для unknown идут первыми на каждом неизвестном пути раннера", async () => {
+  const LEAD = "ПРЕДУПРЕЖДЕНИЕ-АДАПТЕРА";
+  const leads = (res) => {
+    assert.equal(res.outcome, "unknown");
+    assert.equal(res.warnings[0], LEAD, "первое предупреждение — адаптера");
+    assert.equal(res.warnings.filter((w) => w === LEAD).length, 1, "без дублей");
+    assert.ok(res.warnings.some((w) => /повторять отправку без проверки запрещено/i.test(w)), "общее предупреждение раннера тоже есть");
+  };
+
+  // Сбой execute после точки невозврата.
+  const a = makeFake("test_write_m4a");
+  a.adapter.unknownWarnings = [LEAD];
+  a.behavior.throwAfter = true;
+  const argsA = { id: "m4a", value: "v" };
+  const dryA = await a.write(argsA);
+  leads(await a.write({ ...argsA, confirm: true, previewToken: dryA.previewToken }));
+
+  // Дедлайн коммита истёк после commitPoint.
+  const b = makeFake("test_write_m4b");
+  b.adapter.unknownWarnings = [LEAD];
+  b.adapter.commitDeadlineMs = 100;
+  b.behavior.workMs = 400;
+  const argsB = { id: "m4b", value: "v" };
+  const dryB = await b.write(argsB);
+  const resB = await b.write({ ...argsB, confirm: true, previewToken: dryB.previewToken });
+  assert.deepEqual(resB.evidence, { errorClass: "timeout" });
+  leads(resB);
+  await sleep(450);
+
+  // Адаптер проглотил отказ commitPoint.
+  const c = makeFake("test_write_m4c");
+  c.adapter.unknownWarnings = [LEAD];
+  c.behavior.swallowCommit = true;
+  c.behavior.pageCommit = () => {
+    throw new Error("страница закрыта");
+  };
+  const argsC = { id: "m4c", value: "v" };
+  const dryC = await c.write(argsC);
+  leads(await c.write({ ...argsC, confirm: true, previewToken: dryC.previewToken }));
+
+  // Исход unknown из самого execute и повтор по токену (verifyOnly) — без дубля, если адаптер уже добавил своё.
+  const d = makeFake("test_write_m4d");
+  d.adapter.unknownWarnings = [LEAD];
+  d.behavior.result = { stage: "verified", outcome: "unknown", evidence: {}, warnings: [LEAD] };
+  const argsD = { id: "m4d", value: "v" };
+  const dryD = await d.write(argsD);
+  leads(await d.write({ ...argsD, confirm: true, previewToken: dryD.previewToken }));
+  d.behavior.verifyOutcome = "unknown";
+  leads(await d.write({ ...argsD, confirm: true, previewToken: dryD.previewToken }));
+
+  // Адаптер без хука: ничего лишнего.
+  const e = makeFake("test_write_m4e");
+  e.behavior.throwAfter = true;
+  const argsE = { id: "m4e", value: "v" };
+  const dryE = await e.write(argsE);
+  const resE = await e.write({ ...argsE, confirm: true, previewToken: dryE.previewToken });
+  assert.equal(resE.warnings.length, 1);
+});

@@ -12,6 +12,7 @@ const {
   claimNumbersOf,
   certificateAdapter,
   certificateResult,
+  pollNewClaims,
   MANUAL_CHECK_WARNING,
   certificateTestSeams,
   classifyClaimsOutcome,
@@ -308,7 +309,7 @@ test("certificateAdapter: цель, операция, сброс заявок; �
   assert.equal(certificateAdapter.op, "elk_order_certificate");
   assert.equal(certificateAdapter.targetOf({ serviceId: 14605, fields: {} }), "service:14605");
   assert.deepEqual(certificateAdapter.invalidates, ["elk.claims"]);
-  assert.equal(certificateAdapter.commitDeadlineMs, undefined, "дедлайн коммита — значение раннера по умолчанию");
+  assert.equal(typeof certificateAdapter.commitDeadlineMs, "number", "дедлайн коммита задан явно");
   // Неверные аргументы — отказ до любого обращения к странице и к истории заявок.
   await assert.rejects(() => certificateAdapter.observe({ serviceId: 0, fields: {} }), /serviceId/);
   let commits = 0;
@@ -596,5 +597,45 @@ test("certificateAdapter.verifyOnly: исход неизвестен, преду
     }
   } finally {
     certificateTestSeams.listRequests = saved;
+  }
+});
+
+test("certificateAdapter: явный дедлайн коммита 45 с и предупреждение каждого unknown", () => {
+  assert.equal(certificateAdapter.commitDeadlineMs, 45_000);
+  assert.deepEqual(certificateAdapter.unknownWarnings, [MANUAL_CHECK_WARNING]);
+});
+
+test("pollNewClaims: первое чтение всегда, дальше — не позже чем за 5 с до дедлайна коммита; обычный опрос идёт до окна ожидания", async () => {
+  const saved = { ...certificateTestSeams };
+  let reads = 0;
+  try {
+    certificateTestSeams.listRequests = async () => {
+      reads++;
+      return { count: 1, requests: [{ num: "A-1" }] };
+    };
+    certificateTestSeams.claimsWaitMs = 60_000;
+    certificateTestSeams.claimsPollMs = 1;
+    // Клик был 41 с назад: до дедлайна (45 с) осталось меньше 5 с — ровно одно чтение и выход.
+    const ac = new AbortController();
+    const out = await pollNewClaims(["A-1"], Date.now() - 41_000, ac.signal);
+    assert.equal(reads, 1);
+    assert.deepEqual(out.map((c) => c.num), ["A-1"]);
+    // Окно ожидания короткое: опрос идёт до его конца, несколько чтений.
+    reads = 0;
+    certificateTestSeams.claimsWaitMs = 40;
+    certificateTestSeams.claimsPollMs = 5;
+    await pollNewClaims(["A-1"], Date.now(), ac.signal);
+    assert.ok(reads >= 3, `чтений: ${reads}`);
+    // Новая заявка завершает опрос сразу.
+    reads = 0;
+    certificateTestSeams.listRequests = async () => {
+      reads++;
+      return { count: 2, requests: [{ num: "A-1" }, { num: "A-2" }] };
+    };
+    certificateTestSeams.claimsWaitMs = 10_000;
+    await pollNewClaims(["A-1"], Date.now(), ac.signal);
+    assert.equal(reads, 1);
+  } finally {
+    Object.assign(certificateTestSeams, saved);
   }
 });

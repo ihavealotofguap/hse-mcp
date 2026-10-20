@@ -89,6 +89,12 @@ export interface WriteAdapter<A extends object, Obs> {
    * заменяется значением по умолчанию.
    */
   commitDeadlineMs?: number;
+  /**
+   * Предупреждения, которые раннер ставит первыми в КАЖДЫЙ неизвестный исход, собранный им самим (сбой или
+   * дедлайн после точки невозврата, проглоченный отказ commitPoint, повтор по токену), и в исход
+   * `unknown` самого адаптера: адаптеру не нужно рассчитывать, что его собственный текст дойдёт до ответа.
+   */
+  unknownWarnings?: readonly string[];
   /** Идентификатор цели (курс/задание/заявка): в журнал попадает только его HMAC. */
   targetOf(args: A): string;
   /** Только чтение; бросает при невыполненных предусловиях. */
@@ -226,8 +232,12 @@ async function journalOutcome(entry: Omit<JournalEntry, "at">, warnings: string[
   }
 }
 
-function withUnknownWarning(outcome: Outcome, warnings: string[]): string[] {
-  return outcome === "unknown" && !warnings.includes(UNKNOWN_WARNING) ? [...warnings, UNKNOWN_WARNING] : warnings;
+function withUnknownWarning(outcome: Outcome, warnings: string[], lead: readonly string[] = []): string[] {
+  if (outcome !== "unknown") return warnings;
+  // Предупреждения адаптера для `unknown` — первыми, без дублей; общее предупреждение раннера — следом.
+  const own = lead.filter((w) => !warnings.includes(w));
+  const rest = warnings.includes(UNKNOWN_WARNING) ? warnings : [...warnings, UNKNOWN_WARNING];
+  return [...own, ...rest];
 }
 
 export function defineWrite<A extends object, Obs>(
@@ -288,7 +298,7 @@ export function defineWrite<A extends object, Obs>(
     // исход — отправка по токену уже начиналась, значит исход неизвестен.
     const outcome: Outcome = checked.outcome === "rejected" ? "unknown" : checked.outcome;
     const extra = checked.outcome === "rejected" ? ["verifyOnly вернул «отклонено», что ему не разрешено: исход считается неизвестным."] : [];
-    const warnings = withUnknownWarning(outcome, [...checked.warnings, ...extra]);
+    const warnings = withUnknownWarning(outcome, [...checked.warnings, ...extra], adapter.unknownWarnings);
     const ids = { op: prior.op, tokenId: prior.tokenId, targetId: prior.targetId };
     await journalOutcome({ ...ids, stage: "verified", outcome, durationMs: Date.now() - started }, warnings);
     // Отправка по токену уже начиналась: «не отправлено» утверждается только записанным в журнале отказом.
@@ -340,13 +350,13 @@ export function defineWrite<A extends object, Obs>(
     if (failed || call.refused) {
       // Сбой после точки невозврата либо адаптер проглотил отказ commitPoint: исход неизвестен.
       const errorClass: ErrorClass = failed ? classifyError(failure) : "other";
-      const warnings = [UNKNOWN_WARNING];
+      const warnings = withUnknownWarning("unknown", [], adapter.unknownWarnings);
       await journalOutcome({ ...call.ids, stage: "sent", outcome: "unknown", durationMs, errorClass }, warnings);
       return { stage: "sent", outcome: "unknown", evidence: { errorClass }, warnings, sent: true };
     }
 
     const done = result as ExecuteResult;
-    const warnings = withUnknownWarning(done.outcome, [...done.warnings]);
+    const warnings = withUnknownWarning(done.outcome, [...done.warnings], adapter.unknownWarnings);
     if (call.sending) {
       await journalOutcome({ ...call.ids, stage: "verified", outcome: done.outcome, durationMs }, warnings);
     }
