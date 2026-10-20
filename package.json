@@ -5,6 +5,9 @@
   "type": "module",
   "license": "MIT",
   "private": true,
+  "engines": {
+    "node": ">=22"
+  },
   "main": "dist/index.js",
   "bin": {
     "hsemcp": "dist/index.js"

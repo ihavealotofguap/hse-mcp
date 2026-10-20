@@ -70,7 +70,7 @@ MCP-сервер на `@modelcontextprotocol/sdk` (stdio-транспорт). `s
   (`/auth` → `/token` → `/dashboard`; вход без сессии не проверялся); данные
   зачётки требуют двухфакторного подтверждения через MAX (HTTP 412 на
   `/api/auth/two-factor/required`); API профиля переехал на `POST /api/student/profile?studentId=`
-  (клиент ищет `/api/student/\d+/…` и не находит). Пользователь MAX не использует — зачётка
+  (клиент ищет `/api/student/\d+/…` и не находит). Без подтверждения через MAX зачётка
   недоступна. Один аккаунт, один прогон; см. §12 спецификации подпроекта 3.
 - **Сводки** (`services/digest/`) — агрегаторы `my_today`/`my_week`/`my_deadlines`. Сервис вызывает
   клиентские функции `elk`/`lms`/`ruz`, а не MCP-тулы. `buildDigest(plan, collectors)` запускает
