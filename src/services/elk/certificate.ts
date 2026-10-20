@@ -39,9 +39,15 @@ const formUrl = (serviceId: number) => `${BASE_URL}/student-service/student-serv
 
 // Подписи и селекторы — из живой разведки (§17, восьмой проход).
 const SUBMIT_TEXT = "Отправить";
-const SEL_ITEM = ".el-form-item";
+// Живая форма — Formily Element Plus (`.formily-element-plus-form-item`, §17, девятый проход); `.el-form-item`
+// оставлен для разметки голого Element Plus (заготовки проверок).
+const ITEM_CLASSES = [".formily-element-plus-form-item", ".el-form-item"];
+const SEL_ITEM = ITEM_CLASSES.join(", ");
 // Только «листовые» поля: обёртки раскладки Formily с вложенными полями сами полем не являются.
-const SEL_LEAF_ITEM = `${SEL_ITEM}:not(:has(${SEL_ITEM}))`;
+const SEL_LEAF_ITEM = ITEM_CLASSES.map((c) => `${c}:not(:has(${SEL_ITEM}))`).join(", ");
+// Подпись поля: первый найденный из этих элементов; звёздочка обязательности в Formily — отдельный элемент.
+const LABEL_SELECTORS = [".formily-element-plus-form-item-label label", ".formily-element-plus-form-item-label", ".el-form-item__label"];
+const SEL_ASTERISK = ".formily-element-plus-form-item-asterisk";
 const SEL_SELECT = ".el-select";
 const SEL_DROPDOWN = ".el-select-dropdown";
 const SEL_OPTION = ".el-select-dropdown__item";
@@ -482,10 +488,11 @@ export const certificateTestSeams: {
 /** Снимок поля без раскрытия списка. Значение списка — из `.el-select__placeholder` (Element Plus ≥ 2.5). */
 async function readItem(item: Locator): Promise<Omit<RawFormItem, "options">> {
   return item.evaluate(
-    (el, { unsupported }) => {
+    (el, { unsupported, labelSelectors, asterisk }) => {
       const clean = (s: string | null | undefined) => (s ?? "").replace(/\s+/g, " ").trim();
-      const label = clean(el.querySelector(".el-form-item__label")?.textContent);
-      const requiredMark = el.classList.contains("is-required");
+      const labelEl = labelSelectors.map((sel) => el.querySelector(sel)).find((x) => x !== null);
+      const label = clean(labelEl?.textContent);
+      const requiredMark = el.classList.contains("is-required") || el.querySelector(asterisk) !== null;
       const base = { label, requiredMark, disabled: false, value: "" };
       if (el.querySelector(unsupported)) return { ...base, kind: "unknown" as const };
       const selects = el.querySelectorAll(".el-select");
@@ -497,7 +504,9 @@ async function readItem(item: Locator): Promise<Omit<RawFormItem, "options">> {
           return { ...base, kind: "unknown" as const };
         }
         const ph = placeholders[0];
-        const disabled = select.classList.contains("is-disabled") || select.querySelector(".el-select__wrapper.is-disabled") !== null;
+        // Автозаполненные списки живой формы помечены атрибутом `readonly` на самом `.el-select` (без `is-disabled`).
+        const disabled =
+          select.hasAttribute("readonly") || select.classList.contains("is-disabled") || select.querySelector(".el-select__wrapper.is-disabled") !== null;
         return { ...base, kind: "select" as const, disabled, value: ph.classList.contains("is-transparent") ? "" : clean(ph.textContent) };
       }
       const controls = el.querySelectorAll('input:not([type="hidden"]), textarea');
@@ -505,7 +514,7 @@ async function readItem(item: Locator): Promise<Omit<RawFormItem, "options">> {
       const control = controls[0] as HTMLInputElement | HTMLTextAreaElement;
       return { ...base, kind: "input" as const, disabled: control.disabled || control.readOnly, value: control.value };
     },
-    { unsupported: UNSUPPORTED_CONTROLS }
+    { unsupported: UNSUPPORTED_CONTROLS, labelSelectors: LABEL_SELECTORS, asterisk: SEL_ASTERISK }
   );
 }
 
@@ -564,7 +573,7 @@ async function waitForForm(page: Page): Promise<Locator> {
   try {
     await page.locator(SEL_ITEM).filter({ visible: true }).first().waitFor({ state: "visible", timeout: FORM_WAIT_MS });
   } catch {
-    throw new Refusal("форма заказа справки не отрисовалась");
+    throw new Refusal("форма заказа справки не отрисовалась (проверьте serviceId — это число components из url в elk_search_services)");
   }
   // Автозаполнение подтягивается запросами после отрисовки.
   await page.waitForLoadState("networkidle", { timeout: 8_000 }).catch(() => {});
@@ -628,15 +637,21 @@ async function readFormSnapshot(page: Page, submit: Locator): Promise<FormSnapsh
 async function selectOption(page: Page, label: string, value: string, n: number, signal: AbortSignal): Promise<void> {
   const tail = "операция прервана до отправки";
   const items = leafItems(page);
-  const labels = (await items.evaluateAll((els) => els.map((el) => el.querySelector(".el-form-item__label")?.textContent ?? ""))).map(
-    normalizeLabel
-  );
+  const labels = (
+    await items.evaluateAll(
+      (els, sels) => els.map((el) => sels.map((sel) => el.querySelector(sel)).find((x) => x !== null)?.textContent ?? ""),
+      LABEL_SELECTORS
+    )
+  ).map(normalizeLabel);
   const at = labels.flatMap((l, i) => (l === label ? [i] : []));
   if (at.length !== 1) throw new Refusal(`поле №${n}: на форме найдено полей с этой подписью — ${at.length}, ожидалось одно; ${tail}`);
   const item = items.nth(at[0]);
   if ((await visibleDropdowns(page).count()) !== 0) throw new Refusal(`перед выбором в поле №${n} уже раскрыт другой список; ${tail}`);
   const select = item.locator(SEL_SELECT);
   if ((await select.count()) !== 1) throw new Refusal(`поле №${n}: ожидался ровно один выпадающий список; ${tail}`);
+  // Только для чтения (автозаполнение) или недоступный список не открывается никогда.
+  const locked = await select.evaluate((el) => el.hasAttribute("readonly") || el.classList.contains("is-disabled"));
+  if (locked) throw new Refusal(`поле №${n}: список недоступен для выбора; ${tail}`);
   await select.click();
   try {
     await visibleDropdowns(page).first().waitFor({ state: "visible", timeout: DROPDOWN_WAIT_MS });

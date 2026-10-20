@@ -276,8 +276,8 @@ export function registerElkTools(server: McpServer): void {
     {
       title: "Заказать справку в ЕЛК",
       description:
-        "ЗАПИСЬ в ЕЛК: заказывает справку через форму сервиса (lk.hse.ru, student-service) по serviceId " +
-        "из elk_search_services. fields — словарь «подпись поля формы → точный текст варианта " +
+        "ЗАПИСЬ в ЕЛК: заказывает справку через форму сервиса (lk.hse.ru, student-service) по serviceId — " +
+        "числу components из url результата elk_search_services (не полю id). fields — словарь «подпись поля формы → точный текст варианта " +
         "выпадающего списка». Без confirm — сухой прогон: только чтение, форма открывается без выбора и " +
         "отправки. Первым шагом вызовите его с пустым fields: он откроет форму и вернёт отказ со списком " +
         "обязательных полей и их вариантов (варианты, требующие «дополнительное поле», помечены как не " +
@@ -298,7 +298,7 @@ export function registerElkTools(server: McpServer): void {
         "человека обеспечивает он, а не сервер. Тул доступен только при HSE_ENABLE_WRITES=true. " +
         "Возвращает JSON: stage, outcome, evidence, warnings, sent.",
       inputSchema: {
-        serviceId: z.number().int().positive().describe("id сервиса-справки (из elk_search_services)"),
+        serviceId: z.number().int().positive().describe("Число components из url результата elk_search_services (не поле id)"),
         fields: z
           .record(z.string(), z.string())
           .describe("Подпись поля формы → точный текст варианта выпадающего списка; {} — разведка формы (отказ со списком обязательных полей и вариантов)."),

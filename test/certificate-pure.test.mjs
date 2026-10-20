@@ -54,6 +54,20 @@ test("normalizeLabel: звёздочка, двоеточие и пробелы �
   assert.equal(normalizeLabel("  * Наименование   организации : "), "Наименование организации");
   assert.equal(normalizeLabel("Курс"), "Курс");
   assert.equal(normalizeLabel("*"), "");
+  // Formily: звёздочка отдельным элементом перед подписью — в тексте блока подписи она идёт первой.
+  assert.equal(normalizeLabel("*Формат получения"), "Формат получения");
+  assert.equal(normalizeLabel("* Формат получения"), "Формат получения");
+  assert.equal(normalizeLabel("*  Формат   получения"), "Формат получения");
+});
+
+test("buildCertificateForm: обязательность по звёздочке в начале подписи (разметка Formily)", () => {
+  const items = rawForm().items.map((it) =>
+    it.label.startsWith("Формат") ? { ...it, label: "*Формат получения", requiredMark: false } : it.label.startsWith("Наименование") ? { ...it, label: "*Наименование организации", requiredMark: false } : it
+  );
+  const form = buildCertificateForm(rawForm({ items }));
+  assert.deepEqual(form.fields.filter((f) => f.required).map((f) => f.label), ["Формат получения", "Наименование организации"]);
+  // Ключи fields — обычные подписи, без звёздочки.
+  assert.deepEqual(planCertificate(form, FULL).chosen.map((c) => c.label), ["Формат получения", "Наименование организации"]);
 });
 
 test("checkCertificateArgs: serviceId и fields проверяются до обращения к системе", () => {
