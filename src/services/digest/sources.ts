@@ -1,9 +1,7 @@
-import { config } from "../../config.js";
 import { addDays } from "../../date-utils.js";
 import * as elk from "../elk/client.js";
 import * as lms from "../lms/client.js";
 import type { CourseOverview, LmsActionEvent } from "../lms/client.js";
-import * as ruz from "../ruz/client.js";
 import {
   combineDateAndTime,
   isActualCourse,
@@ -36,7 +34,6 @@ const isoOrUndefined = (text: string): string | undefined => {
 
 export interface Collectors {
   elkSchedule(range: DateRange): Promise<CollectorResult>;
-  ruzSchedule(range: DateRange): Promise<CollectorResult>;
   lmsDeadlines(args: { range: DateRange; now: Date; courses?: CourseFilter }): Promise<CollectorResult>;
   lmsMessages(): Promise<CollectorResult>;
   elkNotifications(): Promise<CollectorResult>;
@@ -65,29 +62,6 @@ async function elkSchedule(range: DateRange): Promise<CollectorResult> {
       });
     }
   }
-  return { items };
-}
-
-// Запасной источник: только когда ЕЛК-расписание не ответило (см. client.ts). Вне сети ВШЭ
-// сам упадёт с понятной ошибкой ruz/client.ts — это тоже статус источника, а не отказ тула.
-async function ruzSchedule(range: DateRange): Promise<CollectorResult> {
-  const info = await ruz.getStudentInfo(config.hseEmail);
-  const lessons = await ruz.getSchedule("student", info.id, range.from, range.to);
-  const items: DigestItem[] = lessons.map((l) => {
-    const start = combineDateAndTime(l.date, l.beginLesson);
-    const end = combineDateAndTime(l.date, l.endLesson);
-    const place = nonEmpty([l.auditorium, l.building]);
-    return {
-      kind: isExamType(l.kindOfWork) ? "exam" : "lesson",
-      when: start ? toLocalIso(start) : null,
-      ...(end ? { until: toLocalIso(end) } : {}),
-      title: l.discipline,
-      ...(place ? { place } : {}),
-      source: "ruz_schedule",
-      ...(l.url1 ? { url: l.url1 } : {}),
-      raw: { lessonType: l.kindOfWork, lecturer: l.lecturer },
-    };
-  });
   return { items };
 }
 
@@ -260,7 +234,6 @@ async function elkWindows(now: Date): Promise<CollectorResult> {
 
 export const realCollectors: Collectors = {
   elkSchedule,
-  ruzSchedule,
   lmsDeadlines,
   lmsMessages,
   elkNotifications,

@@ -1,7 +1,8 @@
 # hsemcp
 
-Локальный MCP-сервер (stdio) для инфраструктуры НИУ ВШЭ: расписание RUZ, SmartLMS (edu.hse.ru),
-Единый личный кабинет (lk.hse.ru).
+Локальный MCP-сервер (stdio) для инфраструктуры НИУ ВШЭ: SmartLMS (edu.hse.ru) и Единый личный
+кабинет (lk.hse.ru). Расписание RUZ (`ruz.hse.ru`) вынесено в отдельный сервер
+[hse-ruz-mcp](https://github.com/ihavealotofguap/hse-ruz-mcp).
 
 ## Дисклеймер
 
@@ -96,9 +97,6 @@ icacls .env /inheritance:r /grant:r "$($env:USERNAME):(F)"
 
 | Модуль | Тул | Описание |
 |---|---|---|
-| RUZ | `ruz_find_person` | Поиск студента/преподавателя/группы/аудитории |
-| RUZ | `ruz_get_my_schedule` | Расписание студента по email |
-| RUZ | `ruz_get_group_schedule` | Расписание группы по id |
 | SmartLMS | `lms_list_courses` | Список курсов |
 | SmartLMS | `lms_get_course_materials` | Элементы курса (файлы, задания, тесты и т.п.) |
 | SmartLMS | `lms_list_assignments` | Задания курса со сроками |
@@ -174,14 +172,13 @@ icacls .env /inheritance:r /grant:r "$($env:USERNAME):(F)"
 
 ## Как это устроено
 
-- **RUZ** — прямые HTTP-запросы к `ruz.hse.ru/api`, без авторизации.
 - **SmartLMS и ЕЛК** — общий Playwright-браузер (`src/auth/browser-session.ts`), который проходит
   единый SSO ВШЭ (Keycloak, `saml.hse.ru`, realm `hse`) и переиспользует сессию между вызовами
   (сохраняется в `storage/hse-session.json`). ЕЛК даёт и JSON API с `Authorization: Bearer
   <access_token>` из localStorage (`elk_get_schedule`, `elk_get_user_info`, `elk_search_services`,
   `elk_list_requests`).
 - **istudy.hse.ru** (зачётка) не поддерживается: тулы `istudy_*` удалены 2026-10-23. Вход проходит без MAX, но данные закрыты двухфакторным подтверждением через MAX (HTTP 412 на `GET /api/auth/two-factor/required` после клика по «Зачетная книжка»), а эндпоинты после 2FA неизвестны; обход 2FA не предусмотрен. Оценки по курсам — `lms_get_grades`.
-- **Сводки** (`my_today`/`my_week`/`my_deadlines`) — агрегируют расписание ЕЛК (РУЗ — запасной),
+- **Сводки** (`my_today`/`my_week`/`my_deadlines`) — агрегируют расписание ЕЛК,
   календарь Moodle, окна и уведомления ЕЛК в один JSON; статус каждого источника — в `sources`,
   отказ одного не роняет сводку. Холодный вызов после
   запуска сервера занимает ≈ 17 с (логин и открытие страниц), затем 3–4 с, повтор из кэша — мгновенно
@@ -213,11 +210,9 @@ icacls .env /inheritance:r /grant:r "$($env:USERNAME):(F)"
 
 ## Известные ограничения
 
-- **RUZ доступен только из внутренней сети ВШЭ** (проверено 15.09.2026): `ruz.hse.ru/api/*`
-  редиректит на страницу с сообщением «Доступ к РУЗ осуществляется только из внутренней сети НИУ
-  ВШЭ» вне Wi-Fi `HSE.Student` / VPN. `ruz_*`-тулы будут работать только пока машина с hsemcp
-  подключена к сети ВШЭ. Вне кампуса используйте `elk_get_schedule` — расписание через
-  API ЕЛК (`lk.hse.ru/api/get-myschedule`), работает из любой сети.
+- **Расписание в сводках — только из ЕЛК**: если ЕЛК не ответил, в `my_*` будет ошибка источника
+  `elk_schedule` без занятий (запасного пути через RUZ больше нет, RUZ — в hse-ruz-mcp и только из
+  сети ВШЭ).
 - **ЕЛК частично разведан вживую (2026-09-15)**: известны разделы `/task`, `/claim` (теперь
   структурированно доступен через `elk_list_requests`), `/service` (поиск — `elk_search_services`),
   `/schedule`, `/student-services`, `/faq`. `/student-services?section=documents` содержит каталог

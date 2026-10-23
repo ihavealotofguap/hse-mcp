@@ -240,7 +240,7 @@ const elkScheduleWeek = defineResource<Date, ElkScheduleDay[]>({
     ),
 });
 
-/** Расписание студента через ЕЛК — работает из любой сети (в отличие от ruz_*). */
+/** Расписание студента через ЕЛК — работает из любой сети (в отличие от RUZ). */
 export async function getSchedule(from: Date, to: Date, opts?: ResourceCallOptions): Promise<ElkScheduleDay[]> {
   if (Number.isNaN(from.getTime()) || Number.isNaN(to.getTime())) {
     throw new Error("Некорректная дата в диапазоне расписания (Invalid Date)");

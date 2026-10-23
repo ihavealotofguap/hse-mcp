@@ -24,7 +24,7 @@ const timeAfter = (m: RegExpMatchArray): Partial<Hit> =>
   m[4] !== undefined ? { hours: +m[4], minutes: +m[5], meridiem: m[6] } : {};
 
 const PATTERNS: Array<{ re: RegExp; read: (m: RegExpMatchArray) => Hit | null }> = [
-  // 2026-10-14, 2026.10.14 (формат РУЗ), 2026-10-14T10:30:00
+  // 2026-10-14, 2026.10.14, 2026-10-14T10:30:00
   {
     re: new RegExp(String.raw`(\d{4})[-.](\d{1,2})[-.](\d{1,2})` + TIME, "gi"),
     read: (m) => ({ ymd: [+m[1], +m[2] - 1, +m[3]], ...timeAfter(m) }),

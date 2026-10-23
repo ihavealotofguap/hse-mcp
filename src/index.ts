@@ -1,6 +1,5 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { registerRuzTools } from "./services/ruz/tools.js";
 import { registerLmsTools } from "./services/lms/tools.js";
 import { registerElkTools } from "./services/elk/tools.js";
 import { registerSystemTools } from "./services/system/tools.js";
@@ -13,7 +12,6 @@ const server = new McpServer({
   version: "0.1.0",
 });
 
-registerRuzTools(server);
 registerLmsTools(server);
 registerElkTools(server);
 registerSystemTools(server);

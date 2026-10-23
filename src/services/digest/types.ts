@@ -27,7 +27,7 @@ export interface DigestItem {
   title: string;
   course?: string;
   place?: string;
-  /** Имя коллектора: elk_schedule, ruz_schedule, lms_deadlines, ... */
+  /** Имя коллектора: elk_schedule, lms_deadlines, ... */
   source: string;
   /** true только для просроченных и несданных работ (в т.ч. когда сдача уже закрыта). */
   overdue?: boolean;

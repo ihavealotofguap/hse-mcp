@@ -7,7 +7,7 @@ const RESULT_NOTE =
   "Возвращает JSON: items — единый список элементов (kind, when, title, course, place, " +
   "overdue, unread, source, ...), отсортированный: просроченные несданные первыми, затем по " +
   "времени, затем без даты; sources — статус каждого источника (ok/error/skipped, текст " +
-  "ошибки, warnings). Если источник недоступен (например, РУЗ вне сети ВШЭ), сводка всё " +
+  "ошибки, warnings). Если источник недоступен (например, ЕЛК не ответил), сводка всё " +
   "равно возвращается — смотрите sources.";
 
 export function registerDigestTools(server: McpServer): void {

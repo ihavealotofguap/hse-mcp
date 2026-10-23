@@ -1,7 +1,7 @@
 {
   "name": "hsemcp",
   "version": "0.1.0",
-  "description": "MCP server for HSE (NIU VShE) student infrastructure: RUZ schedule, SmartLMS, ELK",
+  "description": "MCP server for HSE (NIU VShE) student infrastructure: SmartLMS, ELK",
   "type": "module",
   "license": "MIT",
   "private": true,

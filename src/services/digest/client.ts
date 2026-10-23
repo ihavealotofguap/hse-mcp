@@ -12,7 +12,7 @@ export interface DigestPlan {
   /** Окно, которое покрывает сводка (в `DigestResult.window`). */
   window: DateRange;
   schedule: {
-    /** Что запрашивать у ЕЛК/РУЗ. */
+    /** Что запрашивать у ЕЛК. */
     range: DateRange;
     /** Занятия показывать до этого момента; null — занятия не нужны, только экзамены. */
     lessonsUntil: Date | null;
@@ -61,9 +61,8 @@ function keep(item: DigestItem, plan: DigestPlan): boolean {
 }
 
 /**
- * Собирает сводку: коллекторы идут параллельно, отказ одного не влияет на остальные. РУЗ
- * запрашивается только если упало расписание ЕЛК (иначе в сводке были бы дубли занятий, а вне
- * сети ВШЭ — лишний заведомо неудачный запрос). `src` внедряется для проверки без сети.
+ * Собирает сводку: коллекторы идут параллельно, отказ одного не влияет на остальные.
+ * `src` внедряется для проверки без сети.
  */
 export async function buildDigest(plan: DigestPlan, src: Collectors = realCollectors): Promise<DigestResult> {
   const { now } = plan;
@@ -72,13 +71,7 @@ export async function buildDigest(plan: DigestPlan, src: Collectors = realCollec
   const ifIncluded = <T>(cond: boolean, make: () => Promise<T>): Promise<T[]> =>
     cond ? make().then((r) => [r]) : Promise.resolve([]);
 
-  const scheduleChain = (async (): Promise<SourceRun[]> => {
-    const primary = await run("elk_schedule", () => src.elkSchedule(plan.schedule.range));
-    if (primary.status.status !== "error") {
-      return [primary, { name: "ruz_schedule", items: [], status: { status: "skipped", ms: 0 } }];
-    }
-    return [primary, await run("ruz_schedule", () => src.ruzSchedule(plan.schedule.range))];
-  })();
+  const scheduleChain = run("elk_schedule", () => src.elkSchedule(plan.schedule.range)).then((r) => [r]);
 
   const runs = (
     await Promise.all([
