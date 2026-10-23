@@ -6,7 +6,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 hsemcp — локальный MCP-сервер (stdio) для инфраструктуры НИУ ВШЭ: SmartLMS (edu.hse.ru),
 Единый личный кабинет (lk.hse.ru). RUZ вынесен в отдельный репозиторий `hse-ruz-mcp`
-(2026-10-23) — тулы `ruz_*` и запасной путь RUZ в сводках сюда не возвращать.
+(2026-10-23; github.com/ihavealotofguap/hse-ruz-mcp, npm `hse-ruz-mcp`, реестр MCP) — тулы `ruz_*` и
+запасной путь RUZ в сводках сюда не возвращать.
 
 Корпоративная почта ВШЭ принципиально исключена из проекта по решению владельца: тулов и
 зависимостей для неё не добавлять. Внутренняя почта SmartLMS (`lms_list_messages`,

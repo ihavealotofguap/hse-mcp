@@ -2,7 +2,7 @@
 
 Локальный MCP-сервер (stdio) для инфраструктуры НИУ ВШЭ: SmartLMS (edu.hse.ru) и Единый личный
 кабинет (lk.hse.ru). Расписание RUZ (`ruz.hse.ru`) вынесено в отдельный сервер
-[hse-ruz-mcp](https://github.com/ihavealotofguap/hse-ruz-mcp).
+[hse-ruz-mcp](https://github.com/ihavealotofguap/hse-ruz-mcp) (`claude mcp add hse-ruz-mcp -- npx -y hse-ruz-mcp`).
 
 ## Дисклеймер
 
