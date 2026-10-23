@@ -3,7 +3,6 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { registerRuzTools } from "./services/ruz/tools.js";
 import { registerLmsTools } from "./services/lms/tools.js";
 import { registerElkTools } from "./services/elk/tools.js";
-import { registerIstudyTools } from "./services/istudy/tools.js";
 import { registerSystemTools } from "./services/system/tools.js";
 import { registerDigestTools } from "./services/digest/tools.js";
 import { registerChangesTools } from "./services/changes/tools.js";
@@ -17,7 +16,6 @@ const server = new McpServer({
 registerRuzTools(server);
 registerLmsTools(server);
 registerElkTools(server);
-registerIstudyTools(server);
 registerSystemTools(server);
 registerDigestTools(server);
 registerChangesTools(server);
