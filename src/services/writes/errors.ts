@@ -1,4 +1,5 @@
-import { classifyError } from "./runner.js";
+import type { PageCallContext } from "../../auth/browser-session.js";
+import { type CommitPoint, classifyError } from "./runner.js";
 
 // Ошибки адаптеров записи (общие для LMS и ЕЛК): собственный отказ и обезличивание ошибок Playwright,
 // чтобы в ответ тула не попали URL, имена файлов и id.
@@ -66,4 +67,19 @@ export function sanitizeCommitError(err: unknown): Refusal {
   const clean = new Refusal(text);
   if (name === "AbortError" || name === "TimeoutError") clean.name = name;
   return clean;
+}
+
+/**
+ * Точка невозврата адаптера: `commitPoint` перед необратимым действием. Отказ не проглатывается — он
+ * пробрасывается очищенным (`sanitizeCommitError`), и необратимого действия нет.
+ */
+export async function passCommitPoint(
+  commitPoint: CommitPoint,
+  pageCtx: PageCallContext
+): Promise<void> {
+  try {
+    await commitPoint(pageCtx);
+  } catch (err) {
+    throw sanitizeCommitError(err);
+  }
 }
