@@ -525,6 +525,9 @@ test("config.outboxDir: по умолчанию storage/outbox, HSE_OUTBOX_DIR �
     assert.equal(config.outboxDir, path.join(projectRoot, "storage", "outbox"));
     process.env.HSE_OUTBOX_DIR = "   ";
     assert.equal(config.outboxDir, path.join(projectRoot, "storage", "outbox"));
+    // хост .mcpb не подставил значение пустого поля
+    process.env.HSE_OUTBOX_DIR = `$${"{"}user_config.outbox_dir}`;
+    assert.equal(config.outboxDir, path.join(projectRoot, "storage", "outbox"));
     const abs = path.join(os.tmpdir(), "hsemcp-outbox-abs");
     process.env.HSE_OUTBOX_DIR = abs;
     assert.equal(config.outboxDir, abs);

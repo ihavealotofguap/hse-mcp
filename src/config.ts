@@ -76,7 +76,10 @@ export const config = {
   /** Папка «исходящих»: `HSE_OUTBOX_DIR` (абсолютный путь или относительно корня проекта), иначе `outbox` в каталоге данных. */
   get outboxDir(): string {
     const value = process.env.HSE_OUTBOX_DIR?.trim();
-    return value ? path.resolve(projectRoot, value) : path.join(dataDir(), "outbox");
+    // `${…}` — хост `.mcpb` не подставил значение (поле не заполнено): считаем, что папка не задана.
+    return value && !value.includes("${")
+      ? path.resolve(projectRoot, value)
+      : path.join(dataDir(), "outbox");
   },
   /** Тулы записи — opt-in: включены только при `HSE_ENABLE_WRITES=true` (без учёта регистра и пробелов). */
   get writesEnabled(): boolean {

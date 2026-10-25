@@ -42,7 +42,8 @@
     "credentials:set": "node dist/cli/credentials.js set",
     "credentials:clear": "node dist/cli/credentials.js clear",
     "credentials:status": "node dist/cli/credentials.js status",
-    "prepublishOnly": "npm test"
+    "prepublishOnly": "npm test",
+    "pack:mcpb": "npm run build && node scripts/pack-mcpb.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.12.0",
