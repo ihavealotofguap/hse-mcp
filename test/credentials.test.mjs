@@ -500,13 +500,28 @@ test("restrictDir: на POSIX режим 0o700", (t) => {
 
 test("restrictDir: на Windows новые файлы наследуют единственную запись владельца, доступ сохраняется", (t) => {
   if (!isWin) return t.skip("проверка icacls только для Windows");
-  const dir = path.join(tmpDir(), "storage");
+  // Права родителя задаём сами: storage наследует запись владельца и чтение для группы «Пользователи»
+  // (SID S-1-5-32-545). Иначе результат зависит от временного каталога: на раннерах GitHub у новой
+  // папки явные записи SYSTEM и Administrators, а /inheritance:r снимает только унаследованные.
+  const parent = tmpDir();
+  execFileSync(
+    "icacls",
+    [
+      parent,
+      "/inheritance:r",
+      "/grant:r",
+      `${windowsAccount()}:(OI)(CI)(F)`,
+      "*S-1-5-32-545:(OI)(CI)(RX)",
+    ],
+    { stdio: "ignore" }
+  );
+  const dir = path.join(parent, "storage");
   fs.mkdirSync(dir);
   restrictDir(dir);
   const file = path.join(dir, "new");
   fs.writeFileSync(file, "x");
   const acl = execFileSync("icacls", [file], { encoding: "latin1" });
-  const dirAcl = execFileSync("icacls", [dir], { encoding: "latin1" });
+  const dirAcl = execFileSync("icacls", [parent, dir], { encoding: "latin1" });
   assert.equal(
     (acl.match(/:\(/g) ?? []).length,
     1,
