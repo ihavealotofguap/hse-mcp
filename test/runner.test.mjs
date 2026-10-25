@@ -1,18 +1,24 @@
-import { test } from "node:test";
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { test } from "node:test";
 
 // Ключ и журнал — во временном каталоге; задаётся до импорта модулей.
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), "hsemcp-runner-"));
 process.env.HSE_WRITES_DIR = dir;
 
-const { defineWrite, classifyError, testSeams } = await import(new URL("../dist/services/writes/runner.js", import.meta.url).href);
+const { defineWrite, classifyError, testSeams } = await import(
+  new URL("../dist/services/writes/runner.js", import.meta.url).href
+);
 const { defineResource } = await import(new URL("../dist/resource.js", import.meta.url).href);
-const { loadOrCreateKey, signPreview, targetIdOf } = await import(new URL("../dist/services/writes/token.js", import.meta.url).href);
-const { recordJournal } = await import(new URL("../dist/services/writes/journal.js", import.meta.url).href);
+const { loadOrCreateKey, signPreview, targetIdOf } = await import(
+  new URL("../dist/services/writes/token.js", import.meta.url).href
+);
+const { recordJournal } = await import(
+  new URL("../dist/services/writes/journal.js", import.meta.url).href
+);
 
 test.after(() => {
   fs.rmSync(dir, { recursive: true, force: true });
@@ -73,7 +79,11 @@ function makeFake(op) {
       return { current: system.get(a.id) ?? "" };
     },
     describe: (a, o) => ({ preview: { from: o.current, to: a.value }, warnings: [] }),
-    payloadOf: (a, o) => ({ mode: a.mode ?? "draft", files: [{ name: "answer", sha256: sha(a.value) }], state: o.current }),
+    payloadOf: (a, o) => ({
+      mode: a.mode ?? "draft",
+      files: [{ name: "answer", sha256: sha(a.value) }],
+      state: o.current,
+    }),
     async execute(a, _o, ctx) {
       calls.execute++;
       active++;
@@ -93,14 +103,25 @@ function makeFake(op) {
         if (behavior.workMs) await sleep(behavior.workMs);
         if (behavior.throwAfter) throw new Error("net::ERR_CONNECTION_RESET");
         system.set(a.id, a.value);
-        return behavior.result ?? { stage: "verified", outcome: "confirmed", evidence: { matched: true }, warnings: [] };
+        return (
+          behavior.result ?? {
+            stage: "verified",
+            outcome: "confirmed",
+            evidence: { matched: true },
+            warnings: [],
+          }
+        );
       } finally {
         active--;
       }
     },
     async verifyOnly(a) {
       calls.verifyOnly++;
-      return { outcome: behavior.verifyOutcome, evidence: { matched: system.get(a.id) === a.value }, warnings: [] };
+      return {
+        outcome: behavior.verifyOutcome,
+        evidence: { matched: system.get(a.id) === a.value },
+        warnings: [],
+      };
     },
   };
   return { adapter, system, calls, behavior, write: defineWrite(adapter) };
@@ -133,18 +154,36 @@ test("a. сухой прогон: токен, без execute, журнал пу�
   assert.equal(fakeA.calls.execute, 0);
 
   // изменены данные операции
-  await assert.rejects(fakeA.write({ ...args, value: "другой ответ", confirm: true, previewToken: dry.previewToken }), /ничего не отправлено/);
+  await assert.rejects(
+    fakeA.write({ ...args, value: "другой ответ", confirm: true, previewToken: dry.previewToken }),
+    /ничего не отправлено/
+  );
   // другая цель
-  await assert.rejects(fakeA.write({ ...args, id: "a2", confirm: true, previewToken: dry.previewToken }), /ничего не отправлено/);
+  await assert.rejects(
+    fakeA.write({ ...args, id: "a2", confirm: true, previewToken: dry.previewToken }),
+    /ничего не отправлено/
+  );
   // другой режим
-  await assert.rejects(fakeA.write({ ...args, mode: "submit", confirm: true, previewToken: dry.previewToken }), /ничего не отправлено/);
+  await assert.rejects(
+    fakeA.write({ ...args, mode: "submit", confirm: true, previewToken: dry.previewToken }),
+    /ничего не отправлено/
+  );
   // другая операция с теми же данными
-  await assert.rejects(fakeB.write({ ...args, confirm: true, previewToken: dry.previewToken }), /ничего не отправлено/);
+  await assert.rejects(
+    fakeB.write({ ...args, confirm: true, previewToken: dry.previewToken }),
+    /ничего не отправлено/
+  );
   // повреждённый токен
-  await assert.rejects(fakeA.write({ ...args, confirm: true, previewToken: "abc" }), /ничего не отправлено/);
+  await assert.rejects(
+    fakeA.write({ ...args, confirm: true, previewToken: "abc" }),
+    /ничего не отправлено/
+  );
   // состояние цели изменилось после сухого прогона
   fakeA.system.set("a1", "чужая правка");
-  await assert.rejects(fakeA.write({ ...args, confirm: true, previewToken: dry.previewToken }), /ничего не отправлено/);
+  await assert.rejects(
+    fakeA.write({ ...args, confirm: true, previewToken: dry.previewToken }),
+    /ничего не отправлено/
+  );
   fakeA.system.delete("a1");
 
   assert.equal(fakeA.calls.execute, 0);
@@ -168,7 +207,13 @@ test("b. счастливый путь: confirmed, sent; журнал sending �
   assert.equal(fakeA.system.get("b1"), "ответ-b");
 
   const entries = byToken(dry.previewToken);
-  assert.deepEqual(entries.map((e) => [e.stage, e.outcome]), [["sending", undefined], ["verified", "confirmed"]]);
+  assert.deepEqual(
+    entries.map((e) => [e.stage, e.outcome]),
+    [
+      ["sending", undefined],
+      ["verified", "confirmed"],
+    ]
+  );
   assert.equal(entries[1].op, "test_write_a");
   assert.equal(typeof entries[1].durationMs, "number");
   assert.match(entries[1].targetId, /^[0-9a-f]{12}$/);
@@ -191,9 +236,15 @@ test("c. тот же токен ещё раз — ответ из журнала
   assert.equal(fakeA.calls.verifyOnly, 0);
 
   // использованный токен на другой операции: не повтор и не запись
-  await assert.rejects(fakeB.write({ ...args, confirm: true, previewToken: globalThis.__tokenB }), /ничего не отправлено/);
+  await assert.rejects(
+    fakeB.write({ ...args, confirm: true, previewToken: globalThis.__tokenB }),
+    /ничего не отправлено/
+  );
   // и на другой цели той же операции
-  await assert.rejects(fakeA.write({ ...args, id: "b2", confirm: true, previewToken: globalThis.__tokenB }), /ничего не отправлено/);
+  await assert.rejects(
+    fakeA.write({ ...args, id: "b2", confirm: true, previewToken: globalThis.__tokenB }),
+    /ничего не отправлено/
+  );
   assert.equal(fakeB.calls.execute, 0);
   assert.equal(fakeA.calls.execute, 1);
 });
@@ -212,11 +263,17 @@ test("d. execute бросает после commitPoint → unknown без иск
   assert.equal(res.stage, "sent");
   assert.equal(res.sent, true);
   assert.ok(res.warnings.some((w) => /повторять отправку без проверки запрещено/i.test(w)));
-  assert.ok(!JSON.stringify(res).includes("ERR_CONNECTION_RESET"), "текст ошибки в ответ не попадает");
+  assert.ok(
+    !JSON.stringify(res).includes("ERR_CONNECTION_RESET"),
+    "текст ошибки в ответ не попадает"
+  );
   assert.equal(fake.calls.execute, 1);
 
   let entries = byToken(dry.previewToken);
-  assert.deepEqual(entries.map((e) => e.stage), ["sending", "sent"]);
+  assert.deepEqual(
+    entries.map((e) => e.stage),
+    ["sending", "sent"]
+  );
   assert.equal(entries[1].outcome, "unknown");
   assert.equal(entries[1].errorClass, "network");
 
@@ -242,7 +299,10 @@ test("e. execute бросает до commitPoint → исключение, жу�
   const args = { id: "e1", value: "ответ-e" };
   const dry = await fake.write(args);
   const before = readJournal().length;
-  await assert.rejects(fake.write({ ...args, confirm: true, previewToken: dry.previewToken }), /сбой до точки невозврата; ничего не отправлено/);
+  await assert.rejects(
+    fake.write({ ...args, confirm: true, previewToken: dry.previewToken }),
+    /сбой до точки невозврата; ничего не отправлено/
+  );
   assert.equal(fake.calls.execute, 1);
   assert.equal(readJournal().length, before);
   assert.equal(fake.system.has("e1"), false);
@@ -256,7 +316,10 @@ test("f. отмена до commitPoint → отказ без журнала; о�
   fake.behavior.beforeCommit = () => ctrl1.abort();
   const dry1 = await fake.write(args);
   const before = readJournal().length;
-  await assert.rejects(fake.write({ ...args, confirm: true, previewToken: dry1.previewToken }, ctrl1.signal), /ничего не отправлено/);
+  await assert.rejects(
+    fake.write({ ...args, confirm: true, previewToken: dry1.previewToken }, ctrl1.signal),
+    /ничего не отправлено/
+  );
   await sleep(50);
   assert.equal(readJournal().length, before);
   assert.equal(fake.system.has("f1"), false);
@@ -267,13 +330,22 @@ test("f. отмена до commitPoint → отказ без журнала; о�
   fake.behavior.workMs = 200;
   const dry2 = await fake.write(args);
   const started = Date.now();
-  const res = await fake.write({ ...args, confirm: true, previewToken: dry2.previewToken }, ctrl2.signal);
+  const res = await fake.write(
+    { ...args, confirm: true, previewToken: dry2.previewToken },
+    ctrl2.signal
+  );
   assert.ok(Date.now() - started >= 190);
   assert.equal(res.outcome, "confirmed");
   assert.equal(res.sent, true);
   assert.equal(fake.system.get("f1"), "ответ-f");
   const entries = byToken(dry2.previewToken);
-  assert.deepEqual(entries.map((e) => [e.stage, e.outcome]), [["sending", undefined], ["verified", "confirmed"]]);
+  assert.deepEqual(
+    entries.map((e) => [e.stage, e.outcome]),
+    [
+      ["sending", undefined],
+      ["verified", "confirmed"],
+    ]
+  );
 });
 
 test("g. два параллельных confirm с одним токеном → execute один раз", async () => {
@@ -321,10 +393,18 @@ test("h. после неизвестного исхода: priorUnknown, зап�
   assert.equal(dry.priorUnknown, true);
   assert.ok(dry.warnings.some((w) => /acknowledgeUnknown/.test(w)));
 
-  await assert.rejects(fake.write({ ...args, confirm: true, previewToken: dry.previewToken }), /acknowledgeUnknown: true.*ничего не отправлено/);
+  await assert.rejects(
+    fake.write({ ...args, confirm: true, previewToken: dry.previewToken }),
+    /acknowledgeUnknown: true.*ничего не отправлено/
+  );
   assert.equal(fake.calls.execute, 1);
 
-  const res = await fake.write({ ...args, confirm: true, previewToken: dry.previewToken, acknowledgeUnknown: true });
+  const res = await fake.write({
+    ...args,
+    confirm: true,
+    previewToken: dry.previewToken,
+    acknowledgeUnknown: true,
+  });
   assert.equal(res.outcome, "confirmed");
   assert.equal(fake.calls.execute, 2);
 });
@@ -341,16 +421,27 @@ test("i. просроченный токен → отказ «просрочен
     state: "",
   };
   const old = signPreview(key, payload, new Date(Date.now() - 16 * 60_000));
-  await assert.rejects(fake.write({ ...args, confirm: true, previewToken: old }), /просрочен.*ничего не отправлено/);
+  await assert.rejects(
+    fake.write({ ...args, confirm: true, previewToken: old }),
+    /просрочен.*ничего не отправлено/
+  );
   assert.equal(fake.calls.execute, 0);
   // тот же payload со свежим временем проходит — значит, причина именно в сроке
   const fresh = signPreview(key, payload);
-  assert.equal((await fake.write({ ...args, confirm: true, previewToken: fresh })).outcome, "confirmed");
+  assert.equal(
+    (await fake.write({ ...args, confirm: true, previewToken: fresh })).outcome,
+    "confirmed"
+  );
 });
 
 test("стадия и исход из ExecuteResult передаются как есть; unknown от адаптера несёт запрет повтора", async () => {
   const fake = makeFake("test_write_m");
-  fake.behavior.result = { stage: "draft-saved", outcome: "rejected", evidence: { draft: true }, warnings: ["w1"] };
+  fake.behavior.result = {
+    stage: "draft-saved",
+    outcome: "rejected",
+    evidence: { draft: true },
+    warnings: ["w1"],
+  };
   const a1 = { id: "m1", value: "x" };
   const d1 = await fake.write(a1);
   const r1 = await fake.write({ ...a1, confirm: true, previewToken: d1.previewToken });
@@ -359,7 +450,13 @@ test("стадия и исход из ExecuteResult передаются как 
   assert.equal(r1.sent, true);
   assert.deepEqual(r1.evidence, { draft: true });
   assert.deepEqual(r1.warnings, ["w1"]);
-  assert.deepEqual(byToken(d1.previewToken).map((e) => [e.stage, e.outcome]), [["sending", undefined], ["verified", "rejected"]]);
+  assert.deepEqual(
+    byToken(d1.previewToken).map((e) => [e.stage, e.outcome]),
+    [
+      ["sending", undefined],
+      ["verified", "rejected"],
+    ]
+  );
   // повтор отклонённого из журнала: sent: false
   const r1again = await fake.write({ ...a1, confirm: true, previewToken: d1.previewToken });
   assert.equal(r1again.outcome, "rejected");
@@ -394,8 +491,18 @@ test("j. журнал: только разрешённые ключи, стро�
   const raw = fs.readFileSync(path.join(dir, "journal.json"), "utf8");
   const list = JSON.parse(raw);
   assert.ok(list.length > 0);
-  const allowed = new Set(["at", "op", "tokenId", "targetId", "stage", "outcome", "durationMs", "errorClass"]);
-  for (const e of list) for (const k of Object.keys(e)) assert.ok(allowed.has(k), `лишний ключ ${k}`);
+  const allowed = new Set([
+    "at",
+    "op",
+    "tokenId",
+    "targetId",
+    "stage",
+    "outcome",
+    "durationMs",
+    "errorClass",
+  ]);
+  for (const e of list)
+    for (const k of Object.keys(e)) assert.ok(allowed.has(k), `лишний ключ ${k}`);
   assert.ok(!raw.includes("SECRETTARGET"));
   assert.ok(!raw.includes(TARGET_SECRET));
   assert.ok(!raw.includes("ответ-"));
@@ -418,7 +525,8 @@ test("classifyError", () => {
     ["строка", "other"],
     [undefined, "other"],
   ];
-  for (const [err, expected] of cases) assert.equal(classifyError(err), expected, String(err?.message ?? err));
+  for (const [err, expected] of cases)
+    assert.equal(classifyError(err), expected, String(err?.message ?? err));
 });
 
 // --- Покрытие сбоев журнала, повтора после падения и дедлайна коммита (H1) ---
@@ -441,7 +549,10 @@ test("k. сбой записи `sending` в журнал → отказ до н�
   const dry = await fake.write(args);
   blockJournalWrites();
   try {
-    await assert.rejects(fake.write({ ...args, confirm: true, previewToken: dry.previewToken }), /ничего не отправлено/);
+    await assert.rejects(
+      fake.write({ ...args, confirm: true, previewToken: dry.previewToken }),
+      /ничего не отправлено/
+    );
   } finally {
     unblockJournalWrites();
   }
@@ -453,7 +564,10 @@ test("k. сбой записи `sending` в журнал → отказ до н�
   // журнал цел, токен свободен: тот же токен после починки проходит как первая запись
   const res = await fake.write({ ...args, confirm: true, previewToken: dry.previewToken });
   assert.equal(res.outcome, "confirmed");
-  assert.deepEqual(byToken(dry.previewToken).map((e) => e.stage), ["sending", "verified"]);
+  assert.deepEqual(
+    byToken(dry.previewToken).map((e) => e.stage),
+    ["sending", "verified"]
+  );
 });
 
 test("l. сбой записи `verified` в журнал → исход всё равно возвращается, с предупреждением", async () => {
@@ -469,9 +583,15 @@ test("l. сбой записи `verified` в журнал → исход всё 
   }
   assert.equal(res.outcome, "confirmed");
   assert.equal(res.sent, true);
-  assert.ok(res.warnings.some((w) => /не записан в журнал/.test(w)), JSON.stringify(res.warnings));
+  assert.ok(
+    res.warnings.some((w) => /не записан в журнал/.test(w)),
+    JSON.stringify(res.warnings)
+  );
   assert.equal(fake.system.get("kb1"), "val-kb");
-  assert.deepEqual(byToken(dry.previewToken).map((e) => e.stage), ["sending"]);
+  assert.deepEqual(
+    byToken(dry.previewToken).map((e) => e.stage),
+    ["sending"]
+  );
 });
 
 /** Журнал «упавшего» процесса: токен выпущен, `sending` записан, исхода нет. */
@@ -500,7 +620,13 @@ test("m. повтор, когда последняя запись журнала
   assert.equal(fake.calls.observe, observeBefore);
   assert.equal(res.outcome, "confirmed");
   assert.equal(res.sent, true);
-  assert.deepEqual(byToken(dry.previewToken).map((e) => [e.stage, e.outcome]), [["sending", undefined], ["verified", "confirmed"]]);
+  assert.deepEqual(
+    byToken(dry.previewToken).map((e) => [e.stage, e.outcome]),
+    [
+      ["sending", undefined],
+      ["verified", "confirmed"],
+    ]
+  );
 
   // исход «unknown» от проверки сохраняет запрет автоповтора
   const fake2 = makeFake("test_write_kc2");
@@ -522,7 +648,10 @@ test("n. verifyOnly не вправе возвращать rejected: ранне�
   assert.equal(fake.calls.execute, 0);
   assert.equal(res.outcome, "unknown");
   assert.equal(res.sent, true);
-  assert.ok(res.warnings.some((w) => /verifyOnly/.test(w)), JSON.stringify(res.warnings));
+  assert.ok(
+    res.warnings.some((w) => /verifyOnly/.test(w)),
+    JSON.stringify(res.warnings)
+  );
   assert.ok(res.warnings.some((w) => /повторять отправку без проверки запрещено/i.test(w)));
   assert.deepEqual(byToken(dry.previewToken).at(-1).outcome, "unknown");
 });
@@ -539,7 +668,13 @@ test("o. дедлайн коммита истёк после commitPoint → unk
   assert.equal(res.sent, true);
   assert.deepEqual(res.evidence, { errorClass: "timeout" });
   const entries = byToken(dry.previewToken);
-  assert.deepEqual(entries.map((e) => [e.stage, e.outcome, e.errorClass]), [["sending", undefined, undefined], ["sent", "unknown", "timeout"]]);
+  assert.deepEqual(
+    entries.map((e) => [e.stage, e.outcome, e.errorClass]),
+    [
+      ["sending", undefined, undefined],
+      ["sent", "unknown", "timeout"],
+    ]
+  );
   await sleep(450); // фоновый execute доработает до конца теста
 });
 
@@ -561,7 +696,10 @@ test("p. сухой прогон после записи в ту же секун
   try {
     await sleep(1005 - (Date.now() % 1000)); // начало секунды: запись и повторный прогон укладываются в неё
     const dry1 = await fake.write(args);
-    assert.equal((await fake.write({ ...args, confirm: true, previewToken: dry1.previewToken })).outcome, "confirmed");
+    assert.equal(
+      (await fake.write({ ...args, confirm: true, previewToken: dry1.previewToken })).outcome,
+      "confirmed"
+    );
     fake.system.delete("kp1"); // то же наблюдаемое состояние → тот же payload
     assert.equal(spy.waits.length, 0, "до повторного прогона ожиданий не было");
     const dry2 = await fake.write(args);
@@ -571,7 +709,11 @@ test("p. сухой прогон после записи в ту же секун
     assert.notEqual(dry2.previewToken, dry1.previewToken);
     assert.ok(Number(dry2.previewToken.split(".")[0]) > Number(dry1.previewToken.split(".")[0]));
     // новый токен — это новая запись, а не повтор из журнала
-    assert.equal((await fake.write({ ...args, confirm: true, previewToken: dry2.previewToken })).evidence.fromJournal, undefined);
+    assert.equal(
+      (await fake.write({ ...args, confirm: true, previewToken: dry2.previewToken })).evidence
+        .fromJournal,
+      undefined
+    );
     assert.equal(fake.calls.execute, 2);
   } finally {
     spy.restore();
@@ -593,7 +735,10 @@ test("q. отмена во время ожидания следующей сек
   try {
     await sleep(1005 - (Date.now() % 1000));
     const dry1 = await fake.write(args);
-    assert.equal((await fake.write({ ...args, confirm: true, previewToken: dry1.previewToken })).outcome, "confirmed");
+    assert.equal(
+      (await fake.write({ ...args, confirm: true, previewToken: dry1.previewToken })).outcome,
+      "confirmed"
+    );
     fake.system.delete("kq1");
     const journalBefore = fs.readFileSync(path.join(dir, "journal.json"), "utf8");
     const started = Date.now();
@@ -608,7 +753,9 @@ test("q. отмена во время ожидания следующей сек
 });
 
 test("q2. уже отменённый сигнал: ожидание не стартует ни на миг", async () => {
-  const { abortableSleep } = await import(new URL("../dist/services/writes/runner.js", import.meta.url).href);
+  const { abortableSleep } = await import(
+    new URL("../dist/services/writes/runner.js", import.meta.url).href
+  );
   const ctrl = new AbortController();
   ctrl.abort(new Error("уже отменено"));
   const started = Date.now();
@@ -625,7 +772,11 @@ test("r. commitDeadlineMs шва ограничен конечным полож�
     const args = { id: `kr${i}`, value: "val-kr" };
     const dry = await fake.write(args);
     const res = await fake.write({ ...args, confirm: true, previewToken: dry.previewToken });
-    assert.equal(res.outcome, "confirmed", `commitDeadlineMs=${String(bad)}: ${JSON.stringify(res)}`);
+    assert.equal(
+      res.outcome,
+      "confirmed",
+      `commitDeadlineMs=${String(bad)}: ${JSON.stringify(res)}`
+    );
     assert.equal(res.sent, true);
   }
 });
@@ -656,12 +807,22 @@ test("M1a. токен уже записан в журнал другим про�
     fake.behavior.beforeCommit = () => {
       fs.writeFileSync(
         path.join(d, "journal.json"),
-        JSON.stringify([{ at: new Date().toISOString(), op: "test_write_m1a", tokenId: tokenIdOf(dry.previewToken), targetId: "000000000000", stage: "sending" }])
+        JSON.stringify([
+          {
+            at: new Date().toISOString(),
+            op: "test_write_m1a",
+            tokenId: tokenIdOf(dry.previewToken),
+            targetId: "000000000000",
+            stage: "sending",
+          },
+        ])
       );
     };
     await assert.rejects(
       fake.write({ ...args, confirm: true, previewToken: dry.previewToken }),
-      (err) => /этот previewToken уже использован; запись не выполнена/.test(err.message) && !err.message.includes(tokenIdOf(dry.previewToken))
+      (err) =>
+        /этот previewToken уже использован; запись не выполнена/.test(err.message) &&
+        !err.message.includes(tokenIdOf(dry.previewToken))
     );
     assert.equal(fake.system.has("s1"), false, "запись в систему не дошла");
     assert.equal(readJournalIn(d).length, 1, "второй sending не добавлен");
@@ -702,13 +863,18 @@ test("M2. ошибки файловой системы раннера: в тек
     fs.writeFileSync(blocker, "x");
     process.env.HSE_WRITES_DIR = path.join(blocker, "sub");
     await assert.rejects(fake.write(args), (err) => noPaths(err, d));
-    await assert.rejects(fake.write({ ...args, confirm: true, previewToken: "1.abc" }), (err) => noPaths(err, d));
+    await assert.rejects(fake.write({ ...args, confirm: true, previewToken: "1.abc" }), (err) =>
+      noPaths(err, d)
+    );
   });
   // Журнал: journal.json — каталог (чтение даёт EISDIR с путём).
   await withWritesDir(async (d) => {
     const dry = await fake.write(args);
     fs.mkdirSync(path.join(d, "journal.json"));
-    await assert.rejects(fake.write({ ...args, confirm: true, previewToken: dry.previewToken }), (err) => noPaths(err, d));
+    await assert.rejects(
+      fake.write({ ...args, confirm: true, previewToken: dry.previewToken }),
+      (err) => noPaths(err, d)
+    );
     await assert.rejects(fake.write(args), (err) => noPaths(err, d));
   });
 });
@@ -719,7 +885,10 @@ test("M4. предупреждения адаптера для unknown идут 
     assert.equal(res.outcome, "unknown");
     assert.equal(res.warnings[0], LEAD, "первое предупреждение — адаптера");
     assert.equal(res.warnings.filter((w) => w === LEAD).length, 1, "без дублей");
-    assert.ok(res.warnings.some((w) => /повторять отправку без проверки запрещено/i.test(w)), "общее предупреждение раннера тоже есть");
+    assert.ok(
+      res.warnings.some((w) => /повторять отправку без проверки запрещено/i.test(w)),
+      "общее предупреждение раннера тоже есть"
+    );
   };
 
   // Сбой execute после точки невозврата.

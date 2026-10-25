@@ -1,4 +1,5 @@
 import type { SourceStatus } from "../../run-source.js";
+
 export type { SourceStatus };
 
 /** Тип элемента сводки. */

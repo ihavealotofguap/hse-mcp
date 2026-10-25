@@ -19,7 +19,7 @@ const SOURCE_SCOPE: Readonly<Record<string, Scope>> = {
 export function scopeOfSource(source: string): Scope | null {
   if (source === "lms_courses" || source.startsWith("lms_grades:")) return "grades";
   // Собственные ключи: `toString`/`constructor` не должны находиться через прототип.
-  return Object.prototype.hasOwnProperty.call(SOURCE_SCOPE, source) ? SOURCE_SCOPE[source] : null;
+  return Object.hasOwn(SOURCE_SCOPE, source) ? SOURCE_SCOPE[source] : null;
 }
 
 /** Нормализованный отслеживаемый факт. В `attrs` — только поля, изменение которых есть событие. */

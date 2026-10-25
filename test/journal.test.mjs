@@ -1,16 +1,20 @@
-import { test } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { test } from "node:test";
 
 // Каталог журнала — временный; задаётся до импорта модуля.
 const base = fs.mkdtempSync(path.join(os.tmpdir(), "hsemcp-journal-"));
 process.env.HSE_WRITES_DIR = path.join(base, "default");
 
-const { recordJournal, latestByToken, findUnresolvedByTarget, JOURNAL_MAX_AGE_MS, JOURNAL_MAX_ENTRIES } = await import(
-  new URL("../dist/services/writes/journal.js", import.meta.url).href
-);
+const {
+  recordJournal,
+  latestByToken,
+  findUnresolvedByTarget,
+  JOURNAL_MAX_AGE_MS,
+  JOURNAL_MAX_ENTRIES,
+} = await import(new URL("../dist/services/writes/journal.js", import.meta.url).href);
 
 let counter = 0;
 function tmpDir() {
@@ -59,12 +63,21 @@ test("findUnresolvedByTarget: sending без исхода и verified/unknown е
   await recordJournal(entry({ tokenId: "t1t1t1t1t1t1", stage: "sending" }), dir);
   // t2: sending -> verified/unknown
   await recordJournal(entry({ tokenId: "t2t2t2t2t2t2", stage: "sending" }), dir);
-  await recordJournal(entry({ tokenId: "t2t2t2t2t2t2", stage: "verified", outcome: "unknown" }), dir);
+  await recordJournal(
+    entry({ tokenId: "t2t2t2t2t2t2", stage: "verified", outcome: "unknown" }),
+    dir
+  );
   // t3: sending -> verified/confirmed
   await recordJournal(entry({ tokenId: "t3t3t3t3t3t3", stage: "sending" }), dir);
-  await recordJournal(entry({ tokenId: "t3t3t3t3t3t3", stage: "verified", outcome: "confirmed" }), dir);
+  await recordJournal(
+    entry({ tokenId: "t3t3t3t3t3t3", stage: "verified", outcome: "confirmed" }),
+    dir
+  );
   // t4: другая цель, не разрешена
-  await recordJournal(entry({ tokenId: "t4t4t4t4t4t4", targetId: "dddddddddddd", stage: "sent" }), dir);
+  await recordJournal(
+    entry({ tokenId: "t4t4t4t4t4t4", targetId: "dddddddddddd", stage: "sent" }),
+    dir
+  );
 
   const found = await findUnresolvedByTarget("bbbbbbbbbbbb", dir);
   assert.deepEqual(found.map((e) => e.tokenId).sort(), ["t1t1t1t1t1t1", "t2t2t2t2t2t2"]);
@@ -72,9 +85,15 @@ test("findUnresolvedByTarget: sending без исхода и verified/unknown е
   assert.equal(found.find((e) => e.tokenId === "t2t2t2t2t2t2").stage, "verified");
 
   const except = await findUnresolvedByTarget("bbbbbbbbbbbb", dir, "t1t1t1t1t1t1");
-  assert.deepEqual(except.map((e) => e.tokenId), ["t2t2t2t2t2t2"]);
+  assert.deepEqual(
+    except.map((e) => e.tokenId),
+    ["t2t2t2t2t2t2"]
+  );
 
-  assert.deepEqual((await findUnresolvedByTarget("dddddddddddd", dir)).map((e) => e.tokenId), ["t4t4t4t4t4t4"]);
+  assert.deepEqual(
+    (await findUnresolvedByTarget("dddddddddddd", dir)).map((e) => e.tokenId),
+    ["t4t4t4t4t4t4"]
+  );
   assert.deepEqual(await findUnresolvedByTarget("eeeeeeeeeeee", dir), []);
 });
 
@@ -98,7 +117,11 @@ test("запись старше 90 дней срезается (по парам�
   await recordJournal(entry({ at: old, tokenId: "oldoldoldold" }), dir, now);
   assert.equal(await latestByToken("oldoldoldold", dir), undefined);
   // ранее записанная запись срезается позднейшей записью
-  await recordJournal(entry({ at: old, tokenId: "oldoldoldold" }), dir, new Date(now.getTime() - 91 * 86_400_000));
+  await recordJournal(
+    entry({ at: old, tokenId: "oldoldoldold" }),
+    dir,
+    new Date(now.getTime() - 91 * 86_400_000)
+  );
   await recordJournal(entry({ at: fresh, tokenId: "freshfreshfr" }), dir, now);
   const ids = readJournal(dir).map((e) => e.tokenId);
   assert.deepEqual(ids, ["freshfreshfr"]);
@@ -107,14 +130,32 @@ test("запись старше 90 дней срезается (по парам�
 test("лишние поля в файл не попадают", async () => {
   const dir = tmpDir();
   await recordJournal(
-    entry({ stage: "verified", outcome: "rejected", durationMs: 5, errorClass: "validation", text: "секрет", name: "file.pdf", courseId: 42 }),
+    entry({
+      stage: "verified",
+      outcome: "rejected",
+      durationMs: 5,
+      errorClass: "validation",
+      text: "секрет",
+      name: "file.pdf",
+      courseId: 42,
+    }),
     dir
   );
   await recordJournal(entry({ tokenId: "zzzzzzzzzzzz", text: "секрет", name: "file.pdf" }), dir);
-  const allowed = new Set(["at", "op", "tokenId", "targetId", "stage", "outcome", "durationMs", "errorClass"]);
+  const allowed = new Set([
+    "at",
+    "op",
+    "tokenId",
+    "targetId",
+    "stage",
+    "outcome",
+    "durationMs",
+    "errorClass",
+  ]);
   const list = readJournal(dir);
   assert.equal(list.length, 2);
-  for (const e of list) for (const k of Object.keys(e)) assert.ok(allowed.has(k), `лишний ключ ${k}`);
+  for (const e of list)
+    for (const k of Object.keys(e)) assert.ok(allowed.has(k), `лишний ключ ${k}`);
   assert.equal(list[0].errorClass, "validation");
   const raw = fs.readFileSync(path.join(dir, "journal.json"), "utf8");
   assert.ok(!raw.includes("секрет") && !raw.includes("file.pdf"));
@@ -122,16 +163,26 @@ test("лишние поля в файл не попадают", async () => {
 
 test("10 параллельных recordJournal: 10 записей, файл валиден", async () => {
   const dir = tmpDir();
-  await Promise.all(Array.from({ length: 10 }, (_, i) => recordJournal(entry({ tokenId: String(i).padStart(12, "0") }), dir)));
+  await Promise.all(
+    Array.from({ length: 10 }, (_, i) =>
+      recordJournal(entry({ tokenId: String(i).padStart(12, "0") }), dir)
+    )
+  );
   const list = readJournal(dir);
   assert.equal(list.length, 10);
   assert.equal(new Set(list.map((e) => e.tokenId)).size, 10);
-  assert.deepEqual(fs.readdirSync(dir).filter((n) => n.endsWith(".tmp") || n.endsWith(".lock")), []);
+  assert.deepEqual(
+    fs.readdirSync(dir).filter((n) => n.endsWith(".tmp") || n.endsWith(".lock")),
+    []
+  );
 });
 
 test("карантин: journal.json присутствует всегда — безблокировочный читатель во время записи не видит пустой журнал", async () => {
   const dir = tmpDir();
-  const original = JSON.stringify([entry({ tokenId: "keepkeepkeep", stage: "sending" }), { at: 5, tokenId: "x" }]);
+  const original = JSON.stringify([
+    entry({ tokenId: "keepkeepkeep", stage: "sending" }),
+    { at: 5, tokenId: "x" },
+  ]);
   const file = path.join(dir, "journal.json");
   fs.writeFileSync(file, original);
 
@@ -169,7 +220,10 @@ test("карантин: journal.json присутствует всегда — �
   const corrupt = fs.readdirSync(dir).filter((n) => /^journal\.json\.corrupt-\d+/.test(n));
   assert.equal(corrupt.length, 1);
   assert.equal(fs.readFileSync(path.join(dir, corrupt[0]), "utf8"), original);
-  assert.deepEqual(readJournal(dir).map((e) => e.tokenId), ["keepkeepkeep", "newnewnewnew"]);
+  assert.deepEqual(
+    readJournal(dir).map((e) => e.tokenId),
+    ["keepkeepkeep", "newnewnewnew"]
+  );
 });
 
 test("карантин не затирает существующий .corrupt-<ts>: второй вынос получает другое имя", async () => {
@@ -191,7 +245,10 @@ test("карантин не затирает существующий .corrupt-<
   }
   const all = fs.readdirSync(dir).filter((n) => /^journal\.json\.corrupt-/.test(n));
   assert.equal(all.length, 2);
-  assert.deepEqual(all.map((n) => fs.readFileSync(path.join(dir, n), "utf8")).sort(), [bad1, bad2].sort());
+  assert.deepEqual(
+    all.map((n) => fs.readFileSync(path.join(dir, n), "utf8")).sort(),
+    [bad1, bad2].sort()
+  );
 });
 
 test("повреждённый JSON: не падает, журнал начинается заново, оригинал сохранён копией в .corrupt-<ts>", async () => {
@@ -215,7 +272,11 @@ test("повреждённый журнал при чтении: пусто, б�
 
 test("чтение — белый список полей: лишние поля из правленого вручную файла не всплывают и не переписываются", async () => {
   const dir = tmpDir();
-  const seeded = { ...entry({ tokenId: "seedseedseed", stage: "verified", outcome: "confirmed" }), text: "секрет", name: "file.pdf" };
+  const seeded = {
+    ...entry({ tokenId: "seedseedseed", stage: "verified", outcome: "confirmed" }),
+    text: "секрет",
+    name: "file.pdf",
+  };
   fs.writeFileSync(path.join(dir, "journal.json"), JSON.stringify([seeded]));
   const last = await latestByToken("seedseedseed", dir);
   assert.equal(last.stage, "verified");
@@ -226,50 +287,77 @@ test("чтение — белый список полей: лишние поля
   const raw = fs.readFileSync(path.join(dir, "journal.json"), "utf8");
   assert.ok(!raw.includes("секрет") && !raw.includes("file.pdf"));
   assert.equal(readJournal(dir).length, 2);
-  assert.deepEqual(fs.readdirSync(dir).filter((n) => n.includes(".corrupt-")), []);
+  assert.deepEqual(
+    fs.readdirSync(dir).filter((n) => n.includes(".corrupt-")),
+    []
+  );
 });
 
 test("валидный массив с невалидными элементами: чтение их игнорирует, запись уводит оригинал в .corrupt-<ts>", async () => {
   const dir = tmpDir();
   const good = entry({ tokenId: "goodgoodgood" });
-  const original = JSON.stringify([good, { at: 5, tokenId: "x" }, "строка", null, { at: new Date().toISOString() }]);
+  const original = JSON.stringify([
+    good,
+    { at: 5, tokenId: "x" },
+    "строка",
+    null,
+    { at: new Date().toISOString() },
+  ]);
   fs.writeFileSync(path.join(dir, "journal.json"), original);
   // чтение: игнор плохих элементов, файл не трогается
   assert.equal((await latestByToken("goodgoodgood", dir)).tokenId, "goodgoodgood");
   assert.equal(fs.readFileSync(path.join(dir, "journal.json"), "utf8"), original);
-  assert.deepEqual(fs.readdirSync(dir).filter((n) => n.includes(".corrupt-")), []);
+  assert.deepEqual(
+    fs.readdirSync(dir).filter((n) => n.includes(".corrupt-")),
+    []
+  );
   // запись: оригинал в карантине, в новом журнале валидная запись и новая
   await recordJournal(entry({ tokenId: "newnewnewnew", stage: "verified" }), dir);
   const corrupt = fs.readdirSync(dir).filter((n) => /^journal\.json\.corrupt-\d+/.test(n));
   assert.equal(corrupt.length, 1);
   assert.equal(fs.readFileSync(path.join(dir, corrupt[0]), "utf8"), original);
-  assert.deepEqual(readJournal(dir).map((e) => e.tokenId), ["goodgoodgood", "newnewnewnew"]);
+  assert.deepEqual(
+    readJournal(dir).map((e) => e.tokenId),
+    ["goodgoodgood", "newnewnewnew"]
+  );
 });
 
 const REUSED = /^Error: этот previewToken уже использован; запись не выполнена$/;
-const CORRUPT = /^Error: журнал записей повреждён; запись не выполнена — восстановите или удалите storage\/writes\/journal\.json вручную после проверки сайта$/;
+const CORRUPT =
+  /^Error: журнал записей повреждён; запись не выполнена — восстановите или удалите storage\/writes\/journal\.json вручную после проверки сайта$/;
 
 test("sending с уже известным tokenId отклоняется под lock-файлом; другие стадии того же токена и другие токены пишутся", async () => {
   const dir = tmpDir();
   await recordJournal(entry({ tokenId: "usedusedused" }), dir);
   await assert.rejects(() => recordJournal(entry({ tokenId: "usedusedused" }), dir), REUSED);
   // Токен с исходом (verified) тоже использован.
-  await recordJournal(entry({ tokenId: "doneddonedd", stage: "verified", outcome: "confirmed" }), dir);
+  await recordJournal(
+    entry({ tokenId: "doneddonedd", stage: "verified", outcome: "confirmed" }),
+    dir
+  );
   await assert.rejects(() => recordJournal(entry({ tokenId: "doneddonedd" }), dir), REUSED);
   // Исход и повторные стадии того же токена — после точки невозврата, как и раньше.
-  await recordJournal(entry({ tokenId: "usedusedused", stage: "verified", outcome: "unknown" }), dir);
+  await recordJournal(
+    entry({ tokenId: "usedusedused", stage: "verified", outcome: "unknown" }),
+    dir
+  );
   await recordJournal(entry({ tokenId: "othertokenxx" }), dir);
-  assert.deepEqual(readJournal(dir).map((e) => [e.tokenId, e.stage]), [
-    ["usedusedused", "sending"],
-    ["doneddonedd", "verified"],
-    ["usedusedused", "verified"],
-    ["othertokenxx", "sending"],
-  ]);
+  assert.deepEqual(
+    readJournal(dir).map((e) => [e.tokenId, e.stage]),
+    [
+      ["usedusedused", "sending"],
+      ["doneddonedd", "verified"],
+      ["usedusedused", "verified"],
+      ["othertokenxx", "sending"],
+    ]
+  );
 });
 
 test("параллельные sending одного токена: записан ровно один, остальные отклонены без id в тексте", async () => {
   const dir = tmpDir();
-  const results = await Promise.allSettled(Array.from({ length: 5 }, () => recordJournal(entry({ tokenId: "racerracerrr" }), dir)));
+  const results = await Promise.allSettled(
+    Array.from({ length: 5 }, () => recordJournal(entry({ tokenId: "racerracerrr" }), dir))
+  );
   assert.equal(results.filter((r) => r.status === "fulfilled").length, 1);
   for (const r of results.filter((x) => x.status === "rejected")) {
     assert.match(String(r.reason), REUSED);
@@ -282,18 +370,27 @@ for (const [what, content] of [
   ["не JSON", "{ не json"],
   ["обрыв массива", "[1, "],
   ["не массив", '{"a":1}'],
-  ["массив с невалидным элементом", JSON.stringify([entry({ tokenId: "goodgoodgood" }), { at: 5 }])],
+  [
+    "массив с невалидным элементом",
+    JSON.stringify([entry({ tokenId: "goodgoodgood" }), { at: 5 }]),
+  ],
 ]) {
   test(`повреждённый журнал (${what}): строгие чтения и sending отказывают, лёгкие чтения и исход — как раньше`, async () => {
     const dir = tmpDir();
     const file = path.join(dir, "journal.json");
     fs.writeFileSync(file, content);
     await assert.rejects(() => latestByToken("goodgoodgood", dir, true), CORRUPT);
-    await assert.rejects(() => findUnresolvedByTarget("bbbbbbbbbbbb", dir, undefined, true), CORRUPT);
+    await assert.rejects(
+      () => findUnresolvedByTarget("bbbbbbbbbbbb", dir, undefined, true),
+      CORRUPT
+    );
     await assert.rejects(() => recordJournal(entry({ tokenId: "newnewnewnew" }), dir), CORRUPT);
     // Файл не тронут, карантина нет.
     assert.equal(fs.readFileSync(file, "utf8"), content);
-    assert.deepEqual(fs.readdirSync(dir).filter((n) => n.includes(".corrupt-")), []);
+    assert.deepEqual(
+      fs.readdirSync(dir).filter((n) => n.includes(".corrupt-")),
+      []
+    );
     // Нестрогие чтения (сухой прогон) работают как раньше.
     await latestByToken("goodgoodgood", dir);
     assert.deepEqual(await findUnresolvedByTarget("zzzzzzzzzzzz", dir), []);

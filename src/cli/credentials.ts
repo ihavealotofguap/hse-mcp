@@ -3,8 +3,8 @@ import { pathToFileURL } from "node:url";
 import {
   DOTENV_PASSWORD_WARNING,
   dotenvPermissionWarning,
-  lookupPassword,
   type KeyStore,
+  lookupPassword,
 } from "../credentials.js";
 
 /** Всё, что нужно командам; внедряется, чтобы проверять без настоящего хранилища и терминала. */
@@ -27,7 +27,9 @@ const USAGE = "Использование: npm run credentials:set | credentials
 // Сообщения об ошибках хранилища нарочно не выводим: в них могут оказаться учётная запись или значение.
 async function setPassword(deps: CliDeps): Promise<number> {
   if (!deps.store) {
-    deps.err("системное хранилище недоступно (пакет не установлен или служба не отвечает); пароль можно задать в .env");
+    deps.err(
+      "системное хранилище недоступно (пакет не установлен или служба не отвечает); пароль можно задать в .env"
+    );
     return 1;
   }
   const email = (deps.email ?? (await deps.readLine("Email (логин ВШЭ): "))).trim();
@@ -66,7 +68,11 @@ async function clearPassword(deps: CliDeps): Promise<number> {
     return 1;
   }
   try {
-    deps.out(deps.store.deletePassword(email) ? "запись удалена из системного хранилища" : "записи в системном хранилище не было");
+    deps.out(
+      deps.store.deletePassword(email)
+        ? "запись удалена из системного хранилища"
+        : "записи в системном хранилище не было"
+    );
     return 0;
   } catch {
     deps.err("не удалось удалить запись из системного хранилища");
@@ -76,7 +82,12 @@ async function clearPassword(deps: CliDeps): Promise<number> {
 
 /** Только источник пароля (`env`/`keychain`/`dotenv`/`none`); ни значений, ни email. */
 function status(deps: CliDeps): number {
-  const { source } = lookupPassword({ env: deps.env, dotenv: deps.dotenv, account: deps.email ?? "", store: deps.store });
+  const { source } = lookupPassword({
+    env: deps.env,
+    dotenv: deps.dotenv,
+    account: deps.email ?? "",
+    store: deps.store,
+  });
   deps.out(`источник пароля: ${source}`);
   if (source === "dotenv") {
     deps.err(DOTENV_PASSWORD_WARNING);
@@ -108,7 +119,10 @@ export interface LineReader {
 }
 
 /** Читает строки из `input`; конец потока (с последней строкой без перевода строки или без неё) — пустая строка. */
-export function createLineReader(input: NodeJS.ReadableStream, output: NodeJS.WritableStream): LineReader {
+export function createLineReader(
+  input: NodeJS.ReadableStream,
+  output: NodeJS.WritableStream
+): LineReader {
   const rl = readline.createInterface({ input, terminal: false });
   const buffered: string[] = [];
   const waiting: Array<(line: string) => void> = [];
@@ -161,8 +175,14 @@ export function readSecretFrom(
     };
     const onData = (chunk: Buffer): void => {
       for (const ch of chunk.toString("utf8")) {
-        if (ch === "\r" || ch === "\n") return finish(() => resolve(value));
-        if (ch === "\u0003") return finish(() => reject(new Error("прервано")));
+        if (ch === "\r" || ch === "\n") {
+          finish(() => resolve(value));
+          return;
+        }
+        if (ch === "\u0003") {
+          finish(() => reject(new Error("прервано")));
+          return;
+        }
         if (ch === "\u007f" || ch === "\b") value = value.slice(0, -1);
         else if (ch >= " ") value += ch;
       }
@@ -184,7 +204,10 @@ export function createStdinIo(
 ): { readLine(prompt: string): Promise<string>; readSecret(prompt: string): Promise<string> } {
   let shared: LineReader | null = null;
   const lazyShared: LineReader = {
-    readLine: (prompt) => (shared ??= createLineReader(input, output)).readLine(prompt),
+    readLine: (prompt) => {
+      shared ??= createLineReader(input, output);
+      return shared.readLine(prompt);
+    },
     close: () => shared?.close(),
   };
   return {

@@ -55,7 +55,9 @@ export function isEmptyGrade(value: string | null | undefined): boolean {
 }
 
 /** Канонический вид `attrs`: ключи по алфавиту, значения нормализованы; пустые значения отброшены (нет ключа = null). */
-export function canonicalAttrs(attrs: Record<string, string | null | undefined>): Record<string, string> {
+export function canonicalAttrs(
+  attrs: Record<string, string | null | undefined>
+): Record<string, string> {
   const out: Record<string, string> = {};
   for (const key of Object.keys(attrs).sort()) {
     const value = normOrNull(attrs[key]);

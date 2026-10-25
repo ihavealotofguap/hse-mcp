@@ -64,7 +64,12 @@ function evictIfNeeded(): void {
  * Возвращает свежую запись из кэша или вычисляет через `fn`. Параллельные вызовы с одним ключом
  * делят одно вычисление (если оно не старше `maxAgeMs`). Ошибки не кэшируются.
  */
-export function cached<T>(key: string, ttlMs: number, fn: () => Promise<T>, opts: CachedOptions = {}): Promise<T> {
+export function cached<T>(
+  key: string,
+  ttlMs: number,
+  fn: () => Promise<T>,
+  opts: CachedOptions = {}
+): Promise<T> {
   const now = Date.now();
   const maxAge = opts.maxAgeMs;
 

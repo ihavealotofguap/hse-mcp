@@ -1,5 +1,5 @@
-import { test } from "node:test";
 import assert from "node:assert/strict";
+import { test } from "node:test";
 
 const { defineResource } = await import(new URL("../dist/resource.js", import.meta.url).href);
 
@@ -17,7 +17,13 @@ function counting(fn = async () => ({ v: 1 })) {
 
 test("неизвестное имя в invalidates отклоняет вызов до load", async () => {
   const load = counting();
-  const call = defineResource({ name: "t.a", ttl: 1000, key: () => "k", load, invalidates: ["no.such"] });
+  const call = defineResource({
+    name: "t.a",
+    ttl: 1000,
+    key: () => "k",
+    load,
+    invalidates: ["no.such"],
+  });
   await assert.rejects(call(undefined), /invalidateResource: неизвестный ресурс "no\.such"/);
   assert.equal(load.calls, 0);
 });
@@ -93,7 +99,10 @@ test("commit(50) заменяет дедлайн: работа 200 мс откл
       return 1;
     },
   });
-  await assert.rejects(call(undefined), /t\.commitdeadline не уложился в 0\.05 с после точки невозврата/);
+  await assert.rejects(
+    call(undefined),
+    /t\.commitdeadline не уложился в 0\.05 с после точки невозврата/
+  );
   assert.equal(signal.aborted, true);
 });
 
@@ -121,7 +130,10 @@ test("без commit() действует deadlineMs: работа 200 мс от�
       return 1;
     },
   });
-  await assert.rejects(call(undefined), (e) => /не уложился/.test(e.message) && !/точки невозврата/.test(e.message));
+  await assert.rejects(
+    call(undefined),
+    (e) => /не уложился/.test(e.message) && !/точки невозврата/.test(e.message)
+  );
 });
 
 test("abort вызывающего после commit() не прерывает вызов", async () => {
@@ -277,7 +289,12 @@ test("повторный commit() заново взводит дедлайн", a
 
 test("cache:false: неизвестное имя в invalidates отклоняет вызов до load", async () => {
   const load = counting();
-  const call = defineResource({ name: "t.nocacheunknown", cache: false, load, invalidates: ["no.such"] });
+  const call = defineResource({
+    name: "t.nocacheunknown",
+    cache: false,
+    load,
+    invalidates: ["no.such"],
+  });
   await assert.rejects(call(undefined), /invalidateResource: неизвестный ресурс "no\.such"/);
   assert.equal(load.calls, 0);
 });
@@ -318,8 +335,25 @@ async function withRejectionSpy(fn) {
 
 test("abort вызывающего синхронно внутри load (до первого await): отказ без unhandledRejection", async () => {
   const variants = {
-    "cache:false": (ctrl) => defineResource({ name: "t.syncabort1", cache: false, load: (_a, _ctx) => (ctrl.abort(new Error("отменено")), Promise.reject(new Error("после отмены"))) }),
-    "кэшируемый": (ctrl) => defineResource({ name: "t.syncabort2", ttl: 1000, key: () => "k", load: (_a, _ctx) => (ctrl.abort(new Error("отменено")), Promise.reject(new Error("после отмены"))) }),
+    "cache:false": (ctrl) =>
+      defineResource({
+        name: "t.syncabort1",
+        cache: false,
+        load: (_a, _ctx) => {
+          ctrl.abort(new Error("отменено"));
+          return Promise.reject(new Error("после отмены"));
+        },
+      }),
+    кэшируемый: (ctrl) =>
+      defineResource({
+        name: "t.syncabort2",
+        ttl: 1000,
+        key: () => "k",
+        load: (_a, _ctx) => {
+          ctrl.abort(new Error("отменено"));
+          return Promise.reject(new Error("после отмены"));
+        },
+      }),
   };
   for (const [label, make] of Object.entries(variants)) {
     const ctrl = new AbortController();

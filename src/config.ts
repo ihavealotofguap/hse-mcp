@@ -1,7 +1,7 @@
 import path from "node:path";
 import {
-  DOTENV_PASSWORD_WARNING,
   captureCredentialInputs,
+  DOTENV_PASSWORD_WARNING,
   dotenvPermissionWarning,
   loadKeyStore,
   lookupPassword,

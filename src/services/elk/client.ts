@@ -2,15 +2,19 @@ import { getApiRequestContext, withPage } from "../../auth/browser-session.js";
 import { createBreaker } from "../../breaker.js";
 import { TTL } from "../../cache.js";
 import { config } from "../../config.js";
-import { dumpPage, extractTable, type PageDump } from "../../dom-utils.js";
 import { addDays, formatLocalDate } from "../../date-utils.js";
+import { dumpPage, extractTable, type PageDump } from "../../dom-utils.js";
 import { acquireRequestTurn } from "../../limiter.js";
 import { defineResource, type LoadContext, type ResourceCallOptions } from "../../resource.js";
 import { assertReadOnlyPath, resolveScopedUrl } from "../../url-utils.js";
 
 const BASE_URL = "https://lk.hse.ru";
 
-const stripHtmlElk = (s: string) => s.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
+const stripHtmlElk = (s: string) =>
+  s
+    .replace(/<[^>]+>/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
 
 /**
  * Единый личный кабинет / SmartPoint (lk.hse.ru). Разведано вживую 2026-09-15:
@@ -53,7 +57,9 @@ export function tokenExpiryMs(token: string): number | null {
   try {
     const payload = token.split(".")[1];
     if (!payload) return null;
-    const json = JSON.parse(Buffer.from(payload, "base64url").toString("utf8")) as { exp?: unknown };
+    const json = JSON.parse(Buffer.from(payload, "base64url").toString("utf8")) as {
+      exp?: unknown;
+    };
     return typeof json.exp === "number" && Number.isFinite(json.exp) ? json.exp * 1000 : null;
   } catch {
     return null;
@@ -71,7 +77,9 @@ function acquireToken(): Promise<string> {
     const expiry = token ? tokenExpiryMs(token) : null;
     if (token && expiry !== null && expiry - TOKEN_SKEW_MS <= Date.now()) {
       await page
-        .waitForFunction((old) => localStorage.getItem("access_token") !== old, token, { timeout: 5_000 })
+        .waitForFunction((old) => localStorage.getItem("access_token") !== old, token, {
+          timeout: 5_000,
+        })
         .catch(() => {});
       token = await page.evaluate(() => localStorage.getItem("access_token"));
     }
@@ -105,7 +113,11 @@ const pathOnly = (apiPath: string): string => apiPath.split("?")[0] ?? apiPath;
 
 type DirectResult<T> = { ok: true; body: T } | { ok: false; status: number; error?: string };
 
-async function requestDirect<T>(apiPath: string, token: string, signal: AbortSignal): Promise<DirectResult<T>> {
+async function requestDirect<T>(
+  apiPath: string,
+  token: string,
+  signal: AbortSignal
+): Promise<DirectResult<T>> {
   await acquireRequestTurn(signal);
   const api = await getApiRequestContext();
   let res: Awaited<ReturnType<typeof api.get>>;
@@ -179,7 +191,8 @@ async function fetchElkApiUncached<T>(apiPath: string, signal: AbortSignal): Pro
       return result.body;
     }
     lastFailure = describeFailure(result);
-    const authFailure = result.status === 401 || result.status === 403 || result.error !== undefined;
+    const authFailure =
+      result.status === 401 || result.status === 403 || result.error !== undefined;
     if (!authFailure) throw new Error(`lk.hse.ru API ${pathOnly(apiPath)} вернул ${result.status}`);
     if (result.status !== 403) invalidateToken(token);
   }
@@ -195,7 +208,8 @@ async function fetchElkApiUncached<T>(apiPath: string, signal: AbortSignal): Pro
   return data;
 }
 
-const elkJson = <T>(apiPath: string, ctx: LoadContext): Promise<T> => fetchElkApiUncached<T>(apiPath, ctx.signal);
+const elkJson = <T>(apiPath: string, ctx: LoadContext): Promise<T> =>
+  fetchElkApiUncached<T>(apiPath, ctx.signal);
 
 export interface ElkLesson {
   auditorium: string;
@@ -241,7 +255,11 @@ const elkScheduleWeek = defineResource<Date, ElkScheduleDay[]>({
 });
 
 /** Расписание студента через ЕЛК — работает из любой сети (в отличие от RUZ). */
-export async function getSchedule(from: Date, to: Date, opts?: ResourceCallOptions): Promise<ElkScheduleDay[]> {
+export async function getSchedule(
+  from: Date,
+  to: Date,
+  opts?: ResourceCallOptions
+): Promise<ElkScheduleDay[]> {
   if (Number.isNaN(from.getTime()) || Number.isNaN(to.getTime())) {
     throw new Error("Некорректная дата в диапазоне расписания (Invalid Date)");
   }
@@ -346,7 +364,11 @@ interface RawSearchAllResponse {
 
 const SEARCH_FETCH_LIMIT = 50; // максимум тула elk_search_services
 
-const elkSearch = defineResource<{ query: string; limit: number }, RawSearchAllResponse, ElkSearchServicesResponse>({
+const elkSearch = defineResource<
+  { query: string; limit: number },
+  RawSearchAllResponse,
+  ElkSearchServicesResponse
+>({
   name: "elk.search",
   ttl: TTL.medium,
   key: (a) => a.query,
@@ -417,7 +439,11 @@ function cleanClaimUrl(raw: string): string | null {
 
 const CLAIMS_FETCH_LIMIT = 500; // максимум тулов elk_list_requests / elk_list_tasks
 
-const elkClaims = defineResource<number, { data: RawClaim[]; count: number }, { count: number; requests: ElkClaim[] }>({
+const elkClaims = defineResource<
+  number,
+  { data: RawClaim[]; count: number },
+  { count: number; requests: ElkClaim[] }
+>({
   name: "elk.claims",
   ttl: TTL.short,
   key: () => "all",
@@ -449,7 +475,10 @@ const elkClaims = defineResource<number, { data: RawClaim[]; count: number }, { 
  * большинства elk_* эндпоинтов требует username (email) явным query-параметром, а не берёт его
  * из токена.
  */
-export function listRequests(limit = 500, opts?: ResourceCallOptions): Promise<{ count: number; requests: ElkClaim[] }> {
+export function listRequests(
+  limit = 500,
+  opts?: ResourceCallOptions
+): Promise<{ count: number; requests: ElkClaim[] }> {
   return elkClaims(limit, opts);
 }
 
@@ -482,7 +511,11 @@ interface RawDpoApplicationsResponse {
   };
 }
 
-const elkDpo = defineResource<void, RawDpoApplicationsResponse, { docs: unknown[]; statusLabels: Record<string, string> }>({
+const elkDpo = defineResource<
+  void,
+  RawDpoApplicationsResponse,
+  { docs: unknown[]; statusLabels: Record<string, string> }
+>({
   name: "elk.dpo",
   ttl: TTL.long,
   key: () => "me",
@@ -500,7 +533,10 @@ const elkDpo = defineResource<void, RawDpoApplicationsResponse, { docs: unknown[
  * отдельной записи не подтверждена вживую — возвращается как есть, без типизации полей.
  * `statusLabels` — расшифровка возможных статусов (processing/payment/waiting/studies/...).
  */
-export function listDpoPrograms(): Promise<{ docs: unknown[]; statusLabels: Record<string, string> }> {
+export function listDpoPrograms(): Promise<{
+  docs: unknown[];
+  statusLabels: Record<string, string>;
+}> {
   return elkDpo();
 }
 
@@ -530,7 +566,10 @@ const elkLoginHistory = defineResource<
   ttl: TTL.short,
   key: (offset) => String(offset),
   load: (offset, ctx) =>
-    elkJson<{ count: number; actions: RawLoginRecord[] }>(`/api/get-action-history-records?offset=${offset}`, ctx),
+    elkJson<{ count: number; actions: RawLoginRecord[] }>(
+      `/api/get-action-history-records?offset=${offset}`,
+      ctx
+    ),
   project: (raw) => ({
     count: raw.count,
     actions: raw.actions.map((a) => ({
@@ -605,7 +644,10 @@ const elkNotifications = defineResource<
  * `GET /api/notifications?is_no_read=false&offset=0&limit=<n>`, тот же Bearer-токен.
  * `is_no_read=false` — включая уже прочитанные (иначе список часто пуст).
  */
-export function getNotifications(limit = 20, opts?: ResourceCallOptions): Promise<{ count: number; notifications: ElkNotification[] }> {
+export function getNotifications(
+  limit = 20,
+  opts?: ResourceCallOptions
+): Promise<{ count: number; notifications: ElkNotification[] }> {
   return elkNotifications(limit, opts);
 }
 
@@ -669,7 +711,9 @@ const elkCourseEvaluation = defineResource<void, CourseEvaluationTable>({
  * /elk_login.php. Данные — обычная HTML-таблица `table.event-table` (thead/tbody), извлекается
  * через extractTable.
  */
-export function getCourseEvaluationStatus(opts?: ResourceCallOptions): Promise<Array<Record<string, string>>> {
+export function getCourseEvaluationStatus(
+  opts?: ResourceCallOptions
+): Promise<Array<Record<string, string>>> {
   return elkCourseEvaluation(undefined, opts).then((t) => t.rows);
 }
 
@@ -678,13 +722,16 @@ export function getCourseEvaluationStatus(opts?: ResourceCallOptions): Promise<A
  * отказом источника, а не «окон нет». Закэшированное «таблицы нет» на веру не принимается: страница
  * перечитывается один раз.
  */
-export async function getCourseEvaluationTable(opts: ResourceCallOptions = {}): Promise<CourseEvaluationTable> {
+export async function getCourseEvaluationTable(
+  opts: ResourceCallOptions = {}
+): Promise<CourseEvaluationTable> {
   const first = await elkCourseEvaluation(undefined, opts);
   if (first.found || opts.maxAgeMs === 0) return first;
   return elkCourseEvaluation(undefined, { ...opts, maxAgeMs: 0 });
 }
 
-const VKR_URL = "https://lms.hse.ru/elk_login.php?role=student&elk_lms_url=https://lms.hse.ru/%3Fap_list";
+const VKR_URL =
+  "https://lms.hse.ru/elk_login.php?role=student&elk_lms_url=https://lms.hse.ru/%3Fap_list";
 
 const elkThesis = defineResource<void, Array<Record<string, string>>>({
   name: "elk.thesis",
@@ -779,9 +826,12 @@ const elkScholarship = defineResource<void, unknown[]>({
       SCHOLARSHIP_URL,
       async (page) => {
         const result = await page.evaluate(async () => {
-          const res = await fetch(`act.php?on=portfolio_scholarship&name=history_apps&_=${Date.now()}`, {
-            credentials: "include",
-          });
+          const res = await fetch(
+            `act.php?on=portfolio_scholarship&name=history_apps&_=${Date.now()}`,
+            {
+              credentials: "include",
+            }
+          );
           if (!res.ok) {
             throw new Error(`lms.hse.ru act.php вернул ${res.status}`);
           }
@@ -810,7 +860,8 @@ const elkProfilePage = defineResource<void, PageDump>({
   name: "elk.profile-page",
   ttl: TTL.long,
   key: () => "me",
-  load: (_a, ctx) => withPage(`${BASE_URL}/profile`, (page) => dumpPage(page), { signal: ctx.signal }),
+  load: (_a, ctx) =>
+    withPage(`${BASE_URL}/profile`, (page) => dumpPage(page), { signal: ctx.signal }),
 });
 
 /**

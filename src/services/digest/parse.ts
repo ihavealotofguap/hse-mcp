@@ -2,10 +2,30 @@ import type { CourseOverview } from "../lms/client.js";
 import type { CourseFilter, DigestItem } from "./types.js";
 
 const MONTHS: Record<string, number> = {
-  января: 0, февраля: 1, марта: 2, апреля: 3, мая: 4, июня: 5,
-  июля: 6, августа: 7, сентября: 8, октября: 9, ноября: 10, декабря: 11,
-  january: 0, february: 1, march: 2, april: 3, may: 4, june: 5,
-  july: 6, august: 7, september: 8, october: 9, november: 10, december: 11,
+  января: 0,
+  февраля: 1,
+  марта: 2,
+  апреля: 3,
+  мая: 4,
+  июня: 5,
+  июля: 6,
+  августа: 7,
+  сентября: 8,
+  октября: 9,
+  ноября: 10,
+  декабря: 11,
+  january: 0,
+  february: 1,
+  march: 2,
+  april: 3,
+  may: 4,
+  june: 5,
+  july: 6,
+  august: 7,
+  september: 8,
+  october: 9,
+  november: 10,
+  december: 11,
 };
 
 // Необязательное время после даты: «23:59», «в 23:59», «T10:30:00», «11:59 pm». Группы 4–6.
@@ -51,7 +71,8 @@ const PATTERNS: Array<{ re: RegExp; read: (m: RegExpMatchArray) => Hit | null }>
 
 // Полный ISO с явной зоной (`2026-09-17T09:58:51+03:00`, `...Z`) разбирается движком и не
 // переинтерпретируется в локальной зоне машины.
-const ISO_WITH_ZONE = /^\s*\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})\s*$/i;
+const ISO_WITH_ZONE =
+  /^\s*\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})\s*$/i;
 
 function toDate(hit: Hit, endOfDayIfNoTime: boolean): Date | null {
   const [y, mo, d] = hit.ymd;
@@ -112,7 +133,10 @@ export function parseDateTime(text: string, opts?: { endOfDayIfNoTime?: boolean 
  * Дата + время из двух полей расписания. Время может прийти как «10:30», «10:30:00» или как
  * полная дата-время — тогда она важнее отдельного поля даты.
  */
-export function combineDateAndTime(dateText: string, timeText: string | null | undefined): Date | null {
+export function combineDateAndTime(
+  dateText: string,
+  timeText: string | null | undefined
+): Date | null {
   if (timeText && /\d{4}[-.]\d|\d\.\d{1,2}\.\d{4}/.test(timeText)) {
     const full = parseDateTime(timeText);
     if (full) return full;
@@ -137,12 +161,18 @@ export function toLocalIso(d: Date): string {
   );
 }
 
-export const startOfDay = (d: Date): Date => new Date(d.getFullYear(), d.getMonth(), d.getDate(), 0, 0, 0, 0);
-export const endOfDay = (d: Date): Date => new Date(d.getFullYear(), d.getMonth(), d.getDate(), 23, 59, 59, 999);
+export const startOfDay = (d: Date): Date =>
+  new Date(d.getFullYear(), d.getMonth(), d.getDate(), 0, 0, 0, 0);
+export const endOfDay = (d: Date): Date =>
+  new Date(d.getFullYear(), d.getMonth(), d.getDate(), 23, 59, 59, 999);
 
 /** Экзамен/зачёт по типу занятия; «консультация к экзамену» экзаменом не считается. */
 export function isExamType(lessonType: string | undefined): boolean {
-  return !!lessonType && /экзамен|зач[её]т|коллоквиум|exam/i.test(lessonType) && !/консультац/i.test(lessonType);
+  return (
+    !!lessonType &&
+    /экзамен|зач[её]т|коллоквиум|exam/i.test(lessonType) &&
+    !/консультац/i.test(lessonType)
+  );
 }
 
 /** Просроченные первыми, затем по времени, затем элементы без даты. Стабильная. */
@@ -180,7 +210,8 @@ export function selectCourses(
     filter.some((f) =>
       typeof f === "number"
         ? c.id === f
-        : c.fullname.toLowerCase().includes(f.toLowerCase()) || c.shortname.toLowerCase().includes(f.toLowerCase())
+        : c.fullname.toLowerCase().includes(f.toLowerCase()) ||
+          c.shortname.toLowerCase().includes(f.toLowerCase())
     )
   );
   if (picked.length === 0) {

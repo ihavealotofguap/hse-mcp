@@ -1,12 +1,12 @@
-import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { z } from "zod";
 import { config } from "../../config.js";
-import { runTool } from "../../mcp-utils.js";
 import { addDays } from "../../date-utils.js";
-import { CONFIRM_SCHEMA, WRITE_ANNOTATIONS, noteWritesDisabled } from "../writes/gate.js";
+import { runTool } from "../../mcp-utils.js";
+import { CONFIRM_SCHEMA, noteWritesDisabled, WRITE_ANNOTATIONS } from "../writes/gate.js";
 import { defineWrite } from "../writes/runner.js";
-import * as elk from "./client.js";
 import { certificateAdapter } from "./certificate.js";
+import * as elk from "./client.js";
 
 const orderCertificate = defineWrite(certificateAdapter);
 
@@ -21,7 +21,13 @@ export function registerElkTools(server: McpServer): void {
         "(в отличие от RUZ, который доступен только из внутренней сети ВШЭ) — основной источник " +
         "расписания.",
       inputSchema: {
-        daysAhead: z.number().int().min(1).max(60).default(7).describe("На сколько дней вперёд от сегодня"),
+        daysAhead: z
+          .number()
+          .int()
+          .min(1)
+          .max(60)
+          .default(7)
+          .describe("На сколько дней вперёд от сегодня"),
       },
     },
     async ({ daysAhead }) =>
@@ -260,7 +266,11 @@ export function registerElkTools(server: McpServer): void {
         "pmo.hse.ru/servicedesk/customer/portal/81/create/<id> (ссылки на конкретные формы есть " +
         "на странице профиля и student-services).",
       inputSchema: {
-        path: z.string().describe("Относительный путь на lk.hse.ru, напр. /claim или /student-services?section=documents"),
+        path: z
+          .string()
+          .describe(
+            "Относительный путь на lk.hse.ru, напр. /claim или /student-services?section=documents"
+          ),
       },
     },
     async ({ path }) => runTool(() => elk.openPage(path))
@@ -299,10 +309,16 @@ export function registerElkTools(server: McpServer): void {
         "человека обеспечивает он, а не сервер. Тул доступен только при HSE_ENABLE_WRITES=true. " +
         "Возвращает JSON: stage, outcome, evidence, warnings, sent.",
       inputSchema: {
-        serviceId: z.number().int().positive().describe("Число components из url результата elk_search_services (не поле id)"),
+        serviceId: z
+          .number()
+          .int()
+          .positive()
+          .describe("Число components из url результата elk_search_services (не поле id)"),
         fields: z
           .record(z.string(), z.string())
-          .describe("Подпись поля формы → точный текст варианта выпадающего списка; {} — разведка формы (отказ со списком обязательных полей и вариантов)."),
+          .describe(
+            "Подпись поля формы → точный текст варианта выпадающего списка; {} — разведка формы (отказ со списком обязательных полей и вариантов)."
+          ),
         ...CONFIRM_SCHEMA,
       },
       annotations: WRITE_ANNOTATIONS,

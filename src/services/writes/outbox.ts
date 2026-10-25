@@ -24,12 +24,13 @@ export interface OutboxFile {
 // Служебные имена устройств Windows: открываются как устройство независимо от расширения.
 const RESERVED_RE = /^(con|prn|aux|nul|com[0-9¹²³]|lpt[0-9¹²³]|conin\$|conout\$)$/i;
 // Управляющие символы (включая NUL) и знаки, недопустимые в именах Windows; `/`, `\`, `:` — пути и потоки.
+// biome-ignore lint/suspicious/noControlCharactersInRegex: управляющие символы в именах файлов отклоняются намеренно.
 const BAD_CHAR_RE = /[\x00-\x1f<>"|?*/\\:]/;
 
 /** Приводит путь к виду для сравнения: без `\\?\`, нормализованный, на Windows без учёта регистра. */
 function comparable(p: string): string {
   let s = p;
-  if (s.startsWith("\\\\?\\UNC\\")) s = "\\\\" + s.slice(8);
+  if (s.startsWith("\\\\?\\UNC\\")) s = `\\\\${s.slice(8)}`;
   else if (s.startsWith("\\\\?\\")) s = s.slice(4);
   s = path.resolve(s);
   return process.platform === "win32" ? s.toLowerCase() : s;
@@ -60,7 +61,8 @@ function misplacedOutbox(dirReal: string, root: string, storage: string): boolea
   if (isInsideDir(dirReal, root) || isInsideDir(dirReal, storage)) return true;
   if (isInsideDir(storage, dirReal)) {
     const defaultOutbox = path.join(storage, "outbox");
-    if (comparable(dirReal) !== comparable(defaultOutbox) && !isInsideDir(defaultOutbox, dirReal)) return true;
+    if (comparable(dirReal) !== comparable(defaultOutbox) && !isInsideDir(defaultOutbox, dirReal))
+      return true;
   }
   return dir === comparable(path.parse(dir).root);
 }
@@ -71,12 +73,16 @@ function nameProblem(name: unknown): string | null {
   if (name === "." || name === "..") return "недопустимое имя";
   if (name.length > MAX_NAME_LENGTH) return "слишком длинное имя";
   if (BAD_CHAR_RE.test(name)) return "нужно имя файла без путей, дисков и спецсимволов";
-  if (name.endsWith(".") || name.endsWith(" ")) return "имя не может оканчиваться точкой или пробелом";
+  if (name.endsWith(".") || name.endsWith(" "))
+    return "имя не может оканчиваться точкой или пробелом";
   if (RESERVED_RE.test(name.split(".")[0].trimEnd())) return "зарезервированное имя устройства";
   return null;
 }
 
-async function hashFile(handle: fs.promises.FileHandle, expected: number): Promise<{ sha256: string; bytes: number }> {
+async function hashFile(
+  handle: fs.promises.FileHandle,
+  expected: number
+): Promise<{ sha256: string; bytes: number }> {
   const hash = crypto.createHash("sha256");
   const buf = Buffer.allocUnsafe(CHUNK);
   let bytes = 0;
@@ -108,10 +114,14 @@ export async function resolveOutboxFiles(
     dirReal = await realpath(opts.dir ?? config.outboxDir);
     if (!(await fs.promises.stat(dirReal)).isDirectory()) throw new Error("не папка");
   } catch {
-    throw new Error("Папка «исходящих» недоступна: создайте её (storage/outbox или HSE_OUTBOX_DIR)");
+    throw new Error(
+      "Папка «исходящих» недоступна: создайте её (storage/outbox или HSE_OUTBOX_DIR)"
+    );
   }
   // Корень проекта канонизируем так же, как папку (junction/регистр); `projectRoot` в opts — для проверок.
-  const root = await realpath(opts.projectRoot ?? realProjectRoot).catch(() => path.resolve(opts.projectRoot ?? realProjectRoot));
+  const root = await realpath(opts.projectRoot ?? realProjectRoot).catch(() =>
+    path.resolve(opts.projectRoot ?? realProjectRoot)
+  );
   // `storage` канонизируем так же (если его нет — берём путь как есть): иначе junction на storage обходит сравнение.
   const storageRaw = path.join(root, "storage");
   const storage = await realpath(storageRaw).catch(() => storageRaw);
@@ -148,7 +158,8 @@ export async function resolveOutboxFiles(
           : `Файл №${n}: не удалось определить путь`
       );
     }
-    if (!isInsideDir(dirReal, real)) throw new Error(`Файл №${n}: указывает за пределы папки «исходящих»`);
+    if (!isInsideDir(dirReal, real))
+      throw new Error(`Файл №${n}: указывает за пределы папки «исходящих»`);
 
     const realKey = comparable(real);
     const dupReal = seenReal.get(realKey);

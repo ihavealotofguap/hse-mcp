@@ -6,11 +6,23 @@ import { z } from "zod";
  */
 
 // Аннотации тулов записи: клиент не должен разрешать вызов автоматически.
-export const WRITE_ANNOTATIONS = { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true };
+export const WRITE_ANNOTATIONS = {
+  readOnlyHint: false,
+  destructiveHint: true,
+  idempotentHint: false,
+  openWorldHint: true,
+};
 
 export const CONFIRM_SCHEMA = {
-  confirm: z.boolean().optional().describe("true — выполнить запись; требует previewToken из сухого прогона."),
-  previewToken: z.string().max(200).optional().describe("Токен из ответа сухого прогона (действует 15 минут)."),
+  confirm: z
+    .boolean()
+    .optional()
+    .describe("true — выполнить запись; требует previewToken из сухого прогона."),
+  previewToken: z
+    .string()
+    .max(200)
+    .optional()
+    .describe("Токен из ответа сухого прогона (действует 15 минут)."),
   acknowledgeUnknown: z
     .boolean()
     .optional()
