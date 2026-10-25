@@ -506,7 +506,12 @@ test("restrictDir: на Windows новые файлы наследуют еди�
   const file = path.join(dir, "new");
   fs.writeFileSync(file, "x");
   const acl = execFileSync("icacls", [file], { encoding: "latin1" });
-  assert.equal((acl.match(/:\(/g) ?? []).length, 1, "ожидалась одна запись доступа");
+  const dirAcl = execFileSync("icacls", [dir], { encoding: "latin1" });
+  assert.equal(
+    (acl.match(/:\(/g) ?? []).length,
+    1,
+    `ожидалась одна запись доступа (учётная запись ${windowsAccount()}):\n${acl}\nкаталог:\n${dirAcl}`
+  );
   fs.writeFileSync(file, "y");
   assert.equal(fs.readFileSync(file, "utf8"), "y");
   fs.rmSync(dir, { recursive: true });
