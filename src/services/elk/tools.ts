@@ -58,7 +58,7 @@ export function registerElkTools(server: McpServer): void {
       description:
         "Структурированная академическая карточка студента (lk.hse.ru/api/get-academic-data): " +
         "рейтинг, GPA, кредиты, КУД, программа обучения, факультет, курс, группа, форма и " +
-        "уровень обучения, статус. Замена текстовому дампу карточки из elk_get_profile.",
+        "уровень обучения, статус. Структурированная замена разделу profile в elk_get_section.",
       inputSchema: {},
     },
     async () => runTool(() => elk.getAcademicData())
@@ -101,21 +101,6 @@ export function registerElkTools(server: McpServer): void {
   );
 
   server.registerTool(
-    "elk_get_login_history",
-    {
-      title: "История входов в ЕЛК",
-      description:
-        "История действий/входов в аккаунт ЕЛК (вкладка «Прочее» на /profile): дата, действие, " +
-        "IP, местоположение, устройство и браузер. Полезно для проверки безопасности аккаунта — " +
-        "неожиданные входы с незнакомых IP/устройств.",
-      inputSchema: {
-        offset: z.number().int().min(0).default(0).describe("Смещение для пагинации"),
-      },
-    },
-    async ({ offset }) => runTool(() => elk.getLoginHistory(offset))
-  );
-
-  server.registerTool(
     "elk_get_notifications",
     {
       title: "Уведомления ЕЛК",
@@ -130,126 +115,41 @@ export function registerElkTools(server: McpServer): void {
   );
 
   server.registerTool(
-    "elk_list_tasks",
+    "elk_get_section",
     {
-      title: "Задачи в ЕЛК",
+      title: "Раздел ЕЛК",
       description:
-        "Список задач пользователя в ЕЛК (lk.hse.ru/task, `/api/tasks`) — тот же API-паттерн, " +
-        "что у elk_list_requests. Форма ответа не типизирована: точные поля отдельной задачи не " +
-        "подтверждены вживую (на проверенном аккаунте задач не было), возвращается как есть.",
+        "Один из разделов Единого личного кабинета (lk.hse.ru и его порталы) по имени section. " +
+        "profile — страница профиля /profile текстом и ссылками (ФИО, контакты); для рейтинга, " +
+        "GPA и группы есть elk_get_academic_data. login_history — история входов: дата, действие, " +
+        "IP, местоположение, устройство (проверка безопасности аккаунта; offset — пагинация). " +
+        "tasks — задачи пользователя (/task); поля задачи вживую не подтверждены, ответ как есть " +
+        "(limit — максимум задач). dpo_programs — программы ДПО, на которые подана заявка, со " +
+        "statusLabels; у остальных студентов пусто. antiplagiat — сколько проверок в Антиплагиате " +
+        "обрабатывается, завершено и подано. course_evaluation — периоды СОП («Оцени свои курсы») и " +
+        "заполнена ли анкета. thesis — статус ВКР/КР: тема, заимствования, оценка, рецензия; пусто, " +
+        "если тема не зарегистрирована. portfolio — электронное портфолио (достижения, влияют на " +
+        "повышенную стипендию), текстом. internships — заявки на практику. scholarship_history — " +
+        "история заявок на повышенную стипендию; пусто, если заявок не было. Все разделы только " +
+        "читаются: подача заявок не реализована.",
       inputSchema: {
-        limit: z.number().int().min(1).max(500).default(500).describe("Максимум задач"),
+        section: z.enum(elk.ELK_SECTIONS).describe("Какой раздел прочитать"),
+        limit: z
+          .number()
+          .int()
+          .min(1)
+          .max(500)
+          .optional()
+          .describe("Только для tasks: максимум задач (по умолчанию 500)"),
+        offset: z
+          .number()
+          .int()
+          .min(0)
+          .optional()
+          .describe("Только для login_history: смещение для пагинации (по умолчанию 0)"),
       },
     },
-    async ({ limit }) => runTool(() => elk.listTasks(limit))
-  );
-
-  server.registerTool(
-    "elk_list_dpo_programs",
-    {
-      title: "Мои программы ДПО",
-      description:
-        "Программы дополнительного профессионального образования (ДПО), на которые подана " +
-        "заявка/студент обучается (lk.hse.ru/dpo/my-programs). Релевантно только студентам, " +
-        "проходящим ДПО помимо основной программы — для остальных возвращает пустой список. " +
-        "statusLabels — расшифровка возможных статусов заявки.",
-      inputSchema: {},
-    },
-    async () => runTool(() => elk.listDpoPrograms())
-  );
-
-  server.registerTool(
-    "elk_get_antiplagiat_status",
-    {
-      title: "Статус проверок в Антиплагиате",
-      description:
-        "Статус проверок студенческой работы в системе Антиплагиат: сколько проверок " +
-        "обрабатывается (processing), завершено (completed) и всего подано (total). Только " +
-        "чтение — отправка работы на проверку (загрузка файла) не реализована.",
-      inputSchema: {},
-    },
-    async () => runTool(() => elk.getAntiplagiatStatus())
-  );
-
-  server.registerTool(
-    "elk_get_course_evaluation_status",
-    {
-      title: "Статус СОП (Оцени свои курсы)",
-      description:
-        "Периоды студенческой оценки преподавания (СОП/«Оцени свои курсы») и статус заполнения " +
-        "анкеты по каждому периоду (например «СОП завершён, анкета не заполнена»): номер, " +
-        "период, даты начала/окончания, статус. Данные с отдельного портала lms.hse.ru.",
-      inputSchema: {},
-    },
-    async () => runTool(() => elk.getCourseEvaluationStatus())
-  );
-
-  server.registerTool(
-    "elk_get_thesis_status",
-    {
-      title: "Статус ВКР/КР/проекта",
-      description:
-        "Статус проверки выпускной квалификационной/курсовой работы (портал lms.hse.ru): " +
-        "период, тип работы, тема, дата загрузки, процент заимствований, статус проверки, " +
-        "оценка, рецензия. Пустой список означает, что тема работы ещё не зарегистрирована в " +
-        "системе (АСАВ) — обычная ситуация для младших курсов.",
-      inputSchema: {},
-    },
-    async () => runTool(() => elk.getThesisStatus())
-  );
-
-  server.registerTool(
-    "elk_get_portfolio",
-    {
-      title: "Электронное портфолио",
-      description:
-        "Электронное портфолио студента (портал lms.hse.ru): баллы/достижения за учёбу, науку, " +
-        "ДПО, практики и проектную деятельность, культурно-творческую и общественную " +
-        "деятельность, спорт, олимпиады — влияет на повышенную стипендию. Не требует отдельного " +
-        "логина portfolio.hse.ru — доступно через тот же SSO, что и остальные elk_*. Текстовый " +
-        "дамп страницы (смешанная вёрстка — профиль + таблицы + список достижений).",
-      inputSchema: {},
-    },
-    async () => runTool(() => elk.getPortfolio())
-  );
-
-  server.registerTool(
-    "elk_list_internships",
-    {
-      title: "Заявки на практику",
-      description:
-        "Список заявок на практику/стажировку студента («Модуль Практика», lms.hse.ru). " +
-        "Read-only статус — подача новой заявки на практику не реализована.",
-      inputSchema: {},
-    },
-    async () => runTool(() => elk.listInternships())
-  );
-
-  server.registerTool(
-    "elk_get_scholarship_history",
-    {
-      title: "История заявок на повышенную стипендию",
-      description:
-        "История заявок на повышенную государственную академическую стипендию (портал " +
-        "lms.hse.ru): событие, оценки студента/экспертов, результат, комментарий эксперта. " +
-        "Пустой список — заявок не подавалось. Read-only — подача новой заявки не реализована.",
-      inputSchema: {},
-    },
-    async () => runTool(() => elk.getScholarshipHistory())
-  );
-
-  server.registerTool(
-    "elk_get_profile",
-    {
-      title: "Профиль в ЕЛК",
-      description:
-        "Полная страница профиля студента в ЕЛК (lk.hse.ru/profile): ФИО, контакты и прочая " +
-        "видимая информация страницы. Возвращает видимый текст и список ссылок (текстовый дамп, " +
-        "не JSON) — для структурированной академической карточки (рейтинг, GPA, программа, " +
-        "факультет, курс, группа) используйте elk_get_academic_data.",
-      inputSchema: {},
-    },
-    async () => runTool(() => elk.getProfile())
+    async ({ section, limit, offset }) => runTool(() => elk.getSection(section, { limit, offset }))
   );
 
   server.registerTool(

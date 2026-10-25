@@ -437,7 +437,7 @@ function cleanClaimUrl(raw: string): string | null {
   return url || null;
 }
 
-const CLAIMS_FETCH_LIMIT = 500; // максимум тулов elk_list_requests / elk_list_tasks
+const CLAIMS_FETCH_LIMIT = 500; // максимум elk_list_requests и раздела tasks
 
 const elkClaims = defineResource<
   number,
@@ -585,7 +585,7 @@ const elkLoginHistory = defineResource<
 
 /**
  * История действий/входов в ЕЛК (вкладка "Прочее" → "История действий" на /profile, обычно не
- * захватывается elk_get_profile — Vue-таб рендерит контент только по клику, а не сразу в DOM).
+ * захватывается разделом profile — Vue-таб рендерит контент только по клику, а не сразу в DOM).
  * Полезно для проверки безопасности аккаунта (неожиданные IP/устройства). Реверс-инжинирено
  * 2026-09-15: `GET /api/get-action-history-records?offset=0`, тот же Bearer-токен.
  */
@@ -870,6 +870,53 @@ const elkProfilePage = defineResource<void, PageDump>({
  */
 export function getProfile(): Promise<PageDump> {
   return elkProfilePage();
+}
+
+/** Разделы ЕЛК, которые читает тул `elk_get_section`: у каждого свой источник и своя форма ответа. */
+export const ELK_SECTIONS = [
+  "profile",
+  "login_history",
+  "tasks",
+  "dpo_programs",
+  "antiplagiat",
+  "course_evaluation",
+  "thesis",
+  "portfolio",
+  "internships",
+  "scholarship_history",
+] as const;
+export type ElkSection = (typeof ELK_SECTIONS)[number];
+
+/**
+ * Раздел ЕЛК по имени. `limit` действует только для `tasks`, `offset` — только для `login_history`;
+ * остальным разделам параметры не нужны.
+ */
+export function getSection(
+  section: ElkSection,
+  { limit, offset }: { limit?: number; offset?: number } = {}
+): Promise<unknown> {
+  switch (section) {
+    case "profile":
+      return getProfile();
+    case "login_history":
+      return getLoginHistory(offset);
+    case "tasks":
+      return listTasks(limit);
+    case "dpo_programs":
+      return listDpoPrograms();
+    case "antiplagiat":
+      return getAntiplagiatStatus();
+    case "course_evaluation":
+      return getCourseEvaluationStatus();
+    case "thesis":
+      return getThesisStatus();
+    case "portfolio":
+      return getPortfolio();
+    case "internships":
+      return listInternships();
+    case "scholarship_history":
+      return getScholarshipHistory();
+  }
 }
 
 // pmo.hse.ru — домен хелпдеска (создание тикетов), на который ведут документированные ссылки
