@@ -69,13 +69,13 @@ export async function launchWithFallback(
   for (const channel of candidates) {
     try {
       const browser = await deps.launch(channel);
-      deps.log(`hsemcp: Node ${process.version}, браузер: ${channelLabel(channel)}`);
+      deps.log(`hse-mcp: Node ${process.version}, браузер: ${channelLabel(channel)}`);
       return browser;
     } catch (err) {
       if (channel === undefined && isMissingBrowserError(err)) chromiumMissing = true;
       else if (!isMissingBrowserError(err)) {
         // Без текста ошибки: в нём бывают пути профиля пользователя.
-        deps.log(`hsemcp: ${channelLabel(channel)} не запустился`);
+        deps.log(`hse-mcp: ${channelLabel(channel)} не запустился`);
         lastError = err;
       }
     }
@@ -137,11 +137,11 @@ export function backgroundDownload(
 ): "started" | "running" | "failed" {
   if (download) return "running";
   const failedBefore = lastDownloadFailed;
-  log("hsemcp: скачиваю Chromium для Playwright");
+  log("hse-mcp: скачиваю Chromium для Playwright");
   download = runChromiumInstall("ignore", shellOnly).then((ok) => {
     lastDownloadFailed = !ok;
     download = null;
-    log(ok ? "hsemcp: Chromium скачан" : "hsemcp: скачать Chromium не удалось");
+    log(ok ? "hse-mcp: Chromium скачан" : "hse-mcp: скачать Chromium не удалось");
     return ok;
   });
   return failedBefore ? "failed" : "started";

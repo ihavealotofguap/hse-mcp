@@ -23,7 +23,7 @@ export interface CliDeps {
 }
 
 const USAGE =
-  "Использование: hsemcp credentials set | clear | status (из клона: npm run credentials:set | credentials:clear | credentials:status)";
+  "Использование: hse-mcp credentials set | clear | status (из клона: npm run credentials:set | credentials:clear | credentials:status)";
 
 // Сообщения об ошибках хранилища нарочно не выводим: в них могут оказаться учётная запись или значение.
 async function setPassword(deps: CliDeps): Promise<number> {

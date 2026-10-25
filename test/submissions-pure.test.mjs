@@ -724,7 +724,7 @@ test("classifyDeleteOutcome: none + «Добавить ответ» → confirme
 
 // --- prepareUpload: отправляются байты, покрытые токеном, а не путь ---
 
-const UPLOAD_PREFIX = "hsemcp-upload-";
+const UPLOAD_PREFIX = "hse-mcp-upload-";
 const uploadTmpDirs = () => fs.readdirSync(os.tmpdir()).filter((n) => n.startsWith(UPLOAD_PREFIX));
 const sha256Of = (data) => crypto.createHash("sha256").update(data).digest("hex");
 
@@ -1283,7 +1283,7 @@ test("checkButtonForm: «Удалить ответ» — GET на removesubmissi
 });
 
 test("submitAdapter.observe: файл крупнее предела проверки отклоняется до хеширования и до открытия страницы", async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "hsemcp-outbox-big-"));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "hse-mcp-outbox-big-"));
   const saved = process.env.HSE_OUTBOX_DIR;
   process.env.HSE_OUTBOX_DIR = dir;
   // Браузер не должен стартовать ни при каких условиях: запуск отклоняется и считается.

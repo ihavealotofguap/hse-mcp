@@ -24,7 +24,7 @@ const KEYCLOAK_HOST = "saml.hse.ru";
 // Сообщение об ошибке входа в стандартных темах Keycloak (keycloak и keycloak.v2).
 const LOGIN_ERROR_SELECTOR = "#input-error, .kc-feedback-text, .alert-error";
 const LOGIN_FAILED_MESSAGE =
-  "Вход в ВШЭ не удался: Keycloak отклонил email или пароль — проверьте их в настройках hsemcp";
+  "Вход в ВШЭ не удался: Keycloak отклонил email или пароль — проверьте их в настройках hse-mcp";
 
 /** Верхняя граница на всё в `withPage`: слот, открытие, вход и тело вызова. */
 export const PAGE_DEADLINE_MS = 45_000;
@@ -122,7 +122,9 @@ async function waitForRender(page: Page): Promise<void> {
   // без паузы проверки ниже регулярно срабатывают на пустой/недорисованной странице.
   const rendered = await waitForRenderedBody(page);
   if (!rendered) {
-    console.error(`hsemcp: страница ${page.url()} не отрендерилась за таймаут при проверке логина`);
+    console.error(
+      `hse-mcp: страница ${page.url()} не отрендерилась за таймаут при проверке логина`
+    );
   }
 }
 
@@ -174,7 +176,7 @@ async function ensureLoggedIn(page: Page): Promise<LoginState> {
   // 3 попытки не дали ни логина, ни явного "уже авторизован" (например, неожиданная
   // промежуточная страница) — не рискуем перезаписывать ранее рабочую сессию на диске.
   console.error(
-    `hsemcp: не удалось однозначно определить статус входа на ${page.url()} за 3 попытки — сохранённая сессия не будет перезаписана`
+    `hse-mcp: не удалось однозначно определить статус входа на ${page.url()} за 3 попытки — сохранённая сессия не будет перезаписана`
   );
   return "unknown";
 }

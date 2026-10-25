@@ -1,11 +1,11 @@
 import { runChromiumInstall } from "../auth/browser-launch.js";
 
 const USAGE = [
-  "hsemcp — MCP-сервер SmartLMS и ЕЛК ВШЭ (stdio). Без аргументов запускает сервер.",
+  "hse-mcp — MCP-сервер SmartLMS и ЕЛК ВШЭ (stdio). Без аргументов запускает сервер.",
   "",
   "Команды:",
-  "  hsemcp credentials set | clear | status   пароль ВШЭ в системном хранилище",
-  "  hsemcp install-browser                    скачать Chromium для Playwright",
+  "  hse-mcp credentials set | clear | status   пароль ВШЭ в системном хранилище",
+  "  hse-mcp install-browser                    скачать Chromium для Playwright",
 ].join("\n");
 
 /** Подкоманды исполняемого файла; `null` — аргументов нет, нужно запускать сервер. */

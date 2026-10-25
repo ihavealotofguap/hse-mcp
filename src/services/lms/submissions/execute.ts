@@ -79,7 +79,7 @@ const VIEW_WAIT_MS = COMMIT_DEADLINE_MS / 2;
 
 // Предел буфера Playwright в `setInputFiles` (≈50 МБ); крупнее — проверенная копия во временной папке.
 const MAX_UPLOAD_BUFFER = 48 * 1024 * 1024;
-const UPLOAD_TMP_PREFIX = "hsemcp-upload-";
+const UPLOAD_TMP_PREFIX = "hse-mcp-upload-";
 const MIME_TYPES: Record<string, string> = {
   ".pdf": "application/pdf",
   ".txt": "text/plain",

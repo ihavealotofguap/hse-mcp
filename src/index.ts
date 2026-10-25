@@ -16,7 +16,7 @@ import { registerSystemTools } from "./services/system/tools.js";
 const { version } = JSON.parse(fs.readFileSync(path.join(projectRoot, "package.json"), "utf8"));
 
 const server = new McpServer({
-  name: "hsemcp",
+  name: "hse-mcp",
   version,
 });
 
@@ -50,6 +50,6 @@ process.on("SIGINT", shutdown);
 process.on("SIGTERM", shutdown);
 
 main().catch((err) => {
-  console.error("hsemcp fatal error:", err);
+  console.error("hse-mcp fatal error:", err);
   process.exit(1);
 });

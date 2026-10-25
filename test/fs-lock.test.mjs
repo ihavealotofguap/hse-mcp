@@ -12,7 +12,7 @@ const { withStateLock, loadState, saveState, emptyState } = await import(
 );
 
 function tmpDir() {
-  return fs.mkdtempSync(path.join(os.tmpdir(), "hsemcp-fslock-"));
+  return fs.mkdtempSync(path.join(os.tmpdir(), "hse-mcp-fslock-"));
 }
 
 test("20 параллельных withFileLock не теряют инкременты", async () => {

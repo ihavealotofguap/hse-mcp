@@ -203,7 +203,7 @@ async function fetchElkApiUncached<T>(apiPath: string, signal: AbortSignal): Pro
   });
   directBreaker.trip();
   console.error(
-    `hsemcp: прямые запросы к lk.hse.ru/api не работают (${lastFailure}) — иду через страницу ${DIRECT_COOLDOWN_MS / 60_000} мин`
+    `hse-mcp: прямые запросы к lk.hse.ru/api не работают (${lastFailure}) — иду через страницу ${DIRECT_COOLDOWN_MS / 60_000} мин`
   );
   return data;
 }

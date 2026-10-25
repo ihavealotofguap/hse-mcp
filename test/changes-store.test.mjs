@@ -18,7 +18,7 @@ const {
   JOURNAL_MAX_AGE_MS,
 } = store;
 
-const base = fs.mkdtempSync(path.join(os.tmpdir(), "hsemcp-changes-"));
+const base = fs.mkdtempSync(path.join(os.tmpdir(), "hse-mcp-changes-"));
 let counter = 0;
 const tmpDir = () => fs.mkdtempSync(path.join(base, `case${counter++}-`));
 const stateFile = (dir) => path.join(dir, "state.json");
