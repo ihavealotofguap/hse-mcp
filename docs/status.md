@@ -13,7 +13,7 @@
 | Служебное | `hse_clear_cache` | `services/system/` | нет | да |
 | Каркас записи | — | `services/writes/` | `runner`, `token`, `journal`, `outbox`, `tools-gating` | да |
 | Запись в SmartLMS | `lms_submit_assignment`, `lms_delete_submission` | `services/lms/submissions/` | `submissions-pure` | да, один аккаунт, один семестр |
-| Заказ справки в ЕЛК | `elk_order_certificate` | `services/elk/certificate/` | `certificate-pure` | один заказ; тул всегда отвечает `unknown`, исход проверяется вручную |
+| Заказ справки в ЕЛК | `elk_order_certificate` | `services/elk/certificate/` | `certificate-pure` | один заказ (тогда исход `unknown`); проверка по странице «Заявки» с заказом не проверена |
 | Архитектура | — | — | `architecture`: импорты соблюдают слои | — |
 | Оформление тулов | все | `src/mcp-utils.ts`, `*/tools.ts` | `tools-annotations`: аннотации у каждого тула, `runTool`, `outputSchema` на типичных ответах, `tools/list` через stdio | — |
 
