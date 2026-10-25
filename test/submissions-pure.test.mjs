@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 
-const m = await import(new URL("../dist/services/lms/submissions.js", import.meta.url).href);
+const m = await import(new URL("../dist/services/lms/submissions/index.js", import.meta.url).href);
 const {
   buildAssignmentView,
   buildEditFormInfo,

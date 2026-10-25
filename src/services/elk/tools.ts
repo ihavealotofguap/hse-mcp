@@ -2,13 +2,33 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { config } from "../../config.js";
 import { addDays } from "../../date-utils.js";
-import { runTool } from "../../mcp-utils.js";
+import { READ_ANNOTATIONS, runTool } from "../../mcp-utils.js";
 import { CONFIRM_SCHEMA, noteWritesDisabled, WRITE_ANNOTATIONS } from "../writes/gate.js";
 import { defineWrite } from "../writes/runner.js";
-import { certificateAdapter } from "./certificate.js";
+import { certificateAdapter } from "./certificate/index.js";
 import * as elk from "./client.js";
 
 const orderCertificate = defineWrite(certificateAdapter);
+
+// Поля занятия приходят из API ЕЛК как есть (ElkLesson в client.ts): любое может отсутствовать или
+// быть null, а лишние поля сохраняются — несовпадение со схемой SDK превращает весь ответ в ошибку.
+const ELK_LESSON_FIELD = z.string().nullish();
+const ELK_LESSON = z
+  .object({
+    name: ELK_LESSON_FIELD,
+    lesson_type: ELK_LESSON_FIELD,
+    begin_time: ELK_LESSON_FIELD,
+    end_time: ELK_LESSON_FIELD,
+    auditorium: ELK_LESSON_FIELD,
+    building: ELK_LESSON_FIELD,
+    lecturer: ELK_LESSON_FIELD,
+    parent_schedule: ELK_LESSON_FIELD,
+    url1: ELK_LESSON_FIELD,
+    url1_description: ELK_LESSON_FIELD,
+    url2: ELK_LESSON_FIELD,
+    url2_description: ELK_LESSON_FIELD,
+  })
+  .passthrough();
 
 export function registerElkTools(server: McpServer): void {
   server.registerTool(
@@ -29,12 +49,23 @@ export function registerElkTools(server: McpServer): void {
           .default(7)
           .describe("На сколько дней вперёд от сегодня"),
       },
+      outputSchema: {
+        days: z
+          .array(
+            z.object({
+              date: z.string().describe("ГГГГ-ММ-ДД"),
+              lessons: z.array(ELK_LESSON).optional(),
+            })
+          )
+          .describe("Дни с занятиями по порядку"),
+      },
+      annotations: READ_ANNOTATIONS,
     },
     async ({ daysAhead }) =>
       runTool(async () => {
         const from = new Date();
         const to = addDays(from, daysAhead);
-        return elk.getSchedule(from, to);
+        return { days: await elk.getSchedule(from, to) };
       })
   );
 
@@ -47,6 +78,7 @@ export function registerElkTools(server: McpServer): void {
         "email, роли (студент/ДПО и т.п.). Не содержит академическую карточку (рейтинг, группа, " +
         "факультет) — за ней используйте elk_get_academic_data.",
       inputSchema: {},
+      annotations: READ_ANNOTATIONS,
     },
     async () => runTool(() => elk.getUserInfo())
   );
@@ -60,6 +92,7 @@ export function registerElkTools(server: McpServer): void {
         "рейтинг, GPA, кредиты, КУД, программа обучения, факультет, курс, группа, форма и " +
         "уровень обучения, статус. Структурированная замена разделу profile в elk_get_section.",
       inputSchema: {},
+      annotations: READ_ANNOTATIONS,
     },
     async () => runTool(() => elk.getAcademicData())
   );
@@ -80,6 +113,7 @@ export function registerElkTools(server: McpServer): void {
         query: z.string().min(1).describe("Поисковый запрос, напр. 'справка' или 'стипендия'"),
         limit: z.number().int().min(1).max(50).default(10).describe("Максимум результатов"),
       },
+      annotations: READ_ANNOTATIONS,
     },
     async ({ query, limit }) => runTool(() => elk.searchServices(query, limit))
   );
@@ -96,6 +130,7 @@ export function registerElkTools(server: McpServer): void {
       inputSchema: {
         limit: z.number().int().min(1).max(500).default(500).describe("Максимум заявок"),
       },
+      annotations: READ_ANNOTATIONS,
     },
     async ({ limit }) => runTool(() => elk.listRequests(limit))
   );
@@ -110,6 +145,7 @@ export function registerElkTools(server: McpServer): void {
       inputSchema: {
         limit: z.number().int().min(1).max(100).default(20).describe("Максимум уведомлений"),
       },
+      annotations: READ_ANNOTATIONS,
     },
     async ({ limit }) => runTool(() => elk.getNotifications(limit))
   );
@@ -148,6 +184,7 @@ export function registerElkTools(server: McpServer): void {
           .optional()
           .describe("Только для login_history: смещение для пагинации (по умолчанию 0)"),
       },
+      annotations: READ_ANNOTATIONS,
     },
     async ({ section, limit, offset }) => runTool(() => elk.getSection(section, { limit, offset }))
   );
@@ -172,6 +209,7 @@ export function registerElkTools(server: McpServer): void {
             "Относительный путь на lk.hse.ru, напр. /claim или /student-services?section=documents"
           ),
       },
+      annotations: READ_ANNOTATIONS,
     },
     async ({ path }) => runTool(() => elk.openPage(path))
   );

@@ -57,7 +57,8 @@ src/index.ts → */tools.ts → digest, changes → адаптеры запис�
   каталог данных (`data-dir.ts`: файлы состояния — только через него, не от корня проекта).
 - Сервис — `src/services/<name>/`: `client.ts` (логика, без MCP SDK) и `tools.ts`
   (`registerXTools(server)`: zod-схема и вызов клиента через `runTool()`, без логики).
-- Адаптеры записи: `services/lms/submissions.ts`, `services/elk/certificate.ts`; общий протокол —
+- Адаптеры записи — папки `services/lms/submissions/`, `services/elk/certificate/` (модули по этапам:
+  разбор, `plan`, `execute`, `verify`, `index`); общий протокол —
   `services/writes/` (`runner.ts#defineWrite`, токен, журнал, папка «исходящих», `errors.ts`).
 - Сервисы одного слоя друг друга не импортируют; правила проверяет `test/architecture.test.mjs`.
   Новый сервис — строка в `SERVICE_DEPS` этого теста, подключение в `src/index.ts`, README и

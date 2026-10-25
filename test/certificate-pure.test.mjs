@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-const m = await import(new URL("../dist/services/elk/certificate.js", import.meta.url).href);
+const m = await import(new URL("../dist/services/elk/certificate/index.js", import.meta.url).href);
 const {
   normalizeLabel,
   needsExtraInput,

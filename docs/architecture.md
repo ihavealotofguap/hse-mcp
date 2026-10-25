@@ -16,10 +16,10 @@ src/index.ts             сборка сервера: регистрирует �
    ↑
 digest, changes          агрегаторы поверх lms и elk (changes опирается ещё на digest)
    ↑
-lms/submissions.ts,      адаптеры записи: протокол из writes + свой клиент
-elk/certificate.ts
+lms/submissions/,        адаптеры записи: протокол из writes + свой клиент
+elk/certificate/
    ↑
-services/writes/         каркас записи: runner, token, journal, outbox, gate, errors
+services/writes/         каркас записи: runner, token, journal, outbox, gate, errors, hash
    ↑
 lms, elk, system         клиенты только для чтения; друг о друге не знают
    ↑
@@ -59,11 +59,16 @@ src/
   commit.ts, fs-lock.ts,   точка невозврата для записи; блокировки и атомарная запись файлов;
   fs-secure.ts             права на файлы в каталоге данных
   dom-utils.ts, url-utils.ts  разбор страниц (extractTable, dumpPage) и проверка URL
-  mcp-utils.ts             runTool(): результат → JSON-текст, исключение → isError
+  mcp-utils.ts             runTool(): результат → компактный JSON (объект — ещё и structuredContent),
+                           исключение → isError; READ_ANNOTATIONS
   run-source.ts, date-utils.ts  таймаут источника сводки; даты
   services/
-    lms/       client.ts (чтение SmartLMS), submissions.ts (адаптер записи), tools.ts
-    elk/       client.ts (чтение ЕЛК), certificate.ts (адаптер записи), tools.ts
+    lms/       client.ts (чтение SmartLMS), tools.ts
+      submissions/  адаптер записи: parse (страница статуса и форма правки), plan (сухой прогон),
+                    execute (запись), verify (исход), index (адаптеры submit/delete)
+    elk/       client.ts (чтение ЕЛК), tools.ts
+      certificate/  адаптер записи: form (разбор формы), claims (история заявок), plan, execute,
+                    verify, index (адаптер заказа)
     digest/    сводки my_today/my_week/my_deadlines
     changes/   снимки и изменения hse_changes
     writes/    каркас записи (без MCP SDK)
@@ -82,8 +87,12 @@ storage/       каталог данных клона (в .gitignore); у .mcpb 
 - `client.ts` — поход во внешнюю систему, без зависимостей от MCP SDK. Данные загружаются через
   `defineResource` (`src/resource.ts`), страницы открываются только через `withPage`
   (`src/auth/browser-session.ts`).
-- `tools.ts` — экспортирует `registerXTools(server)`: `server.registerTool(...)` с zod-схемой входа,
-  тело тула вызывает клиент через `runTool()` (`src/mcp-utils.ts`). Логики в `tools.ts` нет.
+- `tools.ts` — экспортирует `registerXTools(server)`: `server.registerTool(...)` с zod-схемой входа и
+  аннотациями (тулы чтения — `READ_ANNOTATIONS` из `src/mcp-utils.ts`, записи — `WRITE_ANNOTATIONS`
+  из `services/writes/gate.ts`), у основных тулов — `outputSchema`; тело тула вызывает клиент через
+  `runTool()`. Логики в `tools.ts` нет. Схема ответа описывает объект, поэтому список заворачивается
+  в объект (`{ courses }`, `{ days }`); поля из внешних систем в схеме необязательны: несовпадение со
+  схемой SDK превращает весь ответ в ошибку. Наличие аннотаций проверяет `test/tools-annotations`.
 
 Новый сервис: создать папку с этими двумя файлами, подключить `registerXTools` в `src/index.ts`,
 добавить строку в `SERVICE_DEPS` теста `test/architecture.test.mjs`, описать тулы в README и
@@ -145,10 +154,14 @@ storage/       каталог данных клона (в .gitignore); у .mcpb 
 - **Запись** (`services/writes/`, подпроект 4, спека `2026-10-18-write-operations-design.md`) — общий
   каркас записывающих тулов без зависимостей от MCP SDK: `types.ts`, `token.ts` (ключ HMAC
   `storage/writes/key`, `previewToken`, `targetId`), `journal.ts` (`storage/writes/journal.json`),
-  `outbox.ts` (проверка файлов из папки «исходящих»), `runner.ts#defineWrite` (протокол). Адаптер
-  операции (`observe`/`describe`/`payloadOf`/`execute`/`verifyOnly`) живёт в сервисе:
-  `services/lms/submissions.ts`, тулы `lms_submit_assignment` и `lms_delete_submission` регистрируются в
-  `services/lms/tools.ts`, а `elk_order_certificate` (адаптер `services/elk/certificate.ts`) — в
+  `outbox.ts` (проверка файлов из папки «исходящих»), `runner.ts#defineWrite` (протокол), `errors.ts`
+  (`Refusal`, обезличивание ошибок, `passCommitPoint`), `hash.ts`. Адаптер операции
+  (`observe`/`describe`/`payloadOf`/`execute`/`verifyOnly`) — папка в сервисе, модули по этапам
+  протокола: разбор страницы или формы (чистые функции и чтение снимка), `plan` (предусловия, план,
+  сухой прогон), `execute` (запись до и после `commitPoint`), `verify` (`classify*Outcome`,
+  `verifyOnly`), `index.ts` собирает адаптер и экспортирует публичное. Адаптеры:
+  `services/lms/submissions/`, тулы `lms_submit_assignment` и `lms_delete_submission` регистрируются в
+  `services/lms/tools.ts`, а `elk_order_certificate` (адаптер `services/elk/certificate/`) — в
   `services/elk/tools.ts`, оба только при `config.writesEnabled` (`HSE_ENABLE_WRITES=true`, по умолчанию
   выключено, читается при старте); аннотации, схема `confirm`/`previewToken`/`acknowledgeUnknown` и
   одно на процесс уведомление «тулы записи выключены» общие — `services/writes/gate.ts`. Заказ справки
@@ -297,9 +310,9 @@ storage/       каталог данных клона (в .gitignore); у .mcpb 
   защищённо), Node.js поставляется с Claude для macOS и Windows; браузер для Playwright в пакет не
   входит — берётся системный Edge или Chrome либо скачивается (см. «Распространение»).
 
-Что из этого берём в следующие шаги: объединение мелких тулов ЕЛК через параметр раздела;
-аннотации на каждом туле и `outputSchema` для основных; описание тула как объект с регистрацией
-списком; тест-снимок схем тулов. Распространение через npx и `.mcpb` сделано.
+Что из этого берём в следующие шаги (объединение тулов ЕЛК, аннотации и `outputSchema`,
+распространение через npx и `.mcpb` уже сделаны): описание тула как объект с регистрацией списком;
+тест-снимок схем тулов.
 
 ## Roadmap
 

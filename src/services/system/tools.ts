@@ -3,6 +3,16 @@ import { z } from "zod";
 import { clearCache } from "../../cache.js";
 import { runTool } from "../../mcp-utils.js";
 
+// Сброс кэша меняет состояние сервера (не readOnly), но ничего не теряет: данные загрузятся заново
+// при следующем запросе (не destructive), повтор даёт тот же результат (idempotent), внешние системы
+// не трогаются (closed world).
+const CLEAR_CACHE_ANNOTATIONS = {
+  readOnlyHint: false,
+  destructiveHint: false,
+  idempotentHint: true,
+  openWorldHint: false,
+} as const;
+
 export function registerSystemTools(server: McpServer): void {
   server.registerTool(
     "hse_clear_cache",
@@ -20,6 +30,7 @@ export function registerSystemTools(server: McpServer): void {
           .optional()
           .describe("Что сбросить: all (по умолчанию) или один сервис"),
       },
+      annotations: CLEAR_CACHE_ANNOTATIONS,
     },
     async ({ scope }) =>
       runTool(async () => {
