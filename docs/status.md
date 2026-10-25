@@ -12,8 +12,8 @@
 | Изменения | `hse_changes`, `hse_changes_reset` | `services/changes/` | нет | да, один аккаунт; `added`/`changed`/`moved` — только имитацией правки базы |
 | Служебное | `hse_clear_cache` | `services/system/` | нет | да |
 | Каркас записи | — | `services/writes/` | `runner`, `token`, `journal`, `outbox`, `tools-gating` | да |
-| Запись в SmartLMS | `lms_submit_assignment`, `lms_delete_submission` | `services/lms/submissions.ts` | `submissions-pure` | да, один аккаунт, один семестр |
-| Заказ справки в ЕЛК | `elk_order_certificate` | `services/elk/certificate.ts` | `certificate-pure` | один заказ; тул всегда отвечает `unknown`, исход проверяется вручную |
+| Запись в SmartLMS | `lms_submit_assignment`, `lms_delete_submission` | `services/lms/submissions/` | `submissions-pure` | да, один аккаунт, один семестр |
+| Заказ справки в ЕЛК | `elk_order_certificate` | `services/elk/certificate/` | `certificate-pure` | один заказ; тул всегда отвечает `unknown`, исход проверяется вручную |
 | Архитектура | — | — | `architecture`: импорты соблюдают слои | — |
 
 Тулы записи появляются только при `HSE_ENABLE_WRITES=true`: без него у сервера 21 тул, с ним 24.
