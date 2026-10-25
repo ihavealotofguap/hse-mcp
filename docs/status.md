@@ -14,6 +14,8 @@
 | Каркас записи | — | `services/writes/` | `runner`, `token`, `journal`, `outbox`, `tools-gating` | да |
 | Запись в SmartLMS | `lms_submit_assignment`, `lms_delete_submission` | `services/lms/submissions.ts` | `submissions-pure` | да, один аккаунт, один семестр |
 | Заказ справки в ЕЛК | `elk_order_certificate` | `services/elk/certificate.ts` | `certificate-pure` | один заказ; тул всегда отвечает `unknown`, исход проверяется вручную |
+| Выбор браузера, каталог данных | — | `src/auth/browser-launch.ts`, `src/data-dir.ts` | `browser-launch`, `data-dir` | нет: Edge, Chrome и скачивание Chromium на Windows и macOS не проверялись |
+| Пакет Claude Desktop, npm | — | `manifest.json`, `scripts/pack-mcpb.mjs`, `.github/workflows/publish.yml` | `manifest`; сборка пакета в CI | нет: установка `.mcpb` в Claude Desktop не проверялась |
 | Архитектура | — | — | `architecture`: импорты соблюдают слои | — |
 
 Тулы записи появляются только при `HSE_ENABLE_WRITES=true`: без него у сервера 21 тул, с ним 24.
@@ -24,3 +26,5 @@
   `extractors.ts`, `services/digest/parse.ts`.
 - Нет тестов разбора страниц LMS и ЕЛК на сохранённых HTML-образцах.
 - Аннотации `readOnlyHint` есть только у тулов записи; `outputSchema` нет ни у одного тула.
+- Распознавание неверного пароля по сообщению Keycloak (`#input-error`, `.kc-feedback-text`,
+  `.alert-error`) на теме ВШЭ вживую не проверено.
