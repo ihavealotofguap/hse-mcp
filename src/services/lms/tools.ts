@@ -1,7 +1,7 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { config } from "../../config.js";
-import { runTool } from "../../mcp-utils.js";
+import { READ_ANNOTATIONS, runTool } from "../../mcp-utils.js";
 import { CONFIRM_SCHEMA, noteWritesDisabled, WRITE_ANNOTATIONS } from "../writes/gate.js";
 import { defineWrite } from "../writes/runner.js";
 import * as lms from "./client.js";
@@ -9,6 +9,22 @@ import { deleteAdapter, submitAdapter } from "./submissions.js";
 
 const submitAssignment = defineWrite(submitAdapter);
 const deleteSubmission = defineWrite(deleteAdapter);
+
+// Поля курса по CourseOverview (client.ts); всё, кроме id и названия, необязательно: несовпадение
+// со схемой SDK превращает весь ответ в ошибку.
+const COURSE = z.object({
+  id: z.number(),
+  fullname: z.string(),
+  shortname: z.string().nullish(),
+  category: z.string().nullish(),
+  startdate: z.string().nullish(),
+  enddate: z.string().nullish(),
+  progress: z.number().nullish(),
+  isFavourite: z.boolean().nullish(),
+  hidden: z.boolean().nullish(),
+  visible: z.boolean().nullish(),
+  viewUrl: z.string().nullish(),
+});
 
 export function registerLmsTools(server: McpServer): void {
   server.registerTool(
@@ -20,8 +36,10 @@ export function registerLmsTools(server: McpServer): void {
         "категория, даты начала/окончания, процент прохождения, избранное/скрытое. Требует " +
         "входа через единый SSO ВШЭ (выполняется автоматически, credentials из .env).",
       inputSchema: {},
+      outputSchema: { courses: z.array(COURSE) },
+      annotations: READ_ANNOTATIONS,
     },
-    async () => runTool(() => lms.listCourses())
+    async () => runTool(async () => ({ courses: await lms.listCourses() }))
   );
 
   server.registerTool(
@@ -36,6 +54,7 @@ export function registerLmsTools(server: McpServer): void {
       inputSchema: {
         limit: z.number().int().min(1).max(200).default(50).describe("Максимум писем"),
       },
+      annotations: READ_ANNOTATIONS,
     },
     async ({ limit }) => runTool(() => lms.listMessages(limit))
   );
@@ -50,6 +69,7 @@ export function registerLmsTools(server: McpServer): void {
       inputSchema: {
         messageId: z.number().int().positive().describe("id письма (из lms_list_messages)"),
       },
+      annotations: READ_ANNOTATIONS,
     },
     async ({ messageId }) => runTool(() => lms.getMessage(messageId))
   );
@@ -68,6 +88,7 @@ export function registerLmsTools(server: McpServer): void {
           .positive()
           .describe("id курса на edu.hse.ru (course/view.php?id=...)"),
       },
+      annotations: READ_ANNOTATIONS,
     },
     async ({ courseId }) => runTool(() => lms.getCourseMaterials(courseId))
   );
@@ -80,8 +101,15 @@ export function registerLmsTools(server: McpServer): void {
       inputSchema: {
         courseId: z.number().int().positive().describe("id курса на edu.hse.ru"),
       },
+      outputSchema: {
+        assignments: z
+          .array(z.record(z.string()))
+          .describe("Строки таблицы заданий курса: заголовок колонки → текст ячейки"),
+      },
+      annotations: READ_ANNOTATIONS,
     },
-    async ({ courseId }) => runTool(() => lms.listAssignments(courseId))
+    async ({ courseId }) =>
+      runTool(async () => ({ assignments: await lms.listAssignments(courseId) }))
   );
 
   server.registerTool(
@@ -96,6 +124,7 @@ export function registerLmsTools(server: McpServer): void {
       inputSchema: {
         courseId: z.number().int().positive().describe("id курса на edu.hse.ru"),
       },
+      annotations: READ_ANNOTATIONS,
     },
     async ({ courseId }) => runTool(() => lms.getGrades(courseId))
   );
@@ -113,6 +142,7 @@ export function registerLmsTools(server: McpServer): void {
           .string()
           .describe("Относительный путь на edu.hse.ru, напр. /calendar/view.php?view=month"),
       },
+      annotations: READ_ANNOTATIONS,
     },
     async ({ path }) => runTool(() => lms.openPage(path))
   );

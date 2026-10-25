@@ -55,7 +55,8 @@ src/
   commit.ts, fs-lock.ts,   точка невозврата для записи; блокировки и атомарная запись файлов;
   fs-secure.ts             права на файлы в storage/
   dom-utils.ts, url-utils.ts  разбор страниц (extractTable, dumpPage) и проверка URL
-  mcp-utils.ts             runTool(): результат → JSON-текст, исключение → isError
+  mcp-utils.ts             runTool(): результат → компактный JSON (объект — ещё и structuredContent),
+                           исключение → isError; READ_ANNOTATIONS
   run-source.ts, date-utils.ts  таймаут источника сводки; даты
   services/
     lms/       client.ts (чтение SmartLMS), submissions.ts (адаптер записи), tools.ts
@@ -76,8 +77,12 @@ storage/       локальные данные пользователя (в .git
 - `client.ts` — поход во внешнюю систему, без зависимостей от MCP SDK. Данные загружаются через
   `defineResource` (`src/resource.ts`), страницы открываются только через `withPage`
   (`src/auth/browser-session.ts`).
-- `tools.ts` — экспортирует `registerXTools(server)`: `server.registerTool(...)` с zod-схемой входа,
-  тело тула вызывает клиент через `runTool()` (`src/mcp-utils.ts`). Логики в `tools.ts` нет.
+- `tools.ts` — экспортирует `registerXTools(server)`: `server.registerTool(...)` с zod-схемой входа и
+  аннотациями (тулы чтения — `READ_ANNOTATIONS` из `src/mcp-utils.ts`, записи — `WRITE_ANNOTATIONS`
+  из `services/writes/gate.ts`), у основных тулов — `outputSchema`; тело тула вызывает клиент через
+  `runTool()`. Логики в `tools.ts` нет. Схема ответа описывает объект, поэтому список заворачивается
+  в объект (`{ courses }`, `{ days }`); поля из внешних систем в схеме необязательны: несовпадение со
+  схемой SDK превращает весь ответ в ошибку. Наличие аннотаций проверяет `test/tools-annotations`.
 
 Новый сервис: создать папку с этими двумя файлами, подключить `registerXTools` в `src/index.ts`,
 добавить строку в `SERVICE_DEPS` теста `test/architecture.test.mjs`, описать тулы в README и
@@ -267,9 +272,9 @@ storage/       локальные данные пользователя (в .git
   защищённо), Node.js поставляется с Claude для macOS и Windows; браузер для Playwright в пакет не
   входит — этот вопрос не проверен.
 
-Что из этого берём в следующие шаги: объединение мелких тулов ЕЛК через параметр раздела;
-аннотации на каждом туле и `outputSchema` для основных; описание тула как объект с регистрацией
-списком; тест-снимок схем тулов; распространение через npx и `.mcpb`.
+Что из этого берём в следующие шаги (объединение тулов ЕЛК, аннотации и `outputSchema` уже сделаны):
+описание тула как объект с регистрацией списком; тест-снимок схем тулов; распространение через npx
+и `.mcpb`.
 
 ## Roadmap
 
