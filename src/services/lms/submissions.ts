@@ -5,13 +5,9 @@ import path from "node:path";
 import type { Locator, Page } from "playwright";
 import { type PageCallContext, withPage } from "../../auth/browser-session.js";
 import { COMMIT_DEADLINE_MS } from "../../commit.js";
+import { Refusal, sanitizeCommitError, sanitizeNavigationError } from "../writes/errors.js";
 import { type OutboxFile, resolveOutboxFiles } from "../writes/outbox.js";
-import {
-  type CommitPoint,
-  classifyError,
-  type ExecuteResult,
-  type WriteAdapter,
-} from "../writes/runner.js";
+import type { CommitPoint, ExecuteResult, WriteAdapter } from "../writes/runner.js";
 
 /**
  * Сдача, правка и удаление ответа на задание SmartLMS (спека №4 §9, §9.1): разбор страницы статуса
@@ -125,44 +121,6 @@ export interface SubmissionPlan {
   replace: Array<{ name: string; size: number; currentSize: number }>;
   /** Файлов в ответе после сохранения (уникальные по имени). */
   total: number;
-}
-
-/** Собственный отказ модуля: текст составлен здесь и безопасен для ответа тула (без URL, имён, id). */
-export class Refusal extends Error {}
-
-/**
- * Ошибка открытия или чтения страницы → текст без URL. Сообщения Playwright (`page.goto`, журнал
- * вызова) и дедлайн `withPage` содержат адрес с query, то есть id задания, а в ответ тула он попадать
- * не должен (спека §8). `Refusal` проходит как есть; прочее заменяется нейтральным текстом, который
- * сохраняет то, по чему `classifyError` различает класс: имя `AbortError`/`TimeoutError`, «не уложил»,
- * «отменен», код `ERR_…`, «вход (401)». Исходная ошибка в `cause` не кладётся.
- */
-export function sanitizeNavigationError(err: unknown, what = "страница задания"): Error {
-  if (err instanceof Refusal) return err;
-  const name = err instanceof Error || err instanceof DOMException ? err.name : "";
-  const message = err instanceof Error || err instanceof DOMException ? err.message : String(err);
-  let text: string;
-  switch (classifyError(err)) {
-    case "timeout":
-      text = `${what} не уложилась в отведённое время`;
-      break;
-    case "cancelled":
-      text = "операция отменена";
-      break;
-    case "network": {
-      const code = /\bERR_[A-Z0-9_]+/.exec(message)?.[0];
-      text = `${what} не открылась: ошибка сети ${code ?? "(fetch)"}`;
-      break;
-    }
-    case "auth":
-      text = `${what} не открылась: требуется вход (401)`;
-      break;
-    default:
-      text = `${what}: не удалось открыть или прочитать`;
-  }
-  const clean = new Error(text);
-  if (name === "AbortError" || name === "TimeoutError") clean.name = name;
-  return clean;
 }
 
 /**
@@ -1105,33 +1063,6 @@ function isViewUrl(url: URL, cmid: number, action = "view"): boolean {
 }
 
 const moodleErrorShown = async (page: Page) => (await visibleCount(page, SEL_MOODLE_ERROR)) > 0;
-
-/**
- * Отказ `commitPoint` → текст без путей с тем же классом `classifyError`: дедлайн — «не уложился» (имя
- * `AbortError`/`TimeoutError` сохраняется), отмена — «операция отменена», вызов уже завершён — так и
- * сказано; прочее — сбой журнала записей (иных причин у `commitPoint` нет, а текст ошибки файловой
- * системы несёт путь). Результат — `Refusal`, поэтому `readPage` не заменяет его на «не удалось открыть».
- */
-export function sanitizeCommitError(err: unknown): Refusal {
-  const name = err instanceof Error || err instanceof DOMException ? err.name : "";
-  const message = err instanceof Error || err instanceof DOMException ? err.message : String(err);
-  let text: string;
-  switch (classifyError(err)) {
-    case "timeout":
-      text = "вызов не уложился в отведённое время до точки невозврата";
-      break;
-    case "cancelled":
-      text = "операция отменена";
-      break;
-    default:
-      text = /точка невозврата недоступна/.test(message)
-        ? "вызов уже завершён, точка невозврата недоступна"
-        : "не удалось записать журнал записей перед отправкой";
-  }
-  const clean = new Refusal(text);
-  if (name === "AbortError" || name === "TimeoutError") clean.name = name;
-  return clean;
-}
 
 /** Форма, которую отправит кнопка: метод и путь с учётом `formmethod`/`formaction`, скрытые поля. */
 export interface RawButtonForm {

@@ -17,8 +17,6 @@ const {
   checkDeletePreconditions,
   submitAdapter,
   deleteAdapter,
-  sanitizeNavigationError,
-  Refusal,
   sameFileSet,
   expectedManagerFiles,
   compareFiles,
@@ -26,6 +24,9 @@ const {
   classifyDeleteOutcome,
   prepareUpload,
 } = m;
+const { Refusal, sanitizeCommitError, sanitizeNavigationError } = await import(
+  new URL("../dist/services/writes/errors.js", import.meta.url).href
+);
 const { classifyError } = await import(
   new URL("../dist/services/writes/runner.js", import.meta.url).href
 );
@@ -902,7 +903,7 @@ test("sanitizeNavigationError: собственные отказы модуля 
 
 // --- H2: усиление разбора, проверок форм и проверки после сохранения ---
 
-const { checkButtonForm, sanitizeCommitError } = m;
+const { checkButtonForm } = m;
 const SHA_C = "c".repeat(64);
 
 test("buildAssignmentView: два класса статуса сразу (отправлено и черновик/новый) — unknown", () => {

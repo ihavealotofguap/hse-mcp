@@ -3,7 +3,7 @@ import type { Locator, Page, Request, Route } from "playwright";
 import { type PageCallContext, withPage } from "../../auth/browser-session.js";
 import { config } from "../../config.js";
 import type { ResourceCallOptions } from "../../resource.js";
-import { Refusal, sanitizeCommitError, sanitizeNavigationError } from "../lms/submissions.js";
+import { Refusal, sanitizeCommitError, sanitizeNavigationError } from "../writes/errors.js";
 import {
   abortableSleep,
   type ExecuteContext,

@@ -22,7 +22,7 @@ const {
   checkFormState,
 } = m;
 const { Refusal } = await import(
-  new URL("../dist/services/lms/submissions.js", import.meta.url).href
+  new URL("../dist/services/writes/errors.js", import.meta.url).href
 );
 
 const FORMAT = ["Электронный документ", "Документ на бумажном носителе"];
