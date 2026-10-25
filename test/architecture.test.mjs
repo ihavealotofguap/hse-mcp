@@ -7,8 +7,8 @@ import { test } from "node:test";
 
 const SRC = path.resolve(import.meta.dirname, "../src");
 
-/** Адаптеры записи (файл или папка модулей): живут в папке сервиса, но относятся к слою записи. */
-const WRITE_ADAPTERS = new Set(["services/lms/submissions", "services/elk/certificate.ts"]);
+/** Адаптеры записи — папки (модули по этапам протокола): живут в папке сервиса, но относятся к слою записи. */
+const WRITE_ADAPTERS = new Set(["services/lms/submissions", "services/elk/certificate"]);
 
 function listTs(dir) {
   return fs.readdirSync(dir, { withFileTypes: true }).flatMap((e) => {
@@ -36,7 +36,7 @@ function layerOf(rel) {
   if (!p.startsWith("services/")) return { name: "core" };
   const svc = p.split("/")[1];
   if (svc === "writes") return { name: "writes", svc };
-  if ([...WRITE_ADAPTERS].some((dir) => p === dir || p.startsWith(`${dir}/`))) return { name: "adapter", svc };
+  if ([...WRITE_ADAPTERS].some((dir) => p.startsWith(`${dir}/`))) return { name: "adapter", svc };
   if (p.endsWith("/tools.ts")) return { name: "tools", svc };
   return { name: "service", svc };
 }
@@ -99,5 +99,5 @@ test("импорты в src/ соблюдают слои (docs/architecture.md)"
 });
 
 test("каждый адаптер записи существует", () => {
-  for (const rel of WRITE_ADAPTERS) assert.ok(fs.existsSync(path.join(SRC, rel)), rel);
+  for (const rel of WRITE_ADAPTERS) assert.ok(fs.existsSync(path.join(SRC, rel, "index.ts")), rel);
 });
