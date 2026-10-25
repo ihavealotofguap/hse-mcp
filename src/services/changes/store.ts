@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { errCode, retryIo, withFileLock } from "../../fs-lock.js";
 import { projectRoot } from "../../project-root.js";
-import { STATE_VERSION, type Scope, type State } from "./types.js";
+import { type Scope, STATE_VERSION, type State } from "./types.js";
 
 export const JOURNAL_MAX_EVENTS = 500;
 export const JOURNAL_MAX_AGE_MS = 30 * 86_400_000;
@@ -13,23 +13,45 @@ const stateFile = (dir: string): string => path.join(dir, "state.json");
 const lockFile = (dir: string): string => path.join(dir, "state.json.lock");
 
 export function emptyState(): State {
-  return { version: STATE_VERSION, rev: 0, nextSeq: 1, issued: {}, lost: {}, baselines: {}, journal: [], seen: {} };
+  return {
+    version: STATE_VERSION,
+    rev: 0,
+    nextSeq: 1,
+    issued: {},
+    lost: {},
+    baselines: {},
+    journal: [],
+    seen: {},
+  };
 }
 
-const isObj = (v: unknown): v is Record<string, unknown> => !!v && typeof v === "object" && !Array.isArray(v);
+const isObj = (v: unknown): v is Record<string, unknown> =>
+  !!v && typeof v === "object" && !Array.isArray(v);
 const isNum = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v);
 
 /** Проверка формы, достаточной для работы срезов и диффа; содержимое фактов не проверяется. */
 function isValidState(x: unknown): x is State {
   if (!isObj(x)) return false;
   return (
-    isNum(x.version) && isNum(x.rev) && isNum(x.nextSeq) &&
-    isObj(x.issued) && isObj(x.lost) && isObj(x.seen) && isObj(x.baselines) &&
+    isNum(x.version) &&
+    isNum(x.rev) &&
+    isNum(x.nextSeq) &&
+    isObj(x.issued) &&
+    isObj(x.lost) &&
+    isObj(x.seen) &&
+    isObj(x.baselines) &&
     (x.issues === undefined ||
-      (isObj(x.issues) && Object.values(x.issues).every((v) => Array.isArray(v) && v.every((s) => typeof s === "string")))) &&
-    Object.values(x.baselines).every((b) => isObj(b) && typeof b.takenAt === "string" && isObj(b.facts)) &&
+      (isObj(x.issues) &&
+        Object.values(x.issues).every(
+          (v) => Array.isArray(v) && v.every((s) => typeof s === "string")
+        ))) &&
+    Object.values(x.baselines).every(
+      (b) => isObj(b) && typeof b.takenAt === "string" && isObj(b.facts)
+    ) &&
     Array.isArray(x.journal) &&
-    x.journal.every((e) => isObj(e) && isNum(e.seq) && typeof e.at === "string" && typeof e.scope === "string")
+    x.journal.every(
+      (e) => isObj(e) && isNum(e.seq) && typeof e.at === "string" && typeof e.scope === "string"
+    )
   );
 }
 
@@ -85,10 +107,15 @@ export async function loadState(dir: string): Promise<LoadResult> {
       return {
         kind: "corrupt",
         state: emptyState(),
-        warning: "state.json повреждён, но не удалось переместить повреждённый файл; запись отложена",
+        warning:
+          "state.json повреждён, но не удалось переместить повреждённый файл; запись отложена",
       };
     }
-    return { kind: "corrupt", state: emptyState(), warning: "state.json повреждён: перемещён в .corrupt-*, начата чистая база" };
+    return {
+      kind: "corrupt",
+      state: emptyState(),
+      warning: "state.json повреждён: перемещён в .corrupt-*, начата чистая база",
+    };
   }
   return { kind: "ok", state: parsed };
 }
@@ -164,7 +191,10 @@ export async function saveState(
     } catch {
       /* tmp мог не создаться */
     }
-    return { ok: false, error: `не удалось записать state.json (${errCode(err) ?? "ошибка ввода-вывода"})` };
+    return {
+      ok: false,
+      error: `не удалось записать state.json (${errCode(err) ?? "ошибка ввода-вывода"})`,
+    };
   }
 }
 
@@ -172,7 +202,11 @@ export async function saveState(
  * Внутрипроцессный мьютекс + lock-файл `state.json.lock` (`wx`) на цикл «прочитать → пересчитать →
  * записать». Сбор данных идёт вне блокировки. Устаревшая (> 30 с) блокировка снимается.
  */
-export function withStateLock<T>(dir: string, fn: () => Promise<T>, opts: { waitMs?: number } = {}): Promise<T> {
+export function withStateLock<T>(
+  dir: string,
+  fn: () => Promise<T>,
+  opts: { waitMs?: number } = {}
+): Promise<T> {
   return withFileLock(lockFile(dir), fn, opts);
 }
 
@@ -202,6 +236,7 @@ export function pruneJournal(state: State, now: Date): void {
 export function pruneGradeBaselines(state: State, now: Date): void {
   const cutoff = now.getTime() - GRADES_BASELINE_MAX_AGE_MS;
   for (const [source, baseline] of Object.entries(state.baselines)) {
-    if (source.startsWith("lms_grades:") && Date.parse(baseline.takenAt) < cutoff) delete state.baselines[source];
+    if (source.startsWith("lms_grades:") && Date.parse(baseline.takenAt) < cutoff)
+      delete state.baselines[source];
   }
 }

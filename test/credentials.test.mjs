@@ -1,10 +1,10 @@
-import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { PassThrough } from "node:stream";
+import { test } from "node:test";
 
 const {
   lookupPassword,
@@ -15,8 +15,12 @@ const {
   DOTENV_PASSWORD_WARNING,
   captureCredentialInputs,
 } = await import(new URL("../dist/credentials.js", import.meta.url).href);
-const { restrictFile, restrictDir, windowsAccount } = await import(new URL("../dist/fs-secure.js", import.meta.url).href);
-const { runCli, createLineReader, readSecretFrom, createStdinIo } = await import(new URL("../dist/cli/credentials.js", import.meta.url).href);
+const { restrictFile, restrictDir, windowsAccount } = await import(
+  new URL("../dist/fs-secure.js", import.meta.url).href
+);
+const { runCli, createLineReader, readSecretFrom, createStdinIo } = await import(
+  new URL("../dist/cli/credentials.js", import.meta.url).href
+);
 
 // Подставные значения: настоящих паролей и адресов в тестах нет.
 const SECRET = "s3cret-test-value";
@@ -70,7 +74,12 @@ test("lookupPassword: пустая запись в хранилище для э�
 });
 
 test("lookupPassword: store === null — берётся .env", () => {
-  const r = lookupPassword({ env: {}, dotenv: { HSE_PASSWORD: "from-dotenv" }, account: EMAIL, store: null });
+  const r = lookupPassword({
+    env: {},
+    dotenv: { HSE_PASSWORD: "from-dotenv" },
+    account: EMAIL,
+    store: null,
+  });
   assert.deepEqual(r, { password: "from-dotenv", source: "dotenv" });
 });
 
@@ -178,7 +187,11 @@ test("restrictFile: не бросает на отсутствующем файл
 // --- loadKeyStore -------------------------------------------------------------------------------
 
 test("loadKeyStore: модуля нет (импорт отклонён) — null", async () => {
-  const store = await loadKeyStore(() => Promise.reject(new Error("Cannot find package")), "win32", {});
+  const store = await loadKeyStore(
+    () => Promise.reject(new Error("Cannot find package")),
+    "win32",
+    {}
+  );
   assert.equal(store, null);
 });
 
@@ -214,7 +227,7 @@ test("loadKeyStore: оборачивает Entry со службой hsemcp и �
 test("loadKeyStore: на Linux запись создаётся с secret-service; недоступен — null", async () => {
   const seen = [];
   class FakeEntry {
-    constructor(service, account, options) {
+    constructor(_service, _account, options) {
       seen.push(options);
     }
     getPassword() {
@@ -258,7 +271,11 @@ test("loadKeyStore: getPassword глотает ошибку хранилища (
 });
 
 test("откат: модуля нет → lookupPassword берёт .env", async () => {
-  const store = await loadKeyStore(() => Promise.reject(new Error("MODULE_NOT_FOUND")), "win32", {});
+  const store = await loadKeyStore(
+    () => Promise.reject(new Error("MODULE_NOT_FOUND")),
+    "win32",
+    {}
+  );
   const r = lookupPassword({ env: {}, dotenv: { HSE_PASSWORD: "d" }, account: EMAIL, store });
   assert.deepEqual(r, { password: "d", source: "dotenv" });
 });
@@ -416,7 +433,9 @@ test("loadKeyStore: другое значение HSE_DISABLE_KEYCHAIN не от
       return false;
     }
   }
-  const store = await loadKeyStore(async () => ({ Entry: FakeEntry }), "win32", { HSE_DISABLE_KEYCHAIN: "false" });
+  const store = await loadKeyStore(async () => ({ Entry: FakeEntry }), "win32", {
+    HSE_DISABLE_KEYCHAIN: "false",
+  });
   assert.ok(store);
 });
 
@@ -431,7 +450,12 @@ test("captureCredentialInputs: пароль из .env — источник doten
   // .env по-прежнему применяется к окружению (как раньше), но снимок «до» его не содержит.
   assert.equal(env.HSE_PASSWORD, SECRET);
   assert.equal(inputs.envAtStart.HSE_PASSWORD, undefined);
-  const r = lookupPassword({ env: inputs.envAtStart, dotenv: inputs.dotenv, account: EMAIL, store: null });
+  const r = lookupPassword({
+    env: inputs.envAtStart,
+    dotenv: inputs.dotenv,
+    account: EMAIL,
+    store: null,
+  });
   assert.deepEqual(r, { password: SECRET, source: "dotenv" });
 });
 
@@ -442,7 +466,12 @@ test("captureCredentialInputs: пароль из окружения процес
   const env = { HSE_PASSWORD: SECRET };
   const inputs = captureCredentialInputs(file, env);
   assert.equal(env.HSE_PASSWORD, SECRET);
-  const r = lookupPassword({ env: inputs.envAtStart, dotenv: inputs.dotenv, account: EMAIL, store: null });
+  const r = lookupPassword({
+    env: inputs.envAtStart,
+    dotenv: inputs.dotenv,
+    account: EMAIL,
+    store: null,
+  });
   assert.deepEqual(r, { password: SECRET, source: "env" });
 });
 
@@ -471,13 +500,35 @@ test("restrictDir: на POSIX режим 0o700", (t) => {
 
 test("restrictDir: на Windows новые файлы наследуют единственную запись владельца, доступ сохраняется", (t) => {
   if (!isWin) return t.skip("проверка icacls только для Windows");
-  const dir = path.join(tmpDir(), "storage");
+  // Права родителя задаём сами: storage наследует запись владельца и чтение для группы «Пользователи»
+  // (SID S-1-5-32-545). Иначе результат зависит от временного каталога: на раннерах GitHub у новой
+  // папки явные записи SYSTEM и Administrators, а /inheritance:r снимает только унаследованные.
+  const parent = tmpDir();
+  execFileSync(
+    "icacls",
+    [
+      parent,
+      "/inheritance:r",
+      "/grant:r",
+      `${windowsAccount()}:(OI)(CI)(F)`,
+      "*S-1-5-32-545:(OI)(CI)(RX)",
+    ],
+    { stdio: "ignore" }
+  );
+  const dir = path.join(parent, "storage");
   fs.mkdirSync(dir);
   restrictDir(dir);
   const file = path.join(dir, "new");
   fs.writeFileSync(file, "x");
   const acl = execFileSync("icacls", [file], { encoding: "latin1" });
-  assert.equal((acl.match(/:\(/g) ?? []).length, 1, "ожидалась одна запись доступа");
+  const dirAcl = [parent, dir]
+    .map((d) => execFileSync("icacls", [d], { encoding: "latin1" }))
+    .join("");
+  assert.equal(
+    (acl.match(/:\(/g) ?? []).length,
+    1,
+    `ожидалась одна запись доступа (учётная запись ${windowsAccount()}):\n${acl}\nкаталог:\n${dirAcl}`
+  );
   fs.writeFileSync(file, "y");
   assert.equal(fs.readFileSync(file, "utf8"), "y");
   fs.rmSync(dir, { recursive: true });

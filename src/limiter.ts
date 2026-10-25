@@ -25,7 +25,8 @@ const waiters: Waiter[] = [];
 let nextPageStartAt = 0;
 let nextApiStartAt = 0;
 
-const abortReason = (signal: AbortSignal): unknown => signal.reason ?? new Error("операция отменена");
+const abortReason = (signal: AbortSignal): unknown =>
+  signal.reason ?? new Error("операция отменена");
 
 function takeSlot(signal?: AbortSignal): Promise<void> {
   if (signal?.aborted) return Promise.reject(abortReason(signal));
@@ -38,7 +39,7 @@ function takeSlot(signal?: AbortSignal): Promise<void> {
     const onAbort = () => {
       const i = waiters.indexOf(waiter);
       if (i >= 0) waiters.splice(i, 1);
-      reject(abortReason(signal!));
+      if (signal) reject(abortReason(signal));
     };
     const waiter: Waiter = {
       grant: () => {
@@ -64,7 +65,7 @@ function waitUntil(startAt: number, signal?: AbortSignal): Promise<void> {
   return new Promise<void>((resolve, reject) => {
     const onAbort = () => {
       clearTimeout(timer);
-      reject(abortReason(signal!));
+      if (signal) reject(abortReason(signal));
     };
     const timer = setTimeout(() => {
       signal?.removeEventListener("abort", onAbort);
@@ -91,7 +92,9 @@ export async function acquirePageSlot(
     if (lease) clearTimeout(lease);
     lease = setTimeout(() => {
       if (released) return;
-      console.error(`hsemcp: слот страницы удерживался дольше ${leaseMs} мс — освобождаю принудительно`);
+      console.error(
+        `hsemcp: слот страницы удерживался дольше ${leaseMs} мс — освобождаю принудительно`
+      );
       release();
     }, leaseMs);
     lease.unref?.();

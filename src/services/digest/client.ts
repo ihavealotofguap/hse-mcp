@@ -1,8 +1,15 @@
 import { addDays } from "../../date-utils.js";
 import { runSource as runGenericSource } from "../../run-source.js";
 import { endOfDay, sortItems, startOfDay, toLocalIso } from "./parse.js";
-import { realCollectors, type Collectors } from "./sources.js";
-import type { CollectorResult, CourseFilter, DateRange, DigestItem, DigestResult, SourceStatus } from "./types.js";
+import { type Collectors, realCollectors } from "./sources.js";
+import type {
+  CollectorResult,
+  CourseFilter,
+  DateRange,
+  DigestItem,
+  DigestResult,
+  SourceStatus,
+} from "./types.js";
 
 // холодный процесс (первая страница ~8 с + последовательные страницы) занимает 17–25 с (замер 2026-10-14), запас до 40 с.
 const DEFAULT_SOURCE_TIMEOUT_MS = 40_000;
@@ -33,7 +40,11 @@ interface SourceRun {
 }
 
 /** Запускает коллектор; никогда не бросает — отказ превращается в статус источника. */
-async function runSource(name: string, fn: () => Promise<CollectorResult>, timeoutMs: number): Promise<SourceRun> {
+async function runSource(
+  name: string,
+  fn: () => Promise<CollectorResult>,
+  timeoutMs: number
+): Promise<SourceRun> {
   const out = await runGenericSource(name, fn, timeoutMs);
   return { name, items: out.value?.items ?? [], status: out.status };
 }
@@ -64,14 +75,19 @@ function keep(item: DigestItem, plan: DigestPlan): boolean {
  * Собирает сводку: коллекторы идут параллельно, отказ одного не влияет на остальные.
  * `src` внедряется для проверки без сети.
  */
-export async function buildDigest(plan: DigestPlan, src: Collectors = realCollectors): Promise<DigestResult> {
+export async function buildDigest(
+  plan: DigestPlan,
+  src: Collectors = realCollectors
+): Promise<DigestResult> {
   const { now } = plan;
   const timeoutMs = plan.sourceTimeoutMs ?? DEFAULT_SOURCE_TIMEOUT_MS;
   const run = (name: string, fn: () => Promise<CollectorResult>) => runSource(name, fn, timeoutMs);
   const ifIncluded = <T>(cond: boolean, make: () => Promise<T>): Promise<T[]> =>
     cond ? make().then((r) => [r]) : Promise.resolve([]);
 
-  const scheduleChain = run("elk_schedule", () => src.elkSchedule(plan.schedule.range)).then((r) => [r]);
+  const scheduleChain = run("elk_schedule", () => src.elkSchedule(plan.schedule.range)).then(
+    (r) => [r]
+  );
 
   const runs = (
     await Promise.all([
@@ -87,7 +103,9 @@ export async function buildDigest(plan: DigestPlan, src: Collectors = realCollec
       ),
       ifIncluded(true, () => run("elk_windows", () => src.elkWindows(now))),
       ifIncluded(plan.include.lmsMessages, () => run("lms_messages", () => src.lmsMessages())),
-      ifIncluded(plan.include.notifications, () => run("elk_notifications", () => src.elkNotifications())),
+      ifIncluded(plan.include.notifications, () =>
+        run("elk_notifications", () => src.elkNotifications())
+      ),
       ifIncluded(plan.include.claims, () => run("elk_claims", () => src.elkClaims())),
       ifIncluded(plan.include.tasks, () => run("elk_tasks", () => src.elkTasks())),
     ])

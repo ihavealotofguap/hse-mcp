@@ -1,10 +1,16 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import fs from "node:fs";
 import path from "node:path";
-import { AsyncLocalStorage } from "node:async_hooks";
-import { chromium, type APIRequestContext, type Browser, type BrowserContext, type Page } from "playwright";
+import {
+  type APIRequestContext,
+  type Browser,
+  type BrowserContext,
+  chromium,
+  type Page,
+} from "playwright";
+import { COMMIT_DEADLINE_MS } from "../commit.js";
 import { config } from "../config.js";
 import { waitForRenderedBody } from "../dom-utils.js";
-import { COMMIT_DEADLINE_MS } from "../commit.js";
 import { ensurePrivateDir, restrictFile } from "../fs-secure.js";
 import { acquirePageSlot, LEASE_GRACE_MS, type PageSlotRelease } from "../limiter.js";
 import { projectRoot } from "../project-root.js";
@@ -180,7 +186,11 @@ async function saveStorageState(context: BrowserContext): Promise<void> {
  * после повторной проверки: если другой вызов уже вошёл, пока мы ждали, страница перезагружается
  * с обновлёнными cookies.
  */
-async function ensureAuthenticated(page: Page, context: BrowserContext, targetUrl: string): Promise<void> {
+async function ensureAuthenticated(
+  page: Page,
+  context: BrowserContext,
+  targetUrl: string
+): Promise<void> {
   const epochAtDetect = loginEpoch;
   if (!(await needsLogin(page))) return;
   await withLoginLock(async () => {
@@ -248,7 +258,10 @@ export async function withPage<T>(
   let settled = false;
   const commit = (ms?: number) => {
     if (settled || ctrl.signal.aborted) {
-      throw ctrl.signal.reason ?? new Error(`${labelOf(url)}: вызов уже завершён, точка невозврата недоступна`);
+      throw (
+        ctrl.signal.reason ??
+        new Error(`${labelOf(url)}: вызов уже завершён, точка невозврата недоступна`)
+      );
     }
     // После точки невозврата исход записи нельзя терять: исходный дедлайн и отмена вызывающего не действуют.
     clearTimeout(timer);
@@ -256,7 +269,10 @@ export async function withPage<T>(
     const commitMs = ms ?? COMMIT_DEADLINE_MS;
     clearTimeout(commitTimer);
     commitTimer = setTimeout(
-      () => ctrl.abort(new Error(`${labelOf(url)} не уложилась в ${commitMs / 1000} с после точки невозврата`)),
+      () =>
+        ctrl.abort(
+          new Error(`${labelOf(url)} не уложилась в ${commitMs / 1000} с после точки невозврата`)
+        ),
       commitMs
     );
     release?.extendLease(commitMs + LEASE_GRACE_MS);
@@ -276,7 +292,10 @@ export async function withPage<T>(
   aborted.catch(() => {});
 
   const work = pageScope.run(true, async () => {
-    const rel = await acquirePageSlot({ signal: ctrl.signal, leaseMs: deadlineMs + LEASE_GRACE_MS });
+    const rel = await acquirePageSlot({
+      signal: ctrl.signal,
+      leaseMs: deadlineMs + LEASE_GRACE_MS,
+    });
     release = rel;
     if (ctrl.signal.aborted) {
       rel();

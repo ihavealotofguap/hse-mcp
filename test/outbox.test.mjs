@@ -1,10 +1,10 @@
-import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { test } from "node:test";
 
 const { resolveOutboxFiles, isInsideDir } = await import(
   new URL("../dist/services/writes/outbox.js", import.meta.url).href
@@ -42,12 +42,18 @@ async function assertRefused(names, opts, hint) {
       assert.ok(err instanceof Error);
       assert.ok(err.message.length > 0);
       for (const name of names) {
-        if (name.length > 0) assert.ok(!err.message.includes(name), `имя в тексте ошибки: ${err.message}`);
+        if (name.length > 0)
+          assert.ok(!err.message.includes(name), `имя в тексте ошибки: ${err.message}`);
         for (const token of name.split(/[^A-Za-z0-9]+/)) {
-          if (token.length >= 3) assert.ok(!err.message.includes(token), `фрагмент «${token}» в тексте: ${err.message}`);
+          if (token.length >= 3)
+            assert.ok(!err.message.includes(token), `фрагмент «${token}» в тексте: ${err.message}`);
         }
       }
-      assert.ok(!err.message.includes(opts.dir), "путь папки в тексте ошибки");
+      // Корень диска («/» на Linux и macOS) встречается в любом тексте — проверка имеет смысл только
+      // для настоящей папки.
+      if (path.parse(opts.dir).root !== opts.dir) {
+        assert.ok(!err.message.includes(opts.dir), "путь папки в тексте ошибки");
+      }
       if (hint) assert.match(err.message, hint);
       return true;
     }
@@ -121,7 +127,7 @@ const BAD_NAMES = [
 ];
 
 for (const [name, hint] of BAD_NAMES) {
-  test(`отказ без имени в тексте: ${JSON.stringify(name.length > 20 ? name.slice(0, 5) + "…" : name)}`, async () => {
+  test(`отказ без имени в тексте: ${JSON.stringify(name.length > 20 ? `${name.slice(0, 5)}…` : name)}`, async () => {
     const s = setup();
     try {
       await assertRefused([name], { dir: s.dir }, hint);
@@ -163,7 +169,10 @@ test("maxBytes: файл больше лимита — отказ, не боль
   const s = setup();
   try {
     await assertRefused(["big.bin"], { dir: s.dir, maxBytes: 1024 }, /файл №1/i);
-    assert.equal((await resolveOutboxFiles(["big.bin"], { dir: s.dir, maxBytes: 2048 }))[0].size, 2048);
+    assert.equal(
+      (await resolveOutboxFiles(["big.bin"], { dir: s.dir, maxBytes: 2048 }))[0].size,
+      2048
+    );
   } finally {
     s.cleanup();
   }
@@ -212,7 +221,11 @@ test("симлинк на файл в соседней папке с общим 
   const s = setup();
   try {
     try {
-      fs.symlinkSync(path.join("..", "outbox-evil", "secret.txt"), path.join(s.dir, "rel.txt"), "file");
+      fs.symlinkSync(
+        path.join("..", "outbox-evil", "secret.txt"),
+        path.join(s.dir, "rel.txt"),
+        "file"
+      );
     } catch {
       t.skip("нет прав на создание симлинка");
       return;
@@ -264,7 +277,10 @@ test("жёсткие ссылки на один файл — разные зап
     const files = await resolveOutboxFiles(["a.txt", "hard.txt"], { dir: s.dir });
     assert.equal(files.length, 2);
     assert.equal(files[0].sha256, files[1].sha256);
-    assert.deepEqual(files.map((f) => f.name), ["a.txt", "hard.txt"]);
+    assert.deepEqual(
+      files.map((f) => f.name),
+      ["a.txt", "hard.txt"]
+    );
   } finally {
     s.cleanup();
   }
@@ -277,9 +293,15 @@ test("FIFO в папке: отказ без зависания (POSIX)", async (
     const made = spawnSync("mkfifo", [path.join(s.dir, "pipe")]);
     if (made.status !== 0) return t.skip("mkfifo недоступен");
     let timer;
-    const hang = new Promise((_, reject) => (timer = setTimeout(() => reject(new Error("resolveOutboxFiles завис на FIFO")), 3000)));
+    const hang = new Promise(
+      (_, reject) =>
+        (timer = setTimeout(() => reject(new Error("resolveOutboxFiles завис на FIFO")), 3000))
+    );
     try {
-      await Promise.race([assertRefused(["pipe"], { dir: s.dir }, /файл №1: не обычный файл/i), hang]);
+      await Promise.race([
+        assertRefused(["pipe"], { dir: s.dir }, /файл №1: не обычный файл/i),
+        hang,
+      ]);
     } finally {
       clearTimeout(timer);
     }
@@ -303,12 +325,22 @@ test("папка «исходящих» не должна совпадать с 
     await assertRefused([".env"], { dir: fakeRoot, projectRoot: fakeRoot }, refusal);
     await assertRefused(["hse-session.json"], { dir: storage, projectRoot: fakeRoot }, refusal);
     await assertRefused(["a.txt"], { dir: s.root, projectRoot: fakeRoot }, refusal); // родитель корня проекта
-    await assertRefused(["a.txt"], { dir: path.parse(s.root).root, projectRoot: fakeRoot }, refusal); // корень диска
+    await assertRefused(
+      ["a.txt"],
+      { dir: path.parse(s.root).root, projectRoot: fakeRoot },
+      refusal
+    ); // корень диска
     // обычная подпапка внутри проекта (storage/outbox) допустима
-    const files = await resolveOutboxFiles(["ok.txt"], { dir: path.join(storage, "outbox"), projectRoot: fakeRoot });
+    const files = await resolveOutboxFiles(["ok.txt"], {
+      dir: path.join(storage, "outbox"),
+      projectRoot: fakeRoot,
+    });
     assert.equal(files[0].name, "ok.txt");
     // и папка рядом с проектом
-    assert.equal((await resolveOutboxFiles(["a.txt"], { dir: s.dir, projectRoot: fakeRoot }))[0].size, 5);
+    assert.equal(
+      (await resolveOutboxFiles(["a.txt"], { dir: s.dir, projectRoot: fakeRoot }))[0].size,
+      5
+    );
   } finally {
     s.cleanup();
   }
@@ -327,18 +359,61 @@ test("внутри storage разрешена только storage/outbox (и е
     fs.writeFileSync(path.join(storage, "writes", "journal.json"), "[]");
 
     const refusal = /Папка «исходящих» настроена неверно/;
-    await assertRefused(["key"], { dir: path.join(storage, "writes"), projectRoot: fakeRoot }, refusal);
-    await assertRefused(["journal.json"], { dir: path.join(storage, "writes"), projectRoot: fakeRoot }, refusal);
-    await assertRefused(["f.txt"], { dir: path.join(storage, "hse-sessions"), projectRoot: fakeRoot }, refusal);
-    await assertRefused(["f.txt"], { dir: path.join(storage, "changes"), projectRoot: fakeRoot }, refusal);
+    await assertRefused(
+      ["key"],
+      { dir: path.join(storage, "writes"), projectRoot: fakeRoot },
+      refusal
+    );
+    await assertRefused(
+      ["journal.json"],
+      { dir: path.join(storage, "writes"), projectRoot: fakeRoot },
+      refusal
+    );
+    await assertRefused(
+      ["f.txt"],
+      { dir: path.join(storage, "hse-sessions"), projectRoot: fakeRoot },
+      refusal
+    );
+    await assertRefused(
+      ["f.txt"],
+      { dir: path.join(storage, "changes"), projectRoot: fakeRoot },
+      refusal
+    );
     // сама storage/outbox и её подпапка допустимы
-    assert.equal((await resolveOutboxFiles(["f.txt"], { dir: path.join(storage, "outbox"), projectRoot: fakeRoot }))[0].size, 4);
-    assert.equal((await resolveOutboxFiles(["f.txt"], { dir: path.join(storage, "outbox", "sub"), projectRoot: fakeRoot }))[0].size, 4);
+    assert.equal(
+      (
+        await resolveOutboxFiles(["f.txt"], {
+          dir: path.join(storage, "outbox"),
+          projectRoot: fakeRoot,
+        })
+      )[0].size,
+      4
+    );
+    assert.equal(
+      (
+        await resolveOutboxFiles(["f.txt"], {
+          dir: path.join(storage, "outbox", "sub"),
+          projectRoot: fakeRoot,
+        })
+      )[0].size,
+      4
+    );
     // папка вне проекта и внутри проекта, но вне storage — допустимы
-    assert.equal((await resolveOutboxFiles(["a.txt"], { dir: s.dir, projectRoot: fakeRoot }))[0].size, 5);
+    assert.equal(
+      (await resolveOutboxFiles(["a.txt"], { dir: s.dir, projectRoot: fakeRoot }))[0].size,
+      5
+    );
     fs.mkdirSync(path.join(fakeRoot, "my-outbox"));
     fs.writeFileSync(path.join(fakeRoot, "my-outbox", "f.txt"), "data");
-    assert.equal((await resolveOutboxFiles(["f.txt"], { dir: path.join(fakeRoot, "my-outbox"), projectRoot: fakeRoot }))[0].size, 4);
+    assert.equal(
+      (
+        await resolveOutboxFiles(["f.txt"], {
+          dir: path.join(fakeRoot, "my-outbox"),
+          projectRoot: fakeRoot,
+        })
+      )[0].size,
+      4
+    );
   } finally {
     s.cleanup();
   }
@@ -362,11 +437,35 @@ test("storage — junction наружу: папка внутри цели juncti
     }
     const refusal = /Папка «исходящих» настроена неверно/;
     // обращение к каталогу напрямую (минуя junction) всё равно раскрывается в тот же storage
-    await assertRefused(["key"], { dir: path.join(realStorage, "writes"), projectRoot: fakeRoot }, refusal);
-    await assertRefused(["key"], { dir: path.join(fakeRoot, "storage", "writes"), projectRoot: fakeRoot }, refusal);
+    await assertRefused(
+      ["key"],
+      { dir: path.join(realStorage, "writes"), projectRoot: fakeRoot },
+      refusal
+    );
+    await assertRefused(
+      ["key"],
+      { dir: path.join(fakeRoot, "storage", "writes"), projectRoot: fakeRoot },
+      refusal
+    );
     await assertRefused(["key"], { dir: realStorage, projectRoot: fakeRoot }, refusal);
-    assert.equal((await resolveOutboxFiles(["ok.txt"], { dir: path.join(fakeRoot, "storage", "outbox"), projectRoot: fakeRoot }))[0].size, 2);
-    assert.equal((await resolveOutboxFiles(["ok.txt"], { dir: path.join(realStorage, "outbox"), projectRoot: fakeRoot }))[0].size, 2);
+    assert.equal(
+      (
+        await resolveOutboxFiles(["ok.txt"], {
+          dir: path.join(fakeRoot, "storage", "outbox"),
+          projectRoot: fakeRoot,
+        })
+      )[0].size,
+      2
+    );
+    assert.equal(
+      (
+        await resolveOutboxFiles(["ok.txt"], {
+          dir: path.join(realStorage, "outbox"),
+          projectRoot: fakeRoot,
+        })
+      )[0].size,
+      2
+    );
   } finally {
     s.cleanup();
   }
@@ -375,9 +474,9 @@ test("storage — junction наружу: папка внутри цели juncti
 test("isInsideDir: граница по разделителю, регистр, хвостовой разделитель, корень", () => {
   const sep = path.sep;
   const base = process.platform === "win32" ? "C:\\box" : "/box";
-  assert.equal(isInsideDir(base, base + sep + "a.txt"), true);
-  assert.equal(isInsideDir(base + sep, base + sep + "a.txt"), true);
-  assert.equal(isInsideDir(base, base + "-evil" + sep + "a.txt"), false);
+  assert.equal(isInsideDir(base, `${base + sep}a.txt`), true);
+  assert.equal(isInsideDir(base + sep, `${base + sep}a.txt`), true);
+  assert.equal(isInsideDir(base, `${base}-evil${sep}a.txt`), false);
   assert.equal(isInsideDir(base, base), false);
   assert.equal(isInsideDir(base, path.dirname(base)), false);
   if (process.platform === "win32") {

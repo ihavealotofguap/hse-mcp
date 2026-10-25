@@ -34,7 +34,13 @@ const lockFile = (dir: string): string => path.join(dir, "journal.json.lock");
 
 /** Копируются только перечисленные поля: всё лишнее, что передали, в файл не попадёт. */
 function pick(e: JournalEntry): JournalEntry {
-  const out: JournalEntry = { at: e.at, op: e.op, tokenId: e.tokenId, targetId: e.targetId, stage: e.stage };
+  const out: JournalEntry = {
+    at: e.at,
+    op: e.op,
+    tokenId: e.tokenId,
+    targetId: e.targetId,
+    stage: e.stage,
+  };
   if (e.outcome !== undefined) out.outcome = e.outcome;
   if (e.durationMs !== undefined) out.durationMs = e.durationMs;
   if (e.errorClass !== undefined) out.errorClass = e.errorClass;
@@ -42,7 +48,10 @@ function pick(e: JournalEntry): JournalEntry {
 }
 
 const isEntry = (v: unknown): v is JournalEntry =>
-  !!v && typeof v === "object" && typeof (v as JournalEntry).at === "string" && typeof (v as JournalEntry).tokenId === "string";
+  !!v &&
+  typeof v === "object" &&
+  typeof (v as JournalEntry).at === "string" &&
+  typeof (v as JournalEntry).tokenId === "string";
 
 /**
  * `corrupt` — файл есть, но не разбирается как массив записей, либо в массиве есть элементы не того
@@ -89,15 +98,23 @@ function corruptName(file: string): string {
  * `tokenId` уже есть (токен одноразовый и между процессами). Остальные стадии — исходы после отправки —
  * пишутся всегда, как и раньше.
  */
-export async function recordJournal(entry: JournalEntry, dir: string = writesDir(), now: Date = new Date()): Promise<void> {
+export async function recordJournal(
+  entry: JournalEntry,
+  dir: string = writesDir(),
+  now: Date = new Date()
+): Promise<void> {
   await withFileLock(lockFile(dir), async () => {
     const { entries, corrupt } = await readEntries(dir);
     if (entry.stage === "sending") {
       if (corrupt) throw new JournalError(CORRUPT_MESSAGE);
-      if (entries.some((e) => e.tokenId === entry.tokenId)) throw new JournalError(TOKEN_REUSED_MESSAGE);
+      if (entries.some((e) => e.tokenId === entry.tokenId))
+        throw new JournalError(TOKEN_REUSED_MESSAGE);
     }
     // COPYFILE_EXCL: существующий карантин не затирается даже при гонке имён (имя уже уникально по `corruptName`).
-    if (corrupt) await retryIo(() => fs.copyFileSync(journalFile(dir), corruptName(journalFile(dir)), fs.constants.COPYFILE_EXCL));
+    if (corrupt)
+      await retryIo(() =>
+        fs.copyFileSync(journalFile(dir), corruptName(journalFile(dir)), fs.constants.COPYFILE_EXCL)
+      );
     const cutoff = now.getTime() - JOURNAL_MAX_AGE_MS;
     const kept = [...entries, pick(entry)].filter((e) => !(Date.parse(e.at) < cutoff));
     await writeFileAtomic(journalFile(dir), JSON.stringify(kept.slice(-JOURNAL_MAX_ENTRIES)));
@@ -108,10 +125,15 @@ export async function recordJournal(entry: JournalEntry, dir: string = writesDir
  * Последняя запись по токену (журнал упорядочен по времени добавления). `strict` — для решений «повторить
  * или отправить»: повреждённый журнал отказывает, а не считается пустым; сухой прогон читает без него.
  */
-export async function latestByToken(tokenId: string, dir: string = writesDir(), strict = false): Promise<JournalEntry | undefined> {
+export async function latestByToken(
+  tokenId: string,
+  dir: string = writesDir(),
+  strict = false
+): Promise<JournalEntry | undefined> {
   const { entries, corrupt } = await readEntries(dir);
   if (strict && corrupt) throw new JournalError(CORRUPT_MESSAGE);
-  for (let i = entries.length - 1; i >= 0; i--) if (entries[i].tokenId === tokenId) return entries[i];
+  for (let i = entries.length - 1; i >= 0; i--)
+    if (entries[i].tokenId === tokenId) return entries[i];
   return undefined;
 }
 
@@ -131,6 +153,9 @@ export async function findUnresolvedByTarget(
   const last = new Map<string, JournalEntry>();
   for (const e of entries) last.set(e.tokenId, e);
   return [...last.values()].filter(
-    (e) => e.targetId === targetId && e.tokenId !== exceptTokenId && (e.stage !== "verified" || e.outcome === "unknown")
+    (e) =>
+      e.targetId === targetId &&
+      e.tokenId !== exceptTokenId &&
+      (e.stage !== "verified" || e.outcome === "unknown")
   );
 }

@@ -2,10 +2,15 @@ import type { ResourceCallOptions } from "../../resource.js";
 import { runSource, type SourceStatus } from "../../run-source.js";
 import { selectCourses } from "../digest/parse.js";
 import type { CourseFilter } from "../digest/types.js";
-import * as lms from "../lms/client.js";
 import type { CourseOverview } from "../lms/client.js";
+import * as lms from "../lms/client.js";
 import { diffSource } from "./diff.js";
-import { gradesExtractor, singleExtractors, type ExtractContext, type SourceExtractor } from "./extractors.js";
+import {
+  type ExtractContext,
+  gradesExtractor,
+  type SourceExtractor,
+  singleExtractors,
+} from "./extractors.js";
 import {
   defaultStateDir,
   loadState,
@@ -16,16 +21,16 @@ import {
   withStateLock,
 } from "./store.js";
 import {
-  DEFAULT_SCOPES,
-  SCOPES,
-  scopeOfSource,
   type ChangeEvent,
+  DEFAULT_SCOPES,
   type DiffFlags,
   type EventType,
   type FieldChange,
+  SCOPES,
   type Scope,
   type SourceResult,
   type State,
+  scopeOfSource,
 } from "./types.js";
 
 const RESPONSE_EVENT_LIMIT = 200;
@@ -133,7 +138,8 @@ function parseSince(since: string, now: Date): number {
   const m = /^(\d+)([dh])$/.exec(since.trim());
   if (m) return now.getTime() - Number(m[1]) * (m[2] === "d" ? 86_400_000 : 3_600_000);
   const t = Date.parse(since);
-  if (Number.isNaN(t)) throw new Error(`Некорректное значение since: "${since}" (ожидается "7d", "12h" или дата ISO)`);
+  if (Number.isNaN(t))
+    throw new Error(`Некорректное значение since: "${since}" (ожидается "7d", "12h" или дата ISO)`);
   return t;
 }
 
@@ -162,14 +168,22 @@ async function gatherGrades(
       } catch {
         // Ошибка `selectCourses` перечисляет названия курсов — в ответ `hse_changes` они не попадают.
         const actual = selectCourses(all, undefined, ctx.now).length;
-        throw new Error(`ни один актуальный курс не подошёл под фильтр courses (актуальных курсов: ${actual}; список — lms_list_courses)`);
+        throw new Error(
+          `ни один актуальный курс не подошёл под фильтр courses (актуальных курсов: ${actual}; список — lms_list_courses)`
+        );
       }
       return { warnings: [] as string[] };
     },
     deps.sourceTimeoutMs,
     opts.signal
   );
-  const head: Gathered = { source: "lms_courses", scope: "grades", flags: {}, status: listed.status, result: null };
+  const head: Gathered = {
+    source: "lms_courses",
+    scope: "grades",
+    flags: {},
+    status: listed.status,
+    result: null,
+  };
   if (listed.status.status !== "ok") return [head];
 
   // Самые давно снятые курсы — первыми, чтобы один и тот же хвост не пропускался вечно.
@@ -201,11 +215,26 @@ async function gatherGrades(
   return [head, ...out];
 }
 
-async function gather(scopes: Scope[], opts: ChangesOptions, deps: ChangesDeps, now: Date, pre: State): Promise<Gathered[]> {
-  const ctx: ExtractContext = { now, opts: { maxAgeMs: opts.fresh ? 0 : DEFAULT_MAX_AGE_MS, signal: opts.signal } };
+async function gather(
+  scopes: Scope[],
+  opts: ChangesOptions,
+  deps: ChangesDeps,
+  now: Date,
+  pre: State
+): Promise<Gathered[]> {
+  const ctx: ExtractContext = {
+    now,
+    opts: { maxAgeMs: opts.fresh ? 0 : DEFAULT_MAX_AGE_MS, signal: opts.signal },
+  };
   const runOne = async (e: SourceExtractor): Promise<Gathered> => {
     const res = await runSource(e.source, () => e.run(ctx), deps.sourceTimeoutMs, opts.signal);
-    return { source: e.source, scope: e.scope, flags: e.flags, status: res.status, result: res.value };
+    return {
+      source: e.source,
+      scope: e.scope,
+      flags: e.flags,
+      status: res.status,
+      result: res.value,
+    };
   };
   const singles = Promise.all(deps.single.filter((e) => scopes.includes(e.scope)).map(runOne));
   const grades = scopes.includes("grades")
@@ -237,7 +266,10 @@ const toItem = (e: ChangeEvent): ChangeItem => ({
 /** Выбор событий ответа: неподтверждённые (по `seen`) либо журнал за период (`since`); префикс ≤ 200. */
 function select(state: State, scopes: Scope[], sinceMs: number | null): Selection {
   const inScope = state.journal.filter((e) => scopes.includes(e.scope));
-  const all = sinceMs === null ? inScope.filter((e) => e.seq > (state.seen[e.scope] ?? 0)) : inScope.filter((e) => Date.parse(e.at) >= sinceMs);
+  const all =
+    sinceMs === null
+      ? inScope.filter((e) => e.seq > (state.seen[e.scope] ?? 0))
+      : inScope.filter((e) => Date.parse(e.at) >= sinceMs);
   const picked = all.slice(0, RESPONSE_EVENT_LIMIT);
   return {
     items: picked.map(toItem),
@@ -263,7 +295,9 @@ function applyAck(draft: State, scopes: Scope[], ack: number, warn: (w: string) 
   }
   const answered = draft.issues?.[String(ack)];
   if (!answered) {
-    warn(`ack ${ack} не совпадает ни с одним из последних ${ISSUES_MAX_ENTRIES} ackSeq — игнорируется`);
+    warn(
+      `ack ${ack} не совпадает ни с одним из последних ${ISSUES_MAX_ENTRIES} ackSeq — игнорируется`
+    );
     return;
   }
   for (const scope of scopes.filter((s) => answered.includes(s))) {
@@ -278,12 +312,16 @@ function applyAck(draft: State, scopes: Scope[], ack: number, warn: (w: string) 
  * Хранятся последние `ISSUES_MAX_ENTRIES` по величине `ackSeq`.
  */
 function recordIssue(draft: State, ackSeq: number, scopes: Scope[]): void {
-  const issues = (draft.issues ??= {});
+  draft.issues ??= {};
+  const issues = draft.issues;
   const key = String(ackSeq);
   const prev = issues[key];
   issues[key] = prev ? scopes.filter((s) => prev.includes(s)) : [...scopes];
-  const keys = Object.keys(issues).map(Number).sort((a, b) => a - b);
-  for (const k of keys.slice(0, Math.max(0, keys.length - ISSUES_MAX_ENTRIES))) delete issues[String(k)];
+  const keys = Object.keys(issues)
+    .map(Number)
+    .sort((a, b) => a - b);
+  for (const k of keys.slice(0, Math.max(0, keys.length - ISSUES_MAX_ENTRIES)))
+    delete issues[String(k)];
 }
 
 interface Computed {
@@ -322,15 +360,25 @@ function compute(
     // Параллельный вызов снял позже, а закоммитил раньше: diff старого снимка от более новой базы дал
     // бы ложные `changed` туда-обратно и откатил бы `takenAt` (повторный `overdue`). База не трогается.
     if (prev && prev.takenAt > takenAt) {
-      committed.push({ ...g, status: { status: "skipped", error: STALE_SNAPSHOT, ms: g.status.ms }, result: null });
+      committed.push({
+        ...g,
+        status: { status: "skipped", error: STALE_SNAPSHOT, ms: g.status.ms },
+        result: null,
+      });
       continue;
     }
     committed.push(g);
     // Первый запуск области: курсор ставится на текущую границу — события этого снимка будут новыми.
     if (draft.seen[g.scope] === undefined) draft.seen[g.scope] = draft.nextSeq - 1;
     const d = diffSource({
-      source: g.source, scope: g.scope, baseline: prev ?? null,
-      facts: g.result.facts, coverage: g.result.coverage, truncated: g.result.truncated, takenAt: now, ...g.flags,
+      source: g.source,
+      scope: g.scope,
+      baseline: prev ?? null,
+      facts: g.result.facts,
+      coverage: g.result.coverage,
+      truncated: g.result.truncated,
+      takenAt: now,
+      ...g.flags,
     });
     draft.baselines[g.source] = d.baseline;
     diffStatus.set(g.source, d.status);
@@ -384,16 +432,21 @@ function reports(
     // `lms_courses` — справочник курсов, а не данные области: в статус `grades` входит только отказом
     // (иначе его вечное `ok` не даёт области получить статус `baseline`).
     const counted = own.filter((g) => !(g.source === "lms_courses" && g.status.status === "ok"));
-    const states = counted.map((g) => (g.status.status === "ok" ? (diffStatus.get(g.source) ?? "ok") : g.status.status));
+    const states = counted.map((g) =>
+      g.status.status === "ok" ? (diffStatus.get(g.source) ?? "ok") : g.status.status
+    );
     let status: ScopeReport["status"];
-    if (own.length === 0 || (states.length > 0 && states.every((s) => s === "error"))) status = "error";
+    if (own.length === 0 || (states.length > 0 && states.every((s) => s === "error")))
+      status = "error";
     else if (states.some((s) => s === "error" || s === "skipped")) status = "partial";
     else if (states.length > 0 && states.every((s) => s === "baseline")) status = "baseline";
     else status = "ok";
     const facts = own.reduce((n, g) => n + Object.keys(baselines[g.source]?.facts ?? {}).length, 0);
     const warnings = own.flatMap((g) => [
       ...(g.status.warnings ?? []),
-      ...(g.status.status === "skipped" && g.status.error ? [`${g.source}: ${g.status.error}`] : []),
+      ...(g.status.status === "skipped" && g.status.error
+        ? [`${g.source}: ${g.status.error}`]
+        : []),
     ]);
     out[scope] = { status, facts, warnings };
   }
@@ -404,7 +457,10 @@ function reports(
  * Снимок → diff → коммит → события. Курсор в этом вызове не двигается (только `ack` предыдущей
  * выдачи): событие не теряется, даже если ответ не дошёл. Никогда не бросает из-за источников.
  */
-export async function getChanges(opts: ChangesOptions = {}, overrides: Partial<ChangesDeps> = {}): Promise<ChangesResponse> {
+export async function getChanges(
+  opts: ChangesOptions = {},
+  overrides: Partial<ChangesDeps> = {}
+): Promise<ChangesResponse> {
   const deps: ChangesDeps = { ...realDeps(), ...overrides };
   const now = deps.now();
   const takenAt = now.toISOString();
@@ -417,8 +473,15 @@ export async function getChanges(opts: ChangesOptions = {}, overrides: Partial<C
   };
 
   const empty = (rep: ReturnType<typeof reports>): ChangesResponse => ({
-    takenAt, scopes: rep.scopes, sources: rep.sources,
-    changes: [], ackSeq: null, omitted: 0, gap: { lostEvents: 0 }, persisted: false, warnings,
+    takenAt,
+    scopes: rep.scopes,
+    sources: rep.sources,
+    changes: [],
+    ackSeq: null,
+    omitted: 0,
+    gap: { lostEvents: 0 },
+    persisted: false,
+    warnings,
   });
   const cancelled = (gathered: Gathered[], baselines: State["baselines"]): ChangesResponse => {
     warn("вызов отменён до коммита");
@@ -437,9 +500,15 @@ export async function getChanges(opts: ChangesOptions = {}, overrides: Partial<C
     const capped = merged.slice(0, RESPONSE_EVENT_LIMIT);
     const rep = reports(c.committed, scopes, c.draft.baselines, c.diffStatus);
     return {
-      takenAt, scopes: rep.scopes, sources: rep.sources, changes: capped,
-      ackSeq: null, omitted: before.omitted + (merged.length - capped.length),
-      gap: { lostEvents: before.lostEvents }, persisted: false, warnings,
+      takenAt,
+      scopes: rep.scopes,
+      sources: rep.sources,
+      changes: capped,
+      ackSeq: null,
+      omitted: before.omitted + (merged.length - capped.length),
+      gap: { lostEvents: before.lostEvents },
+      persisted: false,
+      warnings,
     };
   };
 
@@ -462,7 +531,14 @@ export async function getChanges(opts: ChangesOptions = {}, overrides: Partial<C
       const load = await loadState(deps.dir);
       warn(load.warning);
       if (load.kind === "newer" || load.kind === "io-error") {
-        return empty(reports(gathered.map((g) => ({ ...g, status: { ...g.status, status: "error" as const } })), scopes, {}, new Map()));
+        return empty(
+          reports(
+            gathered.map((g) => ({ ...g, status: { ...g.status, status: "error" as const } })),
+            scopes,
+            {},
+            new Map()
+          )
+        );
       }
       // `corrupt` с неудавшимся карантином: файл остался на месте, `saveState(…, null)` отклонит запись
       // по `rev` — ответ уйдёт с `persisted: false`, сам `kind` здесь не различается.
@@ -476,8 +552,15 @@ export async function getChanges(opts: ChangesOptions = {}, overrides: Partial<C
       }
       const rep = reports(c.committed, scopes, c.draft.baselines, c.diffStatus);
       return {
-        takenAt, scopes: rep.scopes, sources: rep.sources, changes: c.chosen.items, ackSeq: c.chosen.ackSeq,
-        omitted: c.chosen.omitted, gap: { lostEvents: c.chosen.lostEvents }, persisted: true, warnings,
+        takenAt,
+        scopes: rep.scopes,
+        sources: rep.sources,
+        changes: c.chosen.items,
+        ackSeq: c.chosen.ackSeq,
+        omitted: c.chosen.omitted,
+        gap: { lostEvents: c.chosen.lostEvents },
+        persisted: true,
+        warnings,
       };
     });
   } catch (err) {
@@ -497,9 +580,17 @@ export async function getChanges(opts: ChangesOptions = {}, overrides: Partial<C
 export async function resetChanges(
   opts: { scope?: Scope; confirm?: boolean },
   overrides: Partial<Pick<ChangesDeps, "dir">> = {}
-): Promise<{ reset: Scope[]; removedBaselines: number; removedEvents: number; removedFiles: number; persisted: boolean }> {
+): Promise<{
+  reset: Scope[];
+  removedBaselines: number;
+  removedEvents: number;
+  removedFiles: number;
+  persisted: boolean;
+}> {
   if (opts.confirm !== true) {
-    throw new Error("hse_changes_reset требует confirm: true — будут стёрты накопленные базы и журнал событий");
+    throw new Error(
+      "hse_changes_reset требует confirm: true — будут стёрты накопленные базы и журнал событий"
+    );
   }
   const dir = overrides.dir ?? defaultStateDir();
   const targets: Scope[] = opts.scope ? [opts.scope] : [...SCOPES];
@@ -529,6 +620,12 @@ export async function resetChanges(
     const saved = await saveState(dir, draft, load.kind === "ok" ? base.rev : null);
     if (!saved.ok) throw new Error(saved.error);
     const removedFiles = opts.scope ? 0 : await removeLeftoverFiles(dir);
-    return { reset: targets, removedBaselines, removedEvents: before - draft.journal.length, removedFiles, persisted: true };
+    return {
+      reset: targets,
+      removedBaselines,
+      removedEvents: before - draft.journal.length,
+      removedFiles,
+      persisted: true,
+    };
   });
 }

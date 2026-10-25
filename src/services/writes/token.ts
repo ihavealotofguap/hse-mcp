@@ -31,7 +31,10 @@ function readKey(file: string): Buffer | null {
     if (errCode(err) === "ENOENT") return null;
     throw err;
   }
-  if (!KEY_RE.test(text)) throw new Error("Файл ключа записи повреждён: удалите файл key в каталоге записей — ключ создастся заново");
+  if (!KEY_RE.test(text))
+    throw new Error(
+      "Файл ключа записи повреждён: удалите файл key в каталоге записей — ключ создастся заново"
+    );
   // Ключ мог быть создан с широкими правами: на POSIX ужимаем до 0o600, на Windows снимаем
   // унаследованные права через icacls (один раз за процесс).
   if (process.platform !== "win32") {
@@ -73,7 +76,11 @@ export async function loadOrCreateKey(dir: string = writesDir()): Promise<Buffer
 function canonical(value: unknown): string {
   return JSON.stringify(value, (_k, v) => {
     if (v && typeof v === "object" && !Array.isArray(v)) {
-      return Object.fromEntries(Object.entries(v as Record<string, unknown>).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)));
+      return Object.fromEntries(
+        Object.entries(v as Record<string, unknown>).sort(([a], [b]) =>
+          a < b ? -1 : a > b ? 1 : 0
+        )
+      );
     }
     return v;
   });
@@ -81,14 +88,22 @@ function canonical(value: unknown): string {
 
 function previewHmac(key: Buffer, issuedAtSec: number, p: PreviewPayload): string {
   const files = [...p.files].sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
-  const body = canonical({ op: p.op, issuedAtSec, target: p.target, mode: p.mode, files, state: p.state });
+  const body = canonical({
+    op: p.op,
+    issuedAtSec,
+    target: p.target,
+    mode: p.mode,
+    files,
+    state: p.state,
+  });
   return crypto.createHmac("sha256", key).update(body).digest("hex");
 }
 
 /** `"<issuedAtSec>.<hmac>"`: HMAC-SHA256 по канонической форме операции, цели, режима, файлов и состояния. */
 export function signPreview(key: Buffer, p: PreviewPayload, now: Date = new Date()): string {
   const issuedAtSec = Math.floor(now.getTime() / 1000);
-  if (!Number.isSafeInteger(issuedAtSec)) throw new Error("Некорректное время выпуска токена предпросмотра");
+  if (!Number.isSafeInteger(issuedAtSec))
+    throw new Error("Некорректное время выпуска токена предпросмотра");
   return `${issuedAtSec}.${previewHmac(key, issuedAtSec, p)}`;
 }
 
@@ -104,14 +119,20 @@ function parseToken(token: string): { issuedAtSec: number; hash: string } | null
   return Number.isSafeInteger(issuedAtSec) ? { issuedAtSec, hash: m[2] } : null;
 }
 
-export function verifyPreview(key: Buffer, token: string, p: PreviewPayload, now: Date = new Date()): VerifyResult {
+export function verifyPreview(
+  key: Buffer,
+  token: string,
+  p: PreviewPayload,
+  now: Date = new Date()
+): VerifyResult {
   const parsed = parseToken(token);
   if (!parsed) return { ok: false, reason: "malformed" };
   const { issuedAtSec, hash } = parsed;
   const given = Buffer.from(hash, "hex");
   const expected = Buffer.from(previewHmac(key, issuedAtSec, p), "hex");
   // timingSafeEqual бросает на разной длине; формат токена это исключает, но защита дешёвая.
-  if (given.length !== expected.length || !crypto.timingSafeEqual(given, expected)) return { ok: false, reason: "mismatch" };
+  if (given.length !== expected.length || !crypto.timingSafeEqual(given, expected))
+    return { ok: false, reason: "mismatch" };
   const issuedAt = new Date(issuedAtSec * 1000);
   // «expired» и для токена из будущего (> now + 60 с): подпись верна, но часы разошлись — такой токен не принимаем.
   // Граница строгая: ровно через 15:00.000 токен ещё действителен.
@@ -128,5 +149,9 @@ export function tokenIdOf(token: string): string | null {
 
 /** Стабильный обезличенный идентификатор цели для журнала: HMAC по `op` и `target`, 12 hex. */
 export function targetIdOf(key: Buffer, op: string, target: string): string {
-  return crypto.createHmac("sha256", key).update(canonical(["target", op, target])).digest("hex").slice(0, 12);
+  return crypto
+    .createHmac("sha256", key)
+    .update(canonical(["target", op, target]))
+    .digest("hex")
+    .slice(0, 12);
 }

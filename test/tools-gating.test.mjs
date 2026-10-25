@@ -1,9 +1,9 @@
-import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 
 // Ключ и журнал записей — во временном каталоге; задаётся до импорта модулей.
@@ -34,8 +34,12 @@ chromium.launch = async () => {
   launches++;
   throw new Error("запуск браузера отключён в тесте");
 };
-const { registerLmsTools } = await import(new URL("../dist/services/lms/tools.js", import.meta.url).href);
-const { registerElkTools } = await import(new URL("../dist/services/elk/tools.js", import.meta.url).href);
+const { registerLmsTools } = await import(
+  new URL("../dist/services/lms/tools.js", import.meta.url).href
+);
+const { registerElkTools } = await import(
+  new URL("../dist/services/elk/tools.js", import.meta.url).href
+);
 
 const WRITE_TOOLS = ["lms_submit_assignment", "lms_delete_submission"];
 const READ_TOOLS = ["lms_list_courses", "lms_open_page"];
@@ -144,7 +148,10 @@ test("границы files проверяются валидацией: 0 и 11 
   for (const files of bad) {
     let text;
     try {
-      const result = await client.callTool({ name: "lms_submit_assignment", arguments: { cmid: 1, files } });
+      const result = await client.callTool({
+        name: "lms_submit_assignment",
+        arguments: { cmid: 1, files },
+      });
       assert.equal(result.isError, true);
       text = result.content[0].text;
     } catch (err) {
@@ -174,7 +181,11 @@ test("контроль шпиона: настоящее открытие стр�
   const before = launches;
   const result = await client.callTool({ name: "lms_open_page", arguments: { path: "/" } });
   assert.equal(result.isError, true);
-  assert.equal(launches, before + 1, "шпион на chromium.launch не сработал — проверка выше ничего не доказывает");
+  assert.equal(
+    launches,
+    before + 1,
+    "шпион на chromium.launch не сработал — проверка выше ничего не доказывает"
+  );
 });
 
 test("уведомление «тулы записи выключены» печатается ровно один раз на процесс", async () => {
@@ -183,10 +194,15 @@ test("уведомление «тулы записи выключены» печ
   const total = writesOffNotices().length;
   assert.equal(total, 1, `уведомлений: ${total}`);
   for (const flag of ["", "false", undefined]) await connect(flag);
-  assert.equal(writesOffNotices().length, total, "повторные регистрации не печатают уведомление снова");
+  assert.equal(
+    writesOffNotices().length,
+    total,
+    "повторные регистрации не печатают уведомление снова"
+  );
   await connect("true");
   assert.equal(writesOffNotices().length, total);
-  for (const line of writesOffNotices()) assert.equal(line, "hsemcp: тулы записи выключены (HSE_ENABLE_WRITES не задан)");
+  for (const line of writesOffNotices())
+    assert.equal(line, "hsemcp: тулы записи выключены (HSE_ENABLE_WRITES не задан)");
 });
 
 test("уведомление «тулы записи выключены»: свежий процесс, две регистрации с выключенным флагом — ровно одна строка", () => {
@@ -228,13 +244,19 @@ for (const flag of ["", "false", undefined]) {
 
 test("ЕЛК, флаг true: elk_order_certificate зарегистрирован, читающие на месте", async () => {
   const { byName } = await connect("true", registerElkTools);
-  for (const name of [ELK_WRITE_TOOL, ...ELK_READ_TOOLS]) assert.equal(byName.has(name), true, name);
+  for (const name of [ELK_WRITE_TOOL, ...ELK_READ_TOOLS])
+    assert.equal(byName.has(name), true, name);
 });
 
 test("elk_order_certificate: аннотации, описание и схема", async () => {
   const { byName } = await connect("true", registerElkTools);
   const t = byName.get(ELK_WRITE_TOOL);
-  assert.deepEqual(t.annotations, { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true });
+  assert.deepEqual(t.annotations, {
+    readOnlyHint: false,
+    destructiveHint: true,
+    idempotentHint: false,
+    openWorldHint: true,
+  });
   assert.match(t.description, /confirm/);
   assert.match(t.description, /previewToken/);
   assert.match(t.description, /unknown/);
@@ -245,16 +267,26 @@ test("elk_order_certificate: аннотации, описание и схема"
   const { properties, required } = t.inputSchema;
   assert.deepEqual([...required].sort(), ["fields", "serviceId"]);
   assert.equal(properties.serviceId.type, "integer");
-  assert.ok(properties.serviceId.exclusiveMinimum === 0 || properties.serviceId.minimum >= 1, "serviceId должен быть положительным");
+  assert.ok(
+    properties.serviceId.exclusiveMinimum === 0 || properties.serviceId.minimum >= 1,
+    "serviceId должен быть положительным"
+  );
   assert.equal(properties.fields.type, "object");
   assert.equal(properties.fields.additionalProperties.type, "string");
-  for (const name of ["confirm", "previewToken", "acknowledgeUnknown"]) assert.ok(properties[name], name);
+  for (const name of ["confirm", "previewToken", "acknowledgeUnknown"])
+    assert.ok(properties[name], name);
 });
 
 test("elk_order_certificate: нет serviceId, нецелый и неположительный serviceId — ошибка валидации по serviceId", async () => {
   const { client } = await connect("true", registerElkTools);
   const launchesBefore = launches;
-  for (const args of [{ fields: {} }, { serviceId: 1.5, fields: {} }, { serviceId: 0, fields: {} }, { serviceId: -3, fields: {} }, { serviceId: "7", fields: {} }]) {
+  for (const args of [
+    { fields: {} },
+    { serviceId: 1.5, fields: {} },
+    { serviceId: 0, fields: {} },
+    { serviceId: -3, fields: {} },
+    { serviceId: "7", fields: {} },
+  ]) {
     let text;
     try {
       const result = await client.callTool({ name: ELK_WRITE_TOOL, arguments: args });
@@ -271,7 +303,11 @@ test("elk_order_certificate: нет serviceId, нецелый и неполож�
 test("elk_order_certificate: нет fields и нестроковое значение в fields — ошибка валидации по fields", async () => {
   const { client } = await connect("true", registerElkTools);
   const launchesBefore = launches;
-  for (const args of [{ serviceId: 1 }, { serviceId: 1, fields: { a: 1 } }, { serviceId: 1, fields: [] }]) {
+  for (const args of [
+    { serviceId: 1 },
+    { serviceId: 1, fields: { a: 1 } },
+    { serviceId: 1, fields: [] },
+  ]) {
     let text;
     try {
       const result = await client.callTool({ name: ELK_WRITE_TOOL, arguments: args });
@@ -291,11 +327,14 @@ test("elk_order_certificate: отказы адаптера по аргумент
   const bad = [
     [{ serviceId: 1, fields: { "": "x" } }, /подпись пуста/],
     [{ serviceId: 1, fields: { "Тип справки": "   " } }, /значение должно быть непустой строкой/],
-    [{ serviceId: 1, fields: { "Тип": "a", "Тип:": "b" } }, /повторяется/],
+    [{ serviceId: 1, fields: { Тип: "a", "Тип:": "b" } }, /повторяется/],
   ];
   for (const extra of [{}, { confirm: true, previewToken: "1.abc" }]) {
     for (const [args, re] of bad) {
-      const result = await client.callTool({ name: ELK_WRITE_TOOL, arguments: { ...args, ...extra } });
+      const result = await client.callTool({
+        name: ELK_WRITE_TOOL,
+        arguments: { ...args, ...extra },
+      });
       assert.equal(result.isError, true);
       assert.match(result.content[0].text, re);
     }
@@ -310,7 +349,10 @@ test("elk_order_certificate: пустой fields не отклоняется з�
   // (запуск браузера) и ответ — ошибка чтения формы, а не отказ по аргументам или по недостающим полям.
   const { client } = await connect("true", registerElkTools);
   const before = launches;
-  const result = await client.callTool({ name: ELK_WRITE_TOOL, arguments: { serviceId: 1, fields: {} } });
+  const result = await client.callTool({
+    name: ELK_WRITE_TOOL,
+    arguments: { serviceId: 1, fields: {} },
+  });
   assert.equal(result.isError, true);
   assert.equal(launches, before + 1, "форма должна открываться: запуск браузера отклонён шпионом");
   assert.match(result.content[0].text, /форма заказа справки/);

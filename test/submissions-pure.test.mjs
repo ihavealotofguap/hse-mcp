@@ -1,9 +1,9 @@
-import { test } from "node:test";
 import assert from "node:assert/strict";
-import path from "node:path";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
+import path from "node:path";
+import { test } from "node:test";
 
 const m = await import(new URL("../dist/services/lms/submissions.js", import.meta.url).href);
 const {
@@ -17,8 +17,6 @@ const {
   checkDeletePreconditions,
   submitAdapter,
   deleteAdapter,
-  sanitizeNavigationError,
-  Refusal,
   sameFileSet,
   expectedManagerFiles,
   compareFiles,
@@ -26,7 +24,12 @@ const {
   classifyDeleteOutcome,
   prepareUpload,
 } = m;
-const { classifyError } = await import(new URL("../dist/services/writes/runner.js", import.meta.url).href);
+const { Refusal, sanitizeCommitError, sanitizeNavigationError } = await import(
+  new URL("../dist/services/writes/errors.js", import.meta.url).href
+);
+const { classifyError } = await import(
+  new URL("../dist/services/writes/runner.js", import.meta.url).href
+);
 
 const MIB = 1024 * 1024;
 const NOW = new Date("2026-10-18T12:00:00Z");
@@ -36,11 +39,25 @@ const SHA_A = "a".repeat(64);
 const SHA_B = "b".repeat(64);
 
 /** Сырая страница статуса: строки таблицы, строки текста, кнопки, ссылки на файлы. */
-function rawPage({ status = "Ответы на задание еще не представлены", statusClasses = ["cell", "c1"], remaining, lastModified = "-", lines = [], buttons = [], noStatusRow = false } = {}) {
+function rawPage({
+  status = "Ответы на задание еще не представлены",
+  statusClasses = ["cell", "c1"],
+  remaining,
+  lastModified = "-",
+  lines = [],
+  buttons = [],
+  noStatusRow = false,
+} = {}) {
   const rows = [];
-  if (!noStatusRow) rows.push({ label: "Состояние ответа на задание", text: status, classes: statusClasses });
-  rows.push({ label: "Состояние оценивания", text: "Не оценено", classes: ["submissionnotgraded"] });
-  if (remaining !== undefined) rows.push({ label: "Оставшееся время", text: remaining, classes: [] });
+  if (!noStatusRow)
+    rows.push({ label: "Состояние ответа на задание", text: status, classes: statusClasses });
+  rows.push({
+    label: "Состояние оценивания",
+    text: "Не оценено",
+    classes: ["submissionnotgraded"],
+  });
+  if (remaining !== undefined)
+    rows.push({ label: "Оставшееся время", text: remaining, classes: [] });
   rows.push({ label: "Последнее изменение", text: lastModified, classes: [] });
   return { title: "Задание", rows, lines, buttons, fileLinks: [] };
 }
@@ -76,7 +93,8 @@ function assertRefusal(fn, expected, forbidden = []) {
   assert.throws(fn, (err) => {
     assert.ok(err instanceof Error);
     assert.match(err.message, expected);
-    for (const word of forbidden) assert.ok(!err.message.includes(word), `в тексте ошибки не должно быть «${word}»`);
+    for (const word of forbidden)
+      assert.ok(!err.message.includes(word), `в тексте ошибки не должно быть «${word}»`);
     return true;
   });
 }
@@ -84,17 +102,31 @@ function assertRefusal(fn, expected, forbidden = []) {
 test("parseEditLimits: подпись формы правки из разведки", () => {
   assert.deepEqual(parseEditLimits(LIMITS_TEXT), { maxBytes: 5 * MIB, maxFiles: 20 });
   assert.deepEqual(
-    parseEditLimits("Максимальный размер новых файлов: 512 Мбайт, максимальное количество прикрепленных файлов: 1"),
+    parseEditLimits(
+      "Максимальный размер новых файлов: 512 Мбайт, максимальное количество прикрепленных файлов: 1"
+    ),
     { maxBytes: 512 * MIB, maxFiles: 1 }
   );
-  assert.deepEqual(parseEditLimits("Максимальный размер новых файлов: 1,5 Мбайт"), { maxBytes: Math.floor(1.5 * MIB), maxFiles: null });
-  assert.deepEqual(parseEditLimits("Максимальный размер новых файлов: 100 Кбайт"), { maxBytes: 100 * 1024, maxFiles: null });
+  assert.deepEqual(parseEditLimits("Максимальный размер новых файлов: 1,5 Мбайт"), {
+    maxBytes: Math.floor(1.5 * MIB),
+    maxFiles: null,
+  });
+  assert.deepEqual(parseEditLimits("Максимальный размер новых файлов: 100 Кбайт"), {
+    maxBytes: 100 * 1024,
+    maxFiles: null,
+  });
   assert.deepEqual(parseEditLimits("ничего похожего"), { maxBytes: null, maxFiles: null });
-  assert.deepEqual(parseEditLimits("Максимальный размер новых файлов: 5 попугаев"), { maxBytes: null, maxFiles: null });
+  assert.deepEqual(parseEditLimits("Максимальный размер новых файлов: 5 попугаев"), {
+    maxBytes: null,
+    maxFiles: null,
+  });
 });
 
 test("parseRuDateTime: дата Moodle по-русски, время МСК", () => {
-  assert.equal(parseRuDateTime("среда, 1 октября 2026, 00:00")?.toISOString(), "2026-09-30T21:00:00.000Z");
+  assert.equal(
+    parseRuDateTime("среда, 1 октября 2026, 00:00")?.toISOString(),
+    "2026-09-30T21:00:00.000Z"
+  );
   assert.equal(parseRuDateTime("15 марта 2027, 23:59")?.toISOString(), "2027-03-15T20:59:00.000Z");
   assert.equal(parseRuDateTime("1 октября 2026")?.toISOString(), "2026-09-30T21:00:00.000Z");
   assert.equal(parseRuDateTime("32 октября 2026, 00:00"), null);
@@ -135,22 +167,45 @@ test("buildAssignmentView: отправлено, «Редактировать о
 });
 
 test("buildAssignmentView: «Отправить на оценку» → canFinalize", () => {
-  const v = buildAssignmentView(rawPage({ statusClasses: ["submissiondraft"], buttons: ["Редактировать ответ", "Отправить на оценку"] }), 1, [], NOW);
+  const v = buildAssignmentView(
+    rawPage({
+      statusClasses: ["submissiondraft"],
+      buttons: ["Редактировать ответ", "Отправить на оценку"],
+    }),
+    1,
+    [],
+    NOW
+  );
   assert.equal(v.state, "draft");
   assert.equal(v.canFinalize, true);
 });
 
 test("buildAssignmentView: закрытая сдача — вне сайта, просрочено, ещё не открыто, иное", () => {
-  const offsite = buildAssignmentView(rawPage({ status: "Ответ на задание должен быть представлен вне сайта" }), 1, [], NOW);
+  const offsite = buildAssignmentView(
+    rawPage({ status: "Ответ на задание должен быть представлен вне сайта" }),
+    1,
+    [],
+    NOW
+  );
   assert.equal(offsite.closed?.reason, "offsite");
   assert.equal(offsite.canAdd, false);
 
-  const overdue = buildAssignmentView(rawPage({ remaining: "Задание просрочено на: 12 дн. 3 час." }), 1, [], NOW);
+  const overdue = buildAssignmentView(
+    rawPage({ remaining: "Задание просрочено на: 12 дн. 3 час." }),
+    1,
+    [],
+    NOW
+  );
   assert.equal(overdue.closed?.reason, "overdue");
   assert.match(overdue.closed.text, /просрочено на: 12 дн\./);
 
   const notOpen = buildAssignmentView(
-    rawPage({ lines: ["Открыто с: среда, 1 октября 2099, 00:00", "Срок сдачи: четверг, 15 октября 2099, 23:59"] }),
+    rawPage({
+      lines: [
+        "Открыто с: среда, 1 октября 2099, 00:00",
+        "Срок сдачи: четверг, 15 октября 2099, 23:59",
+      ],
+    }),
     1,
     [],
     NOW
@@ -164,7 +219,10 @@ test("buildAssignmentView: закрытая сдача — вне сайта, п
 
 test("buildAssignmentView: «Открыто с» в прошлом и кнопка на месте — сдача открыта", () => {
   const v = buildAssignmentView(
-    rawPage({ lines: ["Открыто с: среда, 1 октября 2025, 00:00"], buttons: ["Добавить ответ на задание"] }),
+    rawPage({
+      lines: ["Открыто с: среда, 1 октября 2025, 00:00"],
+      buttons: ["Добавить ответ на задание"],
+    }),
     1,
     [],
     NOW
@@ -174,15 +232,36 @@ test("buildAssignmentView: «Открыто с» в прошлом и кнопк
 });
 
 test("buildAssignmentView: незнакомый класс статуса или нет строки статуса — unknown", () => {
-  assert.equal(buildAssignmentView(rawPage({ statusClasses: ["submissionstatusnew"] }), 1, [], NOW).state, "unknown");
+  assert.equal(
+    buildAssignmentView(rawPage({ statusClasses: ["submissionstatusnew"] }), 1, [], NOW).state,
+    "unknown"
+  );
   assert.equal(buildAssignmentView(rawPage({ noStatusRow: true }), 1, [], NOW).state, "unknown");
 });
 
 test("buildEditFormInfo: только файл, лимиты, файлы менеджера", () => {
-  const info = buildEditFormInfo({ hasFileManager: true, hasTextEditor: false, text: LIMITS_TEXT, managerFiles: ["test.txt"] });
-  assert.deepEqual(info, { fileOnly: true, maxBytes: 5 * MIB, maxFiles: 20, managerFiles: ["test.txt"] });
-  assert.equal(buildEditFormInfo({ hasFileManager: false, hasTextEditor: false, text: "", managerFiles: [] }).fileOnly, false);
-  assert.equal(buildEditFormInfo({ hasFileManager: true, hasTextEditor: true, text: "", managerFiles: [] }).fileOnly, false);
+  const info = buildEditFormInfo({
+    hasFileManager: true,
+    hasTextEditor: false,
+    text: LIMITS_TEXT,
+    managerFiles: ["test.txt"],
+  });
+  assert.deepEqual(info, {
+    fileOnly: true,
+    maxBytes: 5 * MIB,
+    maxFiles: 20,
+    managerFiles: ["test.txt"],
+  });
+  assert.equal(
+    buildEditFormInfo({ hasFileManager: false, hasTextEditor: false, text: "", managerFiles: [] })
+      .fileOnly,
+    false
+  );
+  assert.equal(
+    buildEditFormInfo({ hasFileManager: true, hasTextEditor: true, text: "", managerFiles: [] })
+      .fileOnly,
+    false
+  );
 });
 
 test("stateFingerprint: sha256 от {state, files}, не зависит от порядка файлов", () => {
@@ -193,15 +272,30 @@ test("stateFingerprint: sha256 от {state, files}, не зависит от п�
   assert.equal(stateFingerprint({ state: "submitted", files: [f2, f1] }), base);
   assert.notEqual(stateFingerprint({ state: "none", files: [f1, f2] }), base);
   assert.notEqual(stateFingerprint({ state: "submitted", files: [f1, { ...f2, size: 8 }] }), base);
-  assert.notEqual(stateFingerprint({ state: "submitted", files: [f1, { ...f2, sha256: SHA_A }] }), base);
+  assert.notEqual(
+    stateFingerprint({ state: "submitted", files: [f1, { ...f2, sha256: SHA_A }] }),
+    base
+  );
   assert.notEqual(stateFingerprint({ state: "submitted", files: [f1] }), base);
 });
 
 test("checkSubmitArgs: отказы до любого обращения к системе", () => {
-  assertRefusal(() => checkSubmitArgs({ cmid: 1, mode: "draft", files: ["a.txt"], text: "x" }), /^онлайн-текст в v1 не поддерживается$/);
-  assertRefusal(() => checkSubmitArgs({ cmid: 1, mode: "draft", files: ["a.txt"], text: "" }), /^онлайн-текст в v1 не поддерживается$/);
-  assertRefusal(() => checkSubmitArgs({ cmid: 1, mode: "submit", files: [] }), /^отправка без файлов не поддерживается$/);
-  assertRefusal(() => checkSubmitArgs({ cmid: 1, mode: "draft", files: [] }), /^отправка без файлов не поддерживается$/);
+  assertRefusal(
+    () => checkSubmitArgs({ cmid: 1, mode: "draft", files: ["a.txt"], text: "x" }),
+    /^онлайн-текст в v1 не поддерживается$/
+  );
+  assertRefusal(
+    () => checkSubmitArgs({ cmid: 1, mode: "draft", files: ["a.txt"], text: "" }),
+    /^онлайн-текст в v1 не поддерживается$/
+  );
+  assertRefusal(
+    () => checkSubmitArgs({ cmid: 1, mode: "submit", files: [] }),
+    /^отправка без файлов не поддерживается$/
+  );
+  assertRefusal(
+    () => checkSubmitArgs({ cmid: 1, mode: "draft", files: [] }),
+    /^отправка без файлов не поддерживается$/
+  );
   assert.throws(() => checkSubmitArgs({ cmid: 0, mode: "draft", files: ["a.txt"] }), /cmid/);
   assert.throws(() => checkSubmitArgs({ cmid: 1.5, mode: "draft", files: ["a.txt"] }), /cmid/);
   assert.throws(() => checkSubmitArgs({ cmid: 1, mode: "final", files: ["a.txt"] }), /mode/);
@@ -209,7 +303,12 @@ test("checkSubmitArgs: отказы до любого обращения к си
 });
 
 test("planSubmission: замена одноимённого, добавление нового", () => {
-  const v = view({ state: "submitted", canAdd: false, canEdit: true, files: [{ name: "a.txt", size: 5, sha256: SHA_A }] });
+  const v = view({
+    state: "submitted",
+    canAdd: false,
+    canEdit: true,
+    files: [{ name: "a.txt", size: 5, sha256: SHA_A }],
+  });
   const plan = planSubmission(v, form(), [outboxFile("a.txt", 12), outboxFile("b.txt", 3)]);
   assert.deepEqual(plan.replace, [{ name: "a.txt", size: 12, currentSize: 5 }]);
   assert.deepEqual(plan.add, [{ name: "b.txt", size: 3 }]);
@@ -217,7 +316,12 @@ test("planSubmission: замена одноимённого, добавлени�
 });
 
 test("planSubmission: имя — с диска (basename absPath), а не в написании модели", () => {
-  const v = view({ state: "submitted", canAdd: false, canEdit: true, files: [{ name: "a.txt", size: 5, sha256: SHA_A }] });
+  const v = view({
+    state: "submitted",
+    canAdd: false,
+    canEdit: true,
+    files: [{ name: "a.txt", size: 5, sha256: SHA_A }],
+  });
   const plan = planSubmission(v, form({ maxFiles: 1 }), [outboxFile("A.TXT", 12, SHA_B, "a.txt")]);
   assert.deepEqual(plan.replace, [{ name: "a.txt", size: 12, currentSize: 5 }]);
   assert.equal(plan.total, 1);
@@ -226,48 +330,119 @@ test("planSubmission: имя — с диска (basename absPath), а не в н
 test("planSubmission: отказы предусловий без имён файлов", () => {
   const files = [outboxFile("secret-report.pdf", 10)];
   const hide = ["secret-report"];
-  assertRefusal(() => planSubmission(view({ state: "unknown" }), form(), files), /не распознано/, hide);
+  assertRefusal(
+    () => planSubmission(view({ state: "unknown" }), form(), files),
+    /не распознано/,
+    hide
+  );
   for (const reason of ["offsite", "overdue", "not-open", "other"]) {
     assertRefusal(
-      () => planSubmission(view({ canAdd: false, closed: { reason, text: "текст страницы" } }), form(), files),
+      () =>
+        planSubmission(
+          view({ canAdd: false, closed: { reason, text: "текст страницы" } }),
+          form(),
+          files
+        ),
       /./,
       [...hide, "текст страницы"]
     );
   }
-  assertRefusal(() => planSubmission(view({ closed: { reason: "offsite", text: "x" } }), form(), files), /вне сайта/, hide);
-  assertRefusal(() => planSubmission(view({ closed: { reason: "overdue", text: "x" } }), form(), files), /просрочено/, hide);
-  assertRefusal(() => planSubmission(view({ closed: { reason: "not-open", text: "x" } }), form(), files), /не открыт/, hide);
-  assertRefusal(() => planSubmission(view({ canAdd: false, canEdit: false }), form(), files), /^нельзя добавить или править ответ$/, hide);
-  assertRefusal(() => planSubmission(view(), form({ fileOnly: false }), files), /только .*файл/, hide);
   assertRefusal(
-    () => planSubmission(view({ canAdd: false, canEdit: true, state: "submitted", files: [{ name: "old.txt", size: 1, sha256: SHA_A }] }), form({ maxFiles: 1 }), files),
+    () => planSubmission(view({ closed: { reason: "offsite", text: "x" } }), form(), files),
+    /вне сайта/,
+    hide
+  );
+  assertRefusal(
+    () => planSubmission(view({ closed: { reason: "overdue", text: "x" } }), form(), files),
+    /просрочено/,
+    hide
+  );
+  assertRefusal(
+    () => planSubmission(view({ closed: { reason: "not-open", text: "x" } }), form(), files),
+    /не открыт/,
+    hide
+  );
+  assertRefusal(
+    () => planSubmission(view({ canAdd: false, canEdit: false }), form(), files),
+    /^нельзя добавить или править ответ$/,
+    hide
+  );
+  assertRefusal(
+    () => planSubmission(view(), form({ fileOnly: false }), files),
+    /только .*файл/,
+    hide
+  );
+  assertRefusal(
+    () =>
+      planSubmission(
+        view({
+          canAdd: false,
+          canEdit: true,
+          state: "submitted",
+          files: [{ name: "old.txt", size: 1, sha256: SHA_A }],
+        }),
+        form({ maxFiles: 1 }),
+        files
+      ),
     /не более 1/,
     [...hide, "old.txt"]
   );
   assertRefusal(() => planSubmission(view(), form({ maxBytes: 9 }), files), /№1/, hide);
   assertRefusal(
-    () => planSubmission(view({ canEdit: true, state: "submitted", files: [{ name: "Secret-Report.pdf", size: 1, sha256: SHA_A }] }), form(), files),
+    () =>
+      planSubmission(
+        view({
+          canEdit: true,
+          state: "submitted",
+          files: [{ name: "Secret-Report.pdf", size: 1, sha256: SHA_A }],
+        }),
+        form(),
+        files
+      ),
     /регистр/,
     [...hide, "Secret-Report"]
   );
 });
 
 test("planSubmission: лимиты неизвестны — проверку оставляем Moodle", () => {
-  const plan = planSubmission(view(), form({ maxBytes: null, maxFiles: null }), [outboxFile("a.txt", 10 * MIB)]);
+  const plan = planSubmission(view(), form({ maxBytes: null, maxFiles: null }), [
+    outboxFile("a.txt", 10 * MIB),
+  ]);
   assert.equal(plan.total, 1);
 });
 
 test("checkDeletePreconditions: нужна кнопка «Удалить ответ» и представленный ответ", () => {
-  assertRefusal(() => checkDeletePreconditions(view({ state: "submitted", canDelete: false })), /Удалить ответ/);
-  assertRefusal(() => checkDeletePreconditions(view({ state: "none", canDelete: true })), /нечего удалять/);
-  assertRefusal(() => checkDeletePreconditions(view({ state: "unknown", canDelete: true })), /не распознано/);
-  assert.doesNotThrow(() => checkDeletePreconditions(view({ state: "submitted", canDelete: true })));
+  assertRefusal(
+    () => checkDeletePreconditions(view({ state: "submitted", canDelete: false })),
+    /Удалить ответ/
+  );
+  assertRefusal(
+    () => checkDeletePreconditions(view({ state: "none", canDelete: true })),
+    /нечего удалять/
+  );
+  assertRefusal(
+    () => checkDeletePreconditions(view({ state: "unknown", canDelete: true })),
+    /не распознано/
+  );
+  assert.doesNotThrow(() =>
+    checkDeletePreconditions(view({ state: "submitted", canDelete: true }))
+  );
 });
 
 test("submitAdapter: цель, payload, описание; запись отказывает по аргументам до сети", async () => {
   const args = { cmid: 42, mode: "draft", files: ["A.TXT", "b.txt"] };
-  const v = view({ state: "submitted", canAdd: false, canEdit: true, dueText: "срок", files: [{ name: "a.txt", size: 5, sha256: SHA_A }] });
-  const observed = { view: v, form: form(), files: [outboxFile("A.TXT", 12, SHA_B, "a.txt"), outboxFile("b.txt", 3, SHA_A)] };
+  const v = view({
+    state: "submitted",
+    canAdd: false,
+    canEdit: true,
+    dueText: "срок",
+    files: [{ name: "a.txt", size: 5, sha256: SHA_A }],
+  });
+  const observed = {
+    view: v,
+    form: form(),
+    files: [outboxFile("A.TXT", 12, SHA_B, "a.txt"), outboxFile("b.txt", 3, SHA_A)],
+  };
 
   assert.equal(submitAdapter.targetOf(args), "assign:42");
   assert.notEqual(submitAdapter.op, deleteAdapter.op);
@@ -283,7 +458,11 @@ test("submitAdapter: цель, payload, описание; запись отка�
   });
 
   const { preview, warnings } = submitAdapter.describe(args, observed);
-  assert.ok(warnings.includes("сохранение может сразу отправить работу на оценку (у проверенных заданий отдельного шага нет)"));
+  assert.ok(
+    warnings.includes(
+      "сохранение может сразу отправить работу на оценку (у проверенных заданий отдельного шага нет)"
+    )
+  );
   assert.ok(warnings.includes("форма правки открывалась и не сохранялась"));
   assert.equal(preview.title, "Задание");
   assert.equal(preview.due, "срок");
@@ -293,22 +472,43 @@ test("submitAdapter: цель, payload, описание; запись отка�
 
   let commits = 0;
   const ctx = { signal: new AbortController().signal, commitPoint: async () => void commits++ };
-  await assert.rejects(() => submitAdapter.execute({ ...args, text: "x" }, observed, ctx), /^Error: онлайн-текст в v1 не поддерживается$/);
+  await assert.rejects(
+    () => submitAdapter.execute({ ...args, text: "x" }, observed, ctx),
+    /^Error: онлайн-текст в v1 не поддерживается$/
+  );
   await assert.rejects(() => submitAdapter.execute({ ...args, cmid: 0 }, observed, ctx), /cmid/);
-  await assert.rejects(() => submitAdapter.verifyOnly({ ...args, files: [] }), /^Error: отправка без файлов не поддерживается$/);
+  await assert.rejects(
+    () => submitAdapter.verifyOnly({ ...args, files: [] }),
+    /^Error: отправка без файлов не поддерживается$/
+  );
   assert.equal(commits, 0);
 });
 
 test("submitAdapter.observe: отказ по аргументам до сети", async () => {
-  await assert.rejects(() => submitAdapter.observe({ cmid: 42, mode: "draft", files: ["a.txt"], text: "x" }), /^Error: онлайн-текст в v1 не поддерживается$/);
-  await assert.rejects(() => submitAdapter.observe({ cmid: 42, mode: "submit", files: [] }), /^Error: отправка без файлов не поддерживается$/);
+  await assert.rejects(
+    () => submitAdapter.observe({ cmid: 42, mode: "draft", files: ["a.txt"], text: "x" }),
+    /^Error: онлайн-текст в v1 не поддерживается$/
+  );
+  await assert.rejects(
+    () => submitAdapter.observe({ cmid: 42, mode: "submit", files: [] }),
+    /^Error: отправка без файлов не поддерживается$/
+  );
 });
 
 test("deleteAdapter: цель, payload, описание; запись отказывает по аргументам до сети", async () => {
-  const v = view({ state: "submitted", canAdd: false, canEdit: true, canDelete: true, files: [{ name: "a.txt", size: 5, sha256: SHA_A }] });
+  const v = view({
+    state: "submitted",
+    canAdd: false,
+    canEdit: true,
+    canDelete: true,
+    files: [{ name: "a.txt", size: 5, sha256: SHA_A }],
+  });
   const args = { cmid: 7 };
   assert.equal(deleteAdapter.targetOf(args), "assign:7");
-  assert.deepEqual(deleteAdapter.payloadOf(args, { view: v }), { files: [], state: stateFingerprint(v) });
+  assert.deepEqual(deleteAdapter.payloadOf(args, { view: v }), {
+    files: [],
+    state: stateFingerprint(v),
+  });
   const { preview, warnings } = deleteAdapter.describe(args, { view: v });
   assert.deepEqual(preview.files, [{ name: "a.txt", size: 5 }]);
   assert.equal(preview.state, "submitted");
@@ -332,7 +532,11 @@ test("sameFileSet: множества имён без учёта регистр�
 
 test("expectedManagerFiles: существующие ∪ новые, одноимённый заменяется", () => {
   assert.deepEqual(expectedManagerFiles([], ["a.txt"]), ["a.txt"]);
-  assert.deepEqual(expectedManagerFiles(["a.txt", "b.txt"], ["A.TXT", "c.txt"]), ["a.txt", "b.txt", "c.txt"]);
+  assert.deepEqual(expectedManagerFiles(["a.txt", "b.txt"], ["A.TXT", "c.txt"]), [
+    "a.txt",
+    "b.txt",
+    "c.txt",
+  ]);
   assert.deepEqual(expectedManagerFiles(["a.txt"], []), ["a.txt"]);
 });
 
@@ -341,13 +545,28 @@ test("compareFiles: имя на месте ровно один раз и sha256 
     { name: "a.txt", size: 5, sha256: SHA_A },
     { name: "b.txt", size: 3, sha256: SHA_B },
   ];
-  assert.deepEqual(compareFiles([{ name: "a.txt", sha256: SHA_A }], actual), { namesMatch: true, contentMatch: true });
-  assert.deepEqual(compareFiles([{ name: "A.TXT", sha256: SHA_A }], actual), { namesMatch: true, contentMatch: true });
-  assert.deepEqual(compareFiles([{ name: "a.txt", sha256: SHA_B }], actual), { namesMatch: true, contentMatch: false });
-  assert.deepEqual(compareFiles([{ name: "c.txt", sha256: SHA_A }], actual), { namesMatch: false, contentMatch: false });
+  assert.deepEqual(compareFiles([{ name: "a.txt", sha256: SHA_A }], actual), {
+    namesMatch: true,
+    contentMatch: true,
+  });
+  assert.deepEqual(compareFiles([{ name: "A.TXT", sha256: SHA_A }], actual), {
+    namesMatch: true,
+    contentMatch: true,
+  });
+  assert.deepEqual(compareFiles([{ name: "a.txt", sha256: SHA_B }], actual), {
+    namesMatch: true,
+    contentMatch: false,
+  });
+  assert.deepEqual(compareFiles([{ name: "c.txt", sha256: SHA_A }], actual), {
+    namesMatch: false,
+    contentMatch: false,
+  });
   // Два файла, совпадающие по имени без учёта регистра, — неоднозначно.
   const twice = [...actual, { name: "A.txt", size: 5, sha256: SHA_A }];
-  assert.deepEqual(compareFiles([{ name: "a.txt", sha256: SHA_A }], twice), { namesMatch: false, contentMatch: false });
+  assert.deepEqual(compareFiles([{ name: "a.txt", sha256: SHA_A }], twice), {
+    namesMatch: false,
+    contentMatch: false,
+  });
   assert.deepEqual(compareFiles([], actual), { namesMatch: true, contentMatch: true });
 });
 
@@ -357,23 +576,46 @@ const fileOld = { name: "a.txt", size: 3, sha256: SHA_B };
 
 test("classifySubmitOutcome: draft → submitted подтверждается с предупреждением", () => {
   const after = view({ state: "submitted", canAdd: false, canEdit: true, files: [fileA] });
-  const r = classifySubmitOutcome({ mode: "draft", expected: [{ name: "a.txt", sha256: SHA_A }], after, expectedTotal: 1 });
+  const r = classifySubmitOutcome({
+    mode: "draft",
+    expected: [{ name: "a.txt", sha256: SHA_A }],
+    after,
+    expectedTotal: 1,
+  });
   assert.equal(r.outcome, "confirmed");
   assert.equal(r.stage, "verified");
   assert.ok(r.warnings.some((w) => SUBMITTED_ON_SAVE.test(w)));
-  assert.deepEqual(r.evidence, { state: "submitted", files: 1, namesMatch: true, contentMatch: true, errorShown: false });
+  assert.deepEqual(r.evidence, {
+    state: "submitted",
+    files: 1,
+    namesMatch: true,
+    contentMatch: true,
+    errorShown: false,
+  });
 
-  const submit = classifySubmitOutcome({ mode: "submit", expected: [{ name: "a.txt", sha256: SHA_A }], after });
+  const submit = classifySubmitOutcome({
+    mode: "submit",
+    expected: [{ name: "a.txt", sha256: SHA_A }],
+    after,
+  });
   assert.equal(submit.outcome, "confirmed");
   assert.ok(!submit.warnings.some((w) => SUBMITTED_ON_SAVE.test(w)));
 });
 
 test("classifySubmitOutcome: черновик — confirmed для draft, unknown/draft-saved для submit", () => {
   const after = view({ state: "draft", canAdd: false, canEdit: true, files: [fileA] });
-  const draft = classifySubmitOutcome({ mode: "draft", expected: [{ name: "a.txt", sha256: SHA_A }], after });
+  const draft = classifySubmitOutcome({
+    mode: "draft",
+    expected: [{ name: "a.txt", sha256: SHA_A }],
+    after,
+  });
   assert.equal(draft.outcome, "confirmed");
   assert.equal(draft.stage, "verified");
-  const submit = classifySubmitOutcome({ mode: "submit", expected: [{ name: "a.txt", sha256: SHA_A }], after });
+  const submit = classifySubmitOutcome({
+    mode: "submit",
+    expected: [{ name: "a.txt", sha256: SHA_A }],
+    after,
+  });
   assert.equal(submit.outcome, "unknown");
   assert.equal(submit.stage, "draft-saved");
 });
@@ -381,7 +623,11 @@ test("classifySubmitOutcome: черновик — confirmed для draft, unknow
 test("classifySubmitOutcome: нераспознанное или пустое состояние — unknown даже при совпавших файлах", () => {
   for (const state of ["unknown", "none"]) {
     for (const mode of ["draft", "submit"]) {
-      const r = classifySubmitOutcome({ mode, expected: [{ name: "a.txt", sha256: SHA_A }], after: view({ state, files: [fileA] }) });
+      const r = classifySubmitOutcome({
+        mode,
+        expected: [{ name: "a.txt", sha256: SHA_A }],
+        after: view({ state, files: [fileA] }),
+      });
       assert.equal(r.outcome, "unknown", `${state}/${mode}`);
     }
   }
@@ -391,29 +637,65 @@ test("classifySubmitOutcome: расхождение файлов — не confir
   const before = view({ state: "submitted", canAdd: false, canEdit: true, files: [fileOld] });
   const expected = [{ name: "a.txt", sha256: SHA_A }];
   // sha256 не совпал, ошибки нет.
-  assert.equal(classifySubmitOutcome({ mode: "draft", expected, after: before, before }).outcome, "unknown");
+  assert.equal(
+    classifySubmitOutcome({ mode: "draft", expected, after: before, before }).outcome,
+    "unknown"
+  );
   // Явная ошибка Moodle и состояние прежнее.
-  const rejected = classifySubmitOutcome({ mode: "draft", expected, after: before, before, errorShown: true });
+  const rejected = classifySubmitOutcome({
+    mode: "draft",
+    expected,
+    after: before,
+    before,
+    errorShown: true,
+  });
   assert.equal(rejected.outcome, "rejected");
   assert.equal(rejected.evidence.errorShown, true);
   // Явная ошибка, но состояние изменилось.
-  const changed = view({ ...before, lastModified: "позже", files: [{ name: "a.txt", size: 4, sha256: "c".repeat(64) }] });
-  assert.equal(classifySubmitOutcome({ mode: "draft", expected, after: changed, before, errorShown: true }).outcome, "unknown");
+  const changed = view({
+    ...before,
+    lastModified: "позже",
+    files: [{ name: "a.txt", size: 4, sha256: "c".repeat(64) }],
+  });
+  assert.equal(
+    classifySubmitOutcome({ mode: "draft", expected, after: changed, before, errorShown: true })
+      .outcome,
+    "unknown"
+  );
   // Без «до» (проверка повтора) rejected не бывает.
-  assert.equal(classifySubmitOutcome({ mode: "draft", expected, after: before, errorShown: true }).outcome, "unknown");
+  assert.equal(
+    classifySubmitOutcome({ mode: "draft", expected, after: before, errorShown: true }).outcome,
+    "unknown"
+  );
   // Пропал существующий файл: присланный на месте, но файлов меньше ожидаемого.
   const after = view({ state: "submitted", files: [fileA] });
-  assert.equal(classifySubmitOutcome({ mode: "submit", expected, after, expectedTotal: 2 }).outcome, "unknown");
+  assert.equal(
+    classifySubmitOutcome({ mode: "submit", expected, after, expectedTotal: 2 }).outcome,
+    "unknown"
+  );
 });
 
 test("classifySubmitOutcome: evidence без имён файлов", () => {
-  const after = view({ state: "submitted", files: [{ name: "secret-report.pdf", size: 5, sha256: SHA_A }] });
-  const r = classifySubmitOutcome({ mode: "draft", expected: [{ name: "secret-report.pdf", sha256: SHA_A }], after });
+  const after = view({
+    state: "submitted",
+    files: [{ name: "secret-report.pdf", size: 5, sha256: SHA_A }],
+  });
+  const r = classifySubmitOutcome({
+    mode: "draft",
+    expected: [{ name: "secret-report.pdf", sha256: SHA_A }],
+    after,
+  });
   assert.ok(!JSON.stringify(r).includes("secret-report"));
 });
 
 test("classifyDeleteOutcome: none + «Добавить ответ» → confirmed; rejected только с «до» и ошибкой", () => {
-  const before = view({ state: "submitted", canAdd: false, canEdit: true, canDelete: true, files: [fileA] });
+  const before = view({
+    state: "submitted",
+    canAdd: false,
+    canEdit: true,
+    canDelete: true,
+    files: [fileA],
+  });
   const gone = view({ state: "none", canAdd: true, files: [] });
   const ok = classifyDeleteOutcome({ after: gone, before });
   assert.equal(ok.outcome, "confirmed");
@@ -421,11 +703,23 @@ test("classifyDeleteOutcome: none + «Добавить ответ» → confirme
   assert.deepEqual(ok.evidence, { state: "none", files: 0, canAdd: true, errorShown: false });
   assert.equal(classifyDeleteOutcome({ after: gone }).outcome, "confirmed");
 
-  assert.equal(classifyDeleteOutcome({ after: view({ state: "none", canAdd: false, closed: { reason: "other", text: "" } }), before }).outcome, "unknown");
+  assert.equal(
+    classifyDeleteOutcome({
+      after: view({ state: "none", canAdd: false, closed: { reason: "other", text: "" } }),
+      before,
+    }).outcome,
+    "unknown"
+  );
   assert.equal(classifyDeleteOutcome({ after: before, before }).outcome, "unknown");
-  assert.equal(classifyDeleteOutcome({ after: before, before, errorShown: true }).outcome, "rejected");
+  assert.equal(
+    classifyDeleteOutcome({ after: before, before, errorShown: true }).outcome,
+    "rejected"
+  );
   assert.equal(classifyDeleteOutcome({ after: before, errorShown: true }).outcome, "unknown");
-  assert.equal(classifyDeleteOutcome({ after: view({ state: "unknown" }), before, errorShown: true }).outcome, "unknown");
+  assert.equal(
+    classifyDeleteOutcome({ after: view({ state: "unknown" }), before, errorShown: true }).outcome,
+    "unknown"
+  );
 });
 
 // --- prepareUpload: отправляются байты, покрытые токеном, а не путь ---
@@ -440,7 +734,9 @@ function withOutboxFile(name, content, fn) {
   const absPath = path.join(dir, name);
   fs.writeFileSync(absPath, content);
   const file = { name, absPath, size: Buffer.byteLength(content), sha256: sha256Of(content) };
-  return Promise.resolve(fn(file, absPath, dir)).finally(() => fs.rmSync(dir, { recursive: true, force: true }));
+  return Promise.resolve(fn(file, absPath, dir)).finally(() =>
+    fs.rmSync(dir, { recursive: true, force: true })
+  );
 }
 
 async function assertUploadRefusal(promise, n, file, dir) {
@@ -525,7 +821,8 @@ const LEAKS = ["?id=", "4242", "http", HOST, "editsubmission"];
 
 function assertClean(err) {
   assert.ok(err instanceof Error);
-  for (const s of LEAKS) assert.ok(!err.message.includes(s), `в тексте ошибки не должно быть «${s}»: ${err.message}`);
+  for (const s of LEAKS)
+    assert.ok(!err.message.includes(s), `в тексте ошибки не должно быть «${s}»: ${err.message}`);
 }
 
 function playwrightError(message, name = "Error") {
@@ -606,16 +903,40 @@ test("sanitizeNavigationError: собственные отказы модуля 
 
 // --- H2: усиление разбора, проверок форм и проверки после сохранения ---
 
-const { checkButtonForm, sanitizeCommitError } = m;
+const { checkButtonForm } = m;
 const SHA_C = "c".repeat(64);
 
 test("buildAssignmentView: два класса статуса сразу (отправлено и черновик/новый) — unknown", () => {
   for (const second of ["submissiondraft", "submissionstatusdraft", "submissionstatusnew"]) {
-    const v = buildAssignmentView(rawPage({ statusClasses: ["submissionstatussubmitted", second, "cell"], buttons: ["Редактировать ответ"] }), 1, [], NOW);
+    const v = buildAssignmentView(
+      rawPage({
+        statusClasses: ["submissionstatussubmitted", second, "cell"],
+        buttons: ["Редактировать ответ"],
+      }),
+      1,
+      [],
+      NOW
+    );
     assert.equal(v.state, "unknown", second);
   }
-  assert.equal(buildAssignmentView(rawPage({ statusClasses: ["submissiondraft", "submissionstatusnew"] }), 1, [], NOW).state, "unknown");
-  assert.equal(buildAssignmentView(rawPage({ statusClasses: ["submissionstatussubmitted", "cell", "c1"] }), 1, [], NOW).state, "submitted");
+  assert.equal(
+    buildAssignmentView(
+      rawPage({ statusClasses: ["submissiondraft", "submissionstatusnew"] }),
+      1,
+      [],
+      NOW
+    ).state,
+    "unknown"
+  );
+  assert.equal(
+    buildAssignmentView(
+      rawPage({ statusClasses: ["submissionstatussubmitted", "cell", "c1"] }),
+      1,
+      [],
+      NOW
+    ).state,
+    "submitted"
+  );
 });
 
 test("buildAssignmentView и planSubmission: одноимённые файлы ответа (вложенные папки) — не схлопываются, отказ", () => {
@@ -623,10 +944,20 @@ test("buildAssignmentView и planSubmission: одноимённые файлы �
     { name: "secret-report.pdf", size: 5, sha256: SHA_A },
     { name: "Secret-Report.PDF", size: 7, sha256: SHA_B },
   ];
-  const v = buildAssignmentView(rawPage({ statusClasses: ["submissionstatussubmitted"], buttons: ["Редактировать ответ"] }), 1, dup, NOW);
+  const v = buildAssignmentView(
+    rawPage({ statusClasses: ["submissionstatussubmitted"], buttons: ["Редактировать ответ"] }),
+    1,
+    dup,
+    NOW
+  );
   assert.equal(v.state, "unknown");
   assertRefusal(
-    () => planSubmission(view({ state: "submitted", canAdd: false, canEdit: true, files: dup }), form(), [outboxFile("b.txt", 3)]),
+    () =>
+      planSubmission(
+        view({ state: "submitted", canAdd: false, canEdit: true, files: dup }),
+        form(),
+        [outboxFile("b.txt", 3)]
+      ),
     /одинаков/,
     ["secret-report", "Secret-Report"]
   );
@@ -637,46 +968,91 @@ test("planSubmission: присланный файл крупнее предел�
   const big = form({ maxBytes: 512 * MIB });
   const atLimit = planSubmission(view(), big, [outboxFile("secret-report.pdf", 64 * MIB)]);
   assert.equal(atLimit.total, 1);
-  assert.equal(planSubmission(view(), form({ maxBytes: null }), [outboxFile("secret-report.pdf", 64 * MIB)]).total, 1);
+  assert.equal(
+    planSubmission(view(), form({ maxBytes: null }), [outboxFile("secret-report.pdf", 64 * MIB)])
+      .total,
+    1
+  );
   assertRefusal(
-    () => planSubmission(view(), big, [outboxFile("a.txt", 3), outboxFile("secret-report.pdf", 64 * MIB + 1)]),
+    () =>
+      planSubmission(view(), big, [
+        outboxFile("a.txt", 3),
+        outboxFile("secret-report.pdf", 64 * MIB + 1),
+      ]),
     /^файл №2 больше 64 Мбайт: результат отправки нельзя будет проверить$/,
     ["secret-report", "outbox", "a.txt"]
   );
   assertRefusal(
-    () => planSubmission(view(), form({ maxBytes: null }), [outboxFile("secret-report.pdf", 64 * MIB + 1)]),
+    () =>
+      planSubmission(view(), form({ maxBytes: null }), [
+        outboxFile("secret-report.pdf", 64 * MIB + 1),
+      ]),
     /^файл №1 больше 64 Мбайт: результат отправки нельзя будет проверить$/,
     ["secret-report", "outbox"]
   );
 });
 
 test("buildAssignmentView: «просрочено» при кнопке «Добавить ответ» — по-прежнему отказ (решение владельца не принято)", () => {
-  const v = buildAssignmentView(rawPage({ remaining: "Задание просрочено на: 1 дн. 2 час.", buttons: ["Добавить ответ на задание"] }), 1, [], NOW);
+  const v = buildAssignmentView(
+    rawPage({
+      remaining: "Задание просрочено на: 1 дн. 2 час.",
+      buttons: ["Добавить ответ на задание"],
+    }),
+    1,
+    [],
+    NOW
+  );
   assert.equal(v.closed?.reason, "overdue");
   assert.equal(v.canAdd, true);
   assertRefusal(() => planSubmission(v, form(), [outboxFile("a.txt", 3)]), /просрочено/);
 });
 
 test("submitAdapter.describe: условные предупреждения — уже отправлено, перезапись, лимит неизвестен", () => {
-  const base = ["сохранение может сразу отправить работу на оценку (у проверенных заданий отдельного шага нет)", "форма правки открывалась и не сохранялась"];
+  const base = [
+    "сохранение может сразу отправить работу на оценку (у проверенных заданий отдельного шага нет)",
+    "форма правки открывалась и не сохранялась",
+  ];
   const args = { cmid: 42, mode: "draft", files: ["b.txt"] };
-  const plain = submitAdapter.describe(args, { view: view(), form: form(), files: [outboxFile("b.txt", 3)] });
+  const plain = submitAdapter.describe(args, {
+    view: view(),
+    form: form(),
+    files: [outboxFile("b.txt", 3)],
+  });
   assert.deepEqual(plain.warnings, base);
   assert.equal(plain.preview.action, "новый ответ");
 
-  const submitted = view({ state: "submitted", canAdd: false, canEdit: true, files: [{ name: "a.txt", size: 5, sha256: SHA_A }] });
-  const edit = submitAdapter.describe(args, { view: submitted, form: form(), files: [outboxFile("b.txt", 3)] });
+  const submitted = view({
+    state: "submitted",
+    canAdd: false,
+    canEdit: true,
+    files: [{ name: "a.txt", size: 5, sha256: SHA_A }],
+  });
+  const edit = submitAdapter.describe(args, {
+    view: submitted,
+    form: form(),
+    files: [outboxFile("b.txt", 3)],
+  });
   assert.equal(edit.warnings.length, 3);
   assert.ok(edit.warnings.some((w) => /уже отправлен на оценку/.test(w)));
   assert.equal(edit.preview.action, "правка ответа");
 
-  const over = submitAdapter.describe(args, { view: submitted, form: form(), files: [outboxFile("a.txt", 3)] });
+  const over = submitAdapter.describe(args, {
+    view: submitted,
+    form: form(),
+    files: [outboxFile("a.txt", 3)],
+  });
   assert.ok(over.warnings.some((w) => /одноимённые файлы ответа будут перезаписаны/.test(w)));
 
   for (const limits of [{ maxBytes: null }, { maxFiles: null }]) {
-    const unknown = submitAdapter.describe(args, { view: view(), form: form(limits), files: [outboxFile("b.txt", 3)] });
+    const unknown = submitAdapter.describe(args, {
+      view: view(),
+      form: form(limits),
+      files: [outboxFile("b.txt", 3)],
+    });
     assert.deepEqual(unknown.warnings.slice(0, 2), base);
-    assert.ok(unknown.warnings.some((w) => /лимит размера или числа файлов на форме не найден/.test(w)));
+    assert.ok(
+      unknown.warnings.some((w) => /лимит размера или числа файлов на форме не найден/.test(w))
+    );
     assert.equal(unknown.warnings.length, 3);
   }
 });
@@ -684,39 +1060,83 @@ test("submitAdapter.describe: условные предупреждения — 
 test("classifySubmitOutcome: нетронутые файлы ответа сверяются с «до» по sha256", () => {
   const sent = { name: "a.txt", size: 4, sha256: SHA_B };
   const keep = { name: "n.txt", size: 2, sha256: SHA_A };
-  const before = view({ state: "submitted", canAdd: false, canEdit: true, lastModified: "вчера", files: [fileOld, keep] });
+  const before = view({
+    state: "submitted",
+    canAdd: false,
+    canEdit: true,
+    lastModified: "вчера",
+    files: [fileOld, keep],
+  });
   const expected = [{ name: "a.txt", sha256: SHA_B }];
-  const ok = classifySubmitOutcome({ mode: "submit", expected, before, expectedTotal: 2, after: view({ ...before, lastModified: "сегодня", files: [sent, keep] }) });
+  const ok = classifySubmitOutcome({
+    mode: "submit",
+    expected,
+    before,
+    expectedTotal: 2,
+    after: view({ ...before, lastModified: "сегодня", files: [sent, keep] }),
+  });
   assert.equal(ok.outcome, "confirmed");
   assert.equal(ok.evidence.untouchedMatch, true);
   assert.equal(ok.evidence.lastModifiedChanged, true);
 
   // Нетронутый файл изменился.
-  const changed = classifySubmitOutcome({ mode: "submit", expected, before, expectedTotal: 2, after: view({ ...before, lastModified: "сегодня", files: [sent, { ...keep, sha256: SHA_C }] }) });
+  const changed = classifySubmitOutcome({
+    mode: "submit",
+    expected,
+    before,
+    expectedTotal: 2,
+    after: view({ ...before, lastModified: "сегодня", files: [sent, { ...keep, sha256: SHA_C }] }),
+  });
   assert.equal(changed.outcome, "unknown");
   assert.equal(changed.evidence.untouchedMatch, false);
 
   // Нетронутый файл пропал, вместо него другой (число совпало).
-  const swapped = classifySubmitOutcome({ mode: "submit", expected, before, expectedTotal: 2, after: view({ ...before, files: [sent, { ...keep, name: "x.txt" }] }) });
+  const swapped = classifySubmitOutcome({
+    mode: "submit",
+    expected,
+    before,
+    expectedTotal: 2,
+    after: view({ ...before, files: [sent, { ...keep, name: "x.txt" }] }),
+  });
   assert.equal(swapped.outcome, "unknown");
   assert.equal(swapped.evidence.untouchedMatch, false);
   assert.ok(!JSON.stringify(swapped).includes("n.txt"));
 
   // Проверка повтора (без «до»): прежнее, более слабое сравнение и прежний вид evidence.
-  const replay = classifySubmitOutcome({ mode: "submit", expected, after: view({ ...before, files: [sent, { ...keep, sha256: SHA_C }] }) });
+  const replay = classifySubmitOutcome({
+    mode: "submit",
+    expected,
+    after: view({ ...before, files: [sent, { ...keep, sha256: SHA_C }] }),
+  });
   assert.equal(replay.outcome, "confirmed");
   assert.equal("untouchedMatch" in replay.evidence, false);
 });
 
 test("classifySubmitOutcome: «Последнее изменение» — в evidence, но не единственный признак", () => {
-  const before = view({ state: "submitted", canAdd: false, canEdit: true, lastModified: "вчера", files: [fileOld] });
+  const before = view({
+    state: "submitted",
+    canAdd: false,
+    canEdit: true,
+    lastModified: "вчера",
+    files: [fileOld],
+  });
   const expected = [{ name: "a.txt", sha256: SHA_A }];
   // Время изменилось, а байты не те — не confirmed.
-  const r = classifySubmitOutcome({ mode: "submit", expected, before, after: view({ ...before, lastModified: "сегодня" }) });
+  const r = classifySubmitOutcome({
+    mode: "submit",
+    expected,
+    before,
+    after: view({ ...before, lastModified: "сегодня" }),
+  });
   assert.equal(r.outcome, "unknown");
   assert.equal(r.evidence.lastModifiedChanged, true);
   // Байты совпали, время прежнее — подтверждено (время не обязательное условие), признак false.
-  const same = classifySubmitOutcome({ mode: "submit", expected, before, after: view({ ...before, files: [fileA] }) });
+  const same = classifySubmitOutcome({
+    mode: "submit",
+    expected,
+    before,
+    after: view({ ...before, files: [fileA] }),
+  });
   assert.equal(same.outcome, "confirmed");
   assert.equal(same.evidence.lastModifiedChanged, false);
 });
@@ -730,7 +1150,8 @@ test("prepareUpload: сбой временной папки — отказ «н�
       await assert.rejects(prepareUpload(file, 3, { maxBuffer: 4 }), (err) => {
         assert.ok(err instanceof Refusal);
         assert.match(err.message, /^не удалось подготовить файл №3 к отправке/);
-        for (const s of [bogus, "no-such-dir-h2", dir, "secret-report"]) assert.ok(!err.message.includes(s), err.message);
+        for (const s of [bogus, "no-such-dir-h2", dir, "secret-report"])
+          assert.ok(!err.message.includes(s), err.message);
         return true;
       });
     } finally {
@@ -750,7 +1171,8 @@ test("prepareUpload: сбой копирования — «не удалось �
       assert.ok(err instanceof Refusal);
       assert.match(err.message, /^не удалось подготовить файл №2 к отправке/);
       assert.doesNotMatch(err.message, /изменился/);
-      for (const s of [dir, os.tmpdir(), "secret-report"]) assert.ok(!err.message.includes(s), err.message);
+      for (const s of [dir, os.tmpdir(), "secret-report"])
+        assert.ok(!err.message.includes(s), err.message);
       return true;
     });
     assert.equal(uploadTmpDirs().length, before);
@@ -758,15 +1180,20 @@ test("prepareUpload: сбой копирования — «не удалось �
 });
 
 test("sanitizeCommitError: отказ точки невозврата — свой текст по классу, без путей; readPage его не переписывает", () => {
-  const journal = new Error("EISDIR: illegal operation on a directory, open 'C:\\Users\\x\\storage\\writes\\journal.json.1.tmp'");
+  const journal = new Error(
+    "EISDIR: illegal operation on a directory, open 'C:\\Users\\x\\storage\\writes\\journal.json.1.tmp'"
+  );
   const j = sanitizeCommitError(journal);
   assert.match(j.message, /журнал/);
   assert.doesNotMatch(j.message, /не удалось открыть или прочитать/);
-  for (const s of ["storage", "C:\\", "journal.json", "EISDIR"]) assert.ok(!j.message.includes(s), j.message);
+  for (const s of ["storage", "C:\\", "journal.json", "EISDIR"])
+    assert.ok(!j.message.includes(s), j.message);
   assert.equal(classifyError(j), "other");
   assert.equal(sanitizeNavigationError(j), j);
 
-  const deadline = sanitizeCommitError(new Error("writes.lms_submit_assignment не уложился в 45 с"));
+  const deadline = sanitizeCommitError(
+    new Error("writes.lms_submit_assignment не уложился в 45 с")
+  );
   assert.equal(classifyError(deadline), "timeout");
   const abort = sanitizeCommitError(new DOMException("aborted", "TimeoutError"));
   assert.equal(classifyError(abort), "timeout");
@@ -775,7 +1202,9 @@ test("sanitizeCommitError: отказ точки невозврата — сво
   assert.equal(classifyError(cancelled), "cancelled");
   assert.equal(sanitizeNavigationError(cancelled), cancelled);
 
-  const done = sanitizeCommitError(new Error("writes.x: вызов уже завершён, точка невозврата недоступна"));
+  const done = sanitizeCommitError(
+    new Error("writes.x: вызов уже завершён, точка невозврата недоступна")
+  );
   assert.match(done.message, /точка невозврата недоступна/);
   assert.doesNotMatch(done.message, /журнал/);
   assert.equal(classifyError(done), "other");
@@ -783,9 +1212,23 @@ test("sanitizeCommitError: отказ точки невозврата — сво
 
 /** Форма кнопки «как из страницы»: метод, путь адреса, скрытые поля. */
 function buttonForm(method, fields, over = {}) {
-  return { hasForm: true, method, actionPath: "/mod/assign/view.php", fields: Object.entries(fields).map(([name, value]) => ({ name, value })), ...over };
+  return {
+    hasForm: true,
+    method,
+    actionPath: "/mod/assign/view.php",
+    fields: Object.entries(fields).map(([name, value]) => ({ name, value })),
+    ...over,
+  };
 }
-const SAVE_FIELDS = { lastmodified: "1", id: "42", userid: "9", action: "savesubmission", _qf__mod_assign_submission_form: "1", files_filemanager: "123", sesskey: "k" };
+const SAVE_FIELDS = {
+  lastmodified: "1",
+  id: "42",
+  userid: "9",
+  action: "savesubmission",
+  _qf__mod_assign_submission_form: "1",
+  files_filemanager: "123",
+  sesskey: "k",
+};
 const DELETE_FIELDS = { id: "42", action: "removesubmissionconfirm" };
 const CONTINUE_FIELDS = { id: "42", action: "removesubmission", userid: "9", sesskey: "k" };
 const without = (obj, key) => Object.fromEntries(Object.entries(obj).filter(([k]) => k !== key));
@@ -806,7 +1249,12 @@ test("checkButtonForm: «Сохранить» — POST на view.php, id = cmid,
     buttonForm("post", without(SAVE_FIELDS, "id")),
     dupId,
   ];
-  for (const raw of bad) assertRefusal(() => checkButtonForm(raw, "save", 42), /Сохранить.*до отправки/, ["42", "43", "savesubmission"]);
+  for (const raw of bad)
+    assertRefusal(() => checkButtonForm(raw, "save", 42), /Сохранить.*до отправки/, [
+      "42",
+      "43",
+      "savesubmission",
+    ]);
 });
 
 test("checkButtonForm: «Удалить ответ» — GET на removesubmissionconfirm; «Продолжить» — POST с полями §17", () => {
@@ -817,7 +1265,10 @@ test("checkButtonForm: «Удалить ответ» — GET на removesubmissi
     buttonForm("get", { ...DELETE_FIELDS, id: "7" }),
     buttonForm("get", { id: "42" }),
   ]) {
-    assertRefusal(() => checkButtonForm(raw, "delete", 42), /Удалить ответ/, ["42", "removesubmission"]);
+    assertRefusal(() => checkButtonForm(raw, "delete", 42), /Удалить ответ/, [
+      "42",
+      "removesubmission",
+    ]);
   }
   assert.doesNotThrow(() => checkButtonForm(buttonForm("post", CONTINUE_FIELDS), "continue", 42));
   for (const raw of [
@@ -850,7 +1301,10 @@ test("submitAdapter.observe: файл крупнее предела провер
     const t0 = Date.now();
     await assert.rejects(
       () => submitAdapter.observe({ cmid: 1, mode: "draft", files: ["big.bin"] }),
-      (err) => /^Файл №1: размер больше допустимых \d+ байт$/.test(err.message) && !err.message.includes("big.bin") && !err.message.includes(dir)
+      (err) =>
+        /^Файл №1: размер больше допустимых \d+ байт$/.test(err.message) &&
+        !err.message.includes("big.bin") &&
+        !err.message.includes(dir)
     );
     assert.ok(Date.now() - t0 < 5_000);
     assert.equal(launches, 0, "страница не открывалась");
