@@ -10,16 +10,15 @@ import {
 } from "playwright";
 import { COMMIT_DEADLINE_MS } from "../commit.js";
 import { config } from "../config.js";
+import { dataDir } from "../data-dir.js";
 import { waitForRenderedBody } from "../dom-utils.js";
 import { ensurePrivateDir, restrictFile } from "../fs-secure.js";
 import { acquirePageSlot, LEASE_GRACE_MS, type PageSlotRelease } from "../limiter.js";
-import { projectRoot } from "../project-root.js";
 
-// Корень проекта берём из общего хелпера (от расположения файла, а не process.cwd()) — хосты вроде
-// Claude Desktop запускают stdio-сервер с произвольным (иногда непишущим, напр.
+// Каталог данных — от расположения проекта или каталога пользователя (data-dir.ts), а не process.cwd():
+// хосты вроде Claude Desktop запускают stdio-сервер с произвольным (иногда непишущим, напр.
 // C:\WINDOWS\system32) cwd, и mkdir там падает с EPERM.
-const STORAGE_DIR = path.join(projectRoot, "storage");
-const STORAGE_STATE_PATH = path.join(STORAGE_DIR, "hse-session.json");
+const storageStatePath = (): string => path.join(dataDir(), "hse-session.json");
 const KEYCLOAK_HOST = "saml.hse.ru";
 
 /** Верхняя граница на всё в `withPage`: слот, открытие, вход и тело вызова. */
@@ -39,7 +38,7 @@ async function getContext(): Promise<BrowserContext> {
   if (!contextPromise) {
     contextPromise = (async () => {
       try {
-        ensurePrivateDir(STORAGE_DIR);
+        ensurePrivateDir(dataDir());
         if (!browserPromise) {
           browserPromise = chromium.launch({ headless: config.browserHeadless }).catch((err) => {
             browserPromise = null;
@@ -47,7 +46,7 @@ async function getContext(): Promise<BrowserContext> {
           });
         }
         const browser = await browserPromise;
-        const storageState = fs.existsSync(STORAGE_STATE_PATH) ? STORAGE_STATE_PATH : undefined;
+        const storageState = fs.existsSync(storageStatePath()) ? storageStatePath() : undefined;
         return await browser.newContext({ storageState });
       } catch (err) {
         // Без сброса rejected promise остаётся закэширован навсегда (if (!contextPromise) не
@@ -175,10 +174,10 @@ async function needsLogin(page: Page): Promise<boolean> {
  */
 async function saveStorageState(context: BrowserContext): Promise<void> {
   const state = await context.storageState();
-  const tmp = `${STORAGE_STATE_PATH}.${process.pid}.tmp`;
+  const tmp = `${storageStatePath()}.${process.pid}.tmp`;
   fs.writeFileSync(tmp, JSON.stringify(state), { mode: 0o600 });
-  fs.renameSync(tmp, STORAGE_STATE_PATH);
-  restrictFile(STORAGE_STATE_PATH);
+  fs.renameSync(tmp, storageStatePath());
+  restrictFile(storageStatePath());
 }
 
 /**

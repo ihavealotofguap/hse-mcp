@@ -1,9 +1,9 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { dataDir } from "../../data-dir.js";
 import { errCode, withFileLock, writeFileAtomic } from "../../fs-lock.js";
 import { ensurePrivateDir, restrictFile, restrictFileOnce } from "../../fs-secure.js";
-import { projectRoot } from "../../project-root.js";
 import type { PreviewPayload } from "./types.js";
 
 export const PREVIEW_TTL_MS = 15 * 60_000;
@@ -16,11 +16,11 @@ const TOKEN_RE = /^(0|[1-9]\d{0,15})\.([0-9a-f]{64})$/;
 
 /**
  * Каталог ключа и журнала записей; `HSE_WRITES_DIR` — для проверочных скриптов. Относительный путь
- * разрешается от cwd процесса (нужно только проверкам: сервер задаёт абсолютный или берёт каталог проекта).
+ * разрешается от cwd процесса (нужно только проверкам: сервер задаёт абсолютный или берёт каталог данных).
  */
 export function writesDir(): string {
   const override = process.env.HSE_WRITES_DIR;
-  return override ? path.resolve(override) : path.join(projectRoot, "storage", "writes");
+  return override ? path.resolve(override) : path.join(dataDir(), "writes");
 }
 
 function readKey(file: string): Buffer | null {
@@ -57,8 +57,8 @@ export async function loadOrCreateKey(dir: string = writesDir()): Promise<Buffer
   const file = path.join(dir, "key");
   // Каталог создаём сами с 0o700 (lock-файл создал бы его с правами по умолчанию) и ограничиваем
   // права на нём: на Windows mode игнорируется, а файлы внутри наследуют права каталога. Для
-  // стандартного расположения то же делаем с `storage/`.
-  if (dir === path.join(projectRoot, "storage", "writes")) ensurePrivateDir(path.dirname(dir));
+  // стандартного расположения то же делаем с каталогом данных.
+  if (dir === path.join(dataDir(), "writes")) ensurePrivateDir(path.dirname(dir));
   ensurePrivateDir(dir);
   const existing = readKey(file);
   if (existing) return existing;

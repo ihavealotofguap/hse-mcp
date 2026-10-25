@@ -26,7 +26,7 @@ export interface JournalEntry {
 export class JournalError extends Error {}
 
 const CORRUPT_MESSAGE =
-  "журнал записей повреждён; запись не выполнена — восстановите или удалите storage/writes/journal.json вручную после проверки сайта";
+  "журнал записей повреждён; запись не выполнена — восстановите или удалите writes/journal.json в каталоге данных вручную после проверки сайта";
 const TOKEN_REUSED_MESSAGE = "этот previewToken уже использован; запись не выполнена";
 
 const journalFile = (dir: string): string => path.join(dir, "journal.json");

@@ -6,6 +6,7 @@ import {
   loadKeyStore,
   lookupPassword,
 } from "./credentials.js";
+import { dataDir } from "./data-dir.js";
 import { projectRoot } from "./project-root.js";
 
 // Ищем .env рядом с проектом, а не в process.cwd() — иначе при запуске сервера
@@ -72,10 +73,10 @@ export const config = {
   get browserHeadless(): boolean {
     return process.env.HSE_BROWSER_HEADLESS !== "false";
   },
-  /** Папка «исходящих»: `HSE_OUTBOX_DIR` (абсолютный путь или относительно корня проекта), иначе `storage/outbox`. */
+  /** Папка «исходящих»: `HSE_OUTBOX_DIR` (абсолютный путь или относительно корня проекта), иначе `outbox` в каталоге данных. */
   get outboxDir(): string {
     const value = process.env.HSE_OUTBOX_DIR?.trim();
-    return value ? path.resolve(projectRoot, value) : path.join(projectRoot, "storage", "outbox");
+    return value ? path.resolve(projectRoot, value) : path.join(dataDir(), "outbox");
   },
   /** Тулы записи — opt-in: включены только при `HSE_ENABLE_WRITES=true` (без учёта регистра и пробелов). */
   get writesEnabled(): boolean {
