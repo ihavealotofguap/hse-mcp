@@ -21,6 +21,9 @@ const {
   expectedFieldValues,
   checkFormState,
 } = m;
+const { applicationsFrom } = await import(
+  new URL("../dist/services/elk/client.js", import.meta.url).href
+);
 const { Refusal } = await import(
   new URL("../dist/services/writes/errors.js", import.meta.url).href
 );
@@ -538,10 +541,37 @@ test("claimNumbersOf: номера заявок из ответа listRequests, 
   refuses(() => claimNumbersOf({ count: 1 }), /истори/);
 });
 
+test("applicationsFrom: номера applicationNumber на любой глубине, без повторов; без номера — пропуск", () => {
+  const json = {
+    data: [
+      { id: 1, author: null, applicationNumber: "384910" },
+      { id: 2, applicationNumber: 302930, nested: { applicationNumber: " 384910 " } },
+      { id: 3, applicationNumber: null },
+      { id: 4, applicationNumber: "" },
+    ],
+  };
+  assert.deepEqual(
+    applicationsFrom(json).map((a) => a.num),
+    ["384910", "302930"]
+  );
+  assert.deepEqual(applicationsFrom(json)[0], {
+    num: "384910",
+    service: null,
+    created: null,
+    createdByEmail: null,
+  });
+  assert.deepEqual(applicationsFrom([]), []);
+  assert.deepEqual(applicationsFrom(null), []);
+  assert.deepEqual(applicationsFrom({ data: { content: [] } }), []);
+  // Результат годится для claimNumbersOf: номера — непустые строки.
+  const list = applicationsFrom(json);
+  assert.deepEqual(claimNumbersOf({ count: list.length, requests: list }), ["302930", "384910"]);
+});
+
 test("certificateAdapter: цель, операция, сброс заявок; неверные аргументы записи — отказ до точки невозврата", async () => {
   assert.equal(certificateAdapter.op, "elk_order_certificate");
   assert.equal(certificateAdapter.targetOf({ serviceId: 14605, fields: {} }), "service:14605");
-  assert.deepEqual(certificateAdapter.invalidates, ["elk.claims"]);
+  assert.deepEqual(certificateAdapter.invalidates, ["elk.claims", "elk.applications"]);
   assert.equal(typeof certificateAdapter.commitDeadlineMs, "number", "дедлайн коммита задан явно");
   // Неверные аргументы — отказ до любого обращения к странице и к истории заявок.
   await assert.rejects(() => certificateAdapter.observe({ serviceId: 0, fields: {} }), /serviceId/);
@@ -975,10 +1005,10 @@ test("certificateResult: каждый неизвестный исход несё
     );
   }
   assert.match(MANUAL_CHECK_WARNING, /newClaims: 0 не означает, что заказ не прошёл/);
-  assert.match(MANUAL_CHECK_WARNING, /Сервиса Студент в истории заявок через API не видны/);
+  assert.match(MANUAL_CHECK_WARNING, /исход заказа не подтверждён/);
   assert.match(MANUAL_CHECK_WARNING, /странице «Заявки» в lk\.hse\.ru/);
   assert.match(MANUAL_CHECK_WARNING, /не повторяйте заказ без этой проверки/);
-  // Подтверждённый исход (формы, чьи заявки видны в /api/claims) предупреждения не получает.
+  // Подтверждённый исход предупреждения о ручной сверке не получает.
   const ok = certificateResult(trace(), ["A-1"], after(claim("A-2")));
   assert.equal(ok.outcome, "confirmed");
   assert.ok(!ok.warnings.includes(MANUAL_CHECK_WARNING));

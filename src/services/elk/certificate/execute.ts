@@ -355,8 +355,8 @@ export const executeCertificate: WriteAdapter<CertificateArgs, CertificateObserv
         trace.clickError = true;
       }
     }
-    // Опрос — после закрытия страницы: чтение истории ЕЛК может само открыть страницу (запасной путь
-    // client.ts), а вложенный `withPage` запрещён.
+    // Опрос — после закрытия страницы: чтение истории ЕЛК открывает страницу «Заявки», а вложенный
+    // `withPage` запрещён.
     return certificateResult(
       trace,
       before,

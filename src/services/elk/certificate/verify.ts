@@ -1,27 +1,28 @@
 import { config } from "../../../config.js";
 import { abortableSleep, type ExecuteResult, type WriteAdapter } from "../../writes/runner.js";
 import type { Outcome } from "../../writes/types.js";
-import type { ElkClaim } from "../client.js";
+import type { ElkApplication } from "../client.js";
 import { certificateTestSeams, claimNumbersOf } from "./claims.js";
 import type { CertificateArgs, CertificateObserved } from "./plan.js";
 
 /**
  * Проверка исхода заказа (спека №4 §7, §10): опрос истории заявок после клика и классификация
  * (`classifyCertificateOutcome`). Ответ `process/start` (даже 2xx) — только сигнал: исход решает
- * появление ровно одной новой заявки в свежей истории (номер — только в ответе тула). На живом сервисе
- * исход — `unknown` с `MANUAL_CHECK_WARNING` (§17, одиннадцатый проход).
+ * появление ровно одной новой заявки в свежей истории (номер — только в ответе тула). История —
+ * заявки «Сервиса Студент» со страницы «Заявки» (`claims.ts`): в `/api/claims` справки не видны
+ * (§17, одиннадцатый проход), поэтому прежде исход был всегда `unknown`.
  */
 
 // Дедлайн коммита заказа: клик, ожидание ответа `process/start` (до 10 с) и опрос истории (до 15 с) с запасом.
 export const CERTIFICATE_COMMIT_DEADLINE_MS = 45_000;
-const CLAIMS_READ_RESERVE_MS = 5_000;
+// Чтение истории открывает страницу «Заявки» (вход, перезагрузка, ответ списка): запас на одно чтение.
+const CLAIMS_READ_RESERVE_MS = 20_000;
 
-// Живая проверка (§17, одиннадцатый проход): заявки «Сервиса Студент» в `/api/claims` (то, что читает
-// `elk_list_requests`) не видны, поэтому сверка возможна только вручную на странице «Заявки» в ЕЛК.
+// Ручная сверка неизвестного исхода — на странице «Заявки» в ЕЛК (там видны заявки «Сервиса Студент»).
 export const MANUAL_WHERE = "сверьте вручную на странице «Заявки» в lk.hse.ru";
 /** Предупреждение каждого неизвестного исхода заказа: «0 новых заявок» не значит, что заказ не прошёл. */
 export const MANUAL_CHECK_WARNING =
-  "newClaims: 0 не означает, что заказ не прошёл: справки Сервиса Студент в истории заявок через API не видны; проверьте вручную на странице «Заявки» в lk.hse.ru, не повторяйте заказ без этой проверки";
+  "исход заказа не подтверждён; newClaims: 0 не означает, что заказ не прошёл: новая заявка могла ещё не появиться в списке; проверьте вручную на странице «Заявки» в lk.hse.ru, не повторяйте заказ без этой проверки";
 
 const W_MANUAL = `после заказа появилось несколько новых заявок: какая из них создана этим вызовом, не установить — ${MANUAL_WHERE}`;
 
@@ -135,7 +136,7 @@ export function parseClaimCreated(raw: unknown): { at: number; dayOnly: boolean 
  */
 export function classifyCertificateOutcome(input: {
   before: string[];
-  after: Array<Pick<ElkClaim, "num" | "service" | "created" | "createdByEmail">>;
+  after: Array<Pick<ElkApplication, "num" | "service" | "created" | "createdByEmail">>;
   submitRequests: number;
   clickedAt: number;
   loginEmail: string | null;
@@ -193,13 +194,13 @@ export async function pollNewClaims(
   before: string[],
   since: number,
   signal: AbortSignal
-): Promise<ElkClaim[] | null> {
+): Promise<ElkApplication[] | null> {
   const deadline = since + certificateTestSeams.claimsWaitMs;
   // Дедлайн коммита отсчитывается от точки невозврата (клик следует сразу за ней): новое чтение не начинаем,
   // если до него осталось меньше запаса — медленное чтение (повторный вход, запасной путь) не должно
   // превратить исход в «не уложился в дедлайн»; первое чтение делается всегда.
   const hardStop = since + CERTIFICATE_COMMIT_DEADLINE_MS - CLAIMS_READ_RESERVE_MS;
-  let last: ElkClaim[] | null = null;
+  let last: ElkApplication[] | null = null;
   for (;;) {
     if (last !== null && Date.now() >= hardStop) return last;
     try {
@@ -241,7 +242,7 @@ function loginEmailOrNull(): string | null {
 export function certificateResult(
   trace: SubmitTrace,
   before: string[],
-  claims: ElkClaim[] | null
+  claims: ElkApplication[] | null
 ): ExecuteResult {
   const sent = {
     clicked: !trace.clickError,

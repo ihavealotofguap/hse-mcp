@@ -80,7 +80,7 @@ export {
 
 export const certificateAdapter: WriteAdapter<CertificateArgs, CertificateObserved> = {
   op: "elk_order_certificate",
-  invalidates: ["elk.claims"],
+  invalidates: ["elk.claims", "elk.applications"],
   commitDeadlineMs: CERTIFICATE_COMMIT_DEADLINE_MS,
   // Любой неизвестный исход заказа несёт предупреждение о ручной сверке (в том числе при сбое или дедлайне).
   unknownWarnings: [MANUAL_CHECK_WARNING],
