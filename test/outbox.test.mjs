@@ -49,7 +49,11 @@ async function assertRefused(names, opts, hint) {
             assert.ok(!err.message.includes(token), `фрагмент «${token}» в тексте: ${err.message}`);
         }
       }
-      assert.ok(!err.message.includes(opts.dir), "путь папки в тексте ошибки");
+      // Корень диска («/» на Linux и macOS) встречается в любом тексте — проверка имеет смысл только
+      // для настоящей папки.
+      if (path.parse(opts.dir).root !== opts.dir) {
+        assert.ok(!err.message.includes(opts.dir), "путь папки в тексте ошибки");
+      }
       if (hint) assert.match(err.message, hint);
       return true;
     }
