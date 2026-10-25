@@ -482,6 +482,84 @@ export function listRequests(
   return elkClaims(limit, opts);
 }
 
+/**
+ * Заявка «Сервиса Студент» со страницы «Заявки» (lk.hse.ru/claim). В `/api/claims` (`listRequests`)
+ * их нет: страница берёт их отдельным запросом `…/find-task-by-user-mail` (разведка 2026-10-25).
+ * Вживую подтверждено только поле номера `applicationNumber`; остальные поля не расшифрованы.
+ */
+export interface ElkApplication {
+  num: string;
+  service: string | null;
+  created: string | null;
+  createdByEmail: string | null;
+}
+
+const APPLICATIONS_PATH = "/find-task-by-user-mail";
+const APPLICATIONS_WAIT_MS = 20_000;
+const APPLICATIONS_MAX_DEPTH = 8;
+
+/**
+ * Заявки из ответа `find-task-by-user-mail`: все объекты с непустым `applicationNumber` (строка или
+ * число) на любой глубине, без повторов номера. Форма ответа вокруг поля не зафиксирована, поэтому
+ * поиск идёт по всему JSON. Запись без номера по номеру не отличить — она пропускается.
+ */
+export function applicationsFrom(json: unknown): ElkApplication[] {
+  const found = new Map<string, ElkApplication>();
+  const walk = (v: unknown, depth: number): void => {
+    if (depth > APPLICATIONS_MAX_DEPTH || v === null || typeof v !== "object") return;
+    if (Array.isArray(v)) {
+      for (const x of v) walk(x, depth + 1);
+      return;
+    }
+    const raw = (v as Record<string, unknown>).applicationNumber;
+    const num = typeof raw === "number" || typeof raw === "string" ? String(raw).trim() : "";
+    if (num && !found.has(num))
+      found.set(num, { num, service: null, created: null, createdByEmail: null });
+    for (const x of Object.values(v)) walk(x, depth + 1);
+  };
+  walk(json, 0);
+  return [...found.values()];
+}
+
+const elkApplications = defineResource<void, { count: number; requests: ElkApplication[] }>({
+  name: "elk.applications",
+  ttl: TTL.short,
+  key: () => "me",
+  // Адрес и метод запроса не зафиксированы — его делает сама страница «Заявки»: перехват ответа и
+  // перезагрузка (первый ответ мог прийти ещё при открытии, до перехвата). Страница только читается.
+  load: (_a, ctx) =>
+    withPage(
+      `${BASE_URL}/claim`,
+      async (page) => {
+        const response = page.waitForResponse(
+          (r) => {
+            try {
+              const u = new URL(r.url());
+              return u.origin === BASE_URL && u.pathname.endsWith(APPLICATIONS_PATH);
+            } catch {
+              return false;
+            }
+          },
+          { timeout: APPLICATIONS_WAIT_MS }
+        );
+        response.catch(() => {});
+        await page.reload({ waitUntil: "load" });
+        const res = await response;
+        if (!res.ok()) throw new Error(`ЕЛК: список заявок Сервиса Студент — HTTP ${res.status()}`);
+        const requests = applicationsFrom(await res.json());
+        return { count: requests.length, requests };
+      },
+      { signal: ctx.signal }
+    ),
+});
+
+/** Заявки «Сервиса Студент» (страница «Заявки»): номера для проверки исхода заказа справки. */
+export function listStudentServiceApplications(
+  opts?: ResourceCallOptions
+): Promise<{ count: number; requests: ElkApplication[] }> {
+  return elkApplications(undefined, opts);
+}
+
 const elkTasks = defineResource<number, { count: number; data: unknown[] }>({
   name: "elk.tasks",
   ttl: TTL.short,

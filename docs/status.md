@@ -13,7 +13,7 @@
 | Служебное | `hse_clear_cache` | `services/system/` | нет | да |
 | Каркас записи | — | `services/writes/` | `runner`, `token`, `journal`, `outbox`, `tools-gating` | да |
 | Запись в SmartLMS | `lms_submit_assignment`, `lms_delete_submission` | `services/lms/submissions/` | `submissions-pure` | да, один аккаунт, один семестр |
-| Заказ справки в ЕЛК | `elk_order_certificate` | `services/elk/certificate/` | `certificate-pure` | один заказ; тул всегда отвечает `unknown`, исход проверяется вручную |
+| Заказ справки в ЕЛК | `elk_order_certificate` | `services/elk/certificate/` | `certificate-pure` | один заказ (тогда исход `unknown`); проверка по странице «Заявки» с заказом не проверена |
 | Выбор браузера, каталог данных | — | `src/auth/browser-launch.ts`, `src/data-dir.ts` | `browser-launch`, `data-dir` | нет: Edge, Chrome и скачивание Chromium на Windows и macOS не проверялись |
 | Пакет Claude Desktop, npm | — | `manifest.json`, `scripts/pack-mcpb.mjs`, `.github/workflows/publish.yml` | `manifest`; сборка пакета в CI | нет: установка `.mcpb` в Claude Desktop не проверялась |
 | Архитектура | — | — | `architecture`: импорты соблюдают слои | — |
