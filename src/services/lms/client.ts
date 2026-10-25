@@ -1,6 +1,7 @@
 import type { Page } from "playwright";
 import { withPage } from "../../auth/browser-session.js";
 import { TTL } from "../../cache.js";
+import { formatLocalDate } from "../../date-utils.js";
 import {
   dumpPage,
   extractGradeTable,
@@ -9,7 +10,6 @@ import {
   type GradeTable,
   type PageDump,
 } from "../../dom-utils.js";
-import { formatLocalDate } from "../../date-utils.js";
 import { defineResource, type ResourceCallOptions } from "../../resource.js";
 import { assertReadOnlyPath, resolveScopedUrl } from "../../url-utils.js";
 

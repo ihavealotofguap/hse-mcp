@@ -1,7 +1,7 @@
 import { addDays } from "../../date-utils.js";
 import * as elk from "../elk/client.js";
-import * as lms from "../lms/client.js";
 import type { CourseOverview, LmsActionEvent } from "../lms/client.js";
+import * as lms from "../lms/client.js";
 import {
   combineDateAndTime,
   isActualCourse,

@@ -1,5 +1,5 @@
-import { test } from "node:test";
 import assert from "node:assert/strict";
+import { test } from "node:test";
 
 const { defineResource } = await import(new URL("../dist/resource.js", import.meta.url).href);
 

@@ -3,9 +3,9 @@ import { errCode } from "../../fs-lock.js";
 import { defineResource, type LoadContext } from "../../resource.js";
 import {
   findUnresolvedByTarget,
+  type JournalEntry,
   latestByToken,
   recordJournal,
-  type JournalEntry,
 } from "./journal.js";
 import {
   loadOrCreateKey,

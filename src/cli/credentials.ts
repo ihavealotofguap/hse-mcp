@@ -3,8 +3,8 @@ import { pathToFileURL } from "node:url";
 import {
   DOTENV_PASSWORD_WARNING,
   dotenvPermissionWarning,
-  lookupPassword,
   type KeyStore,
+  lookupPassword,
 } from "../credentials.js";
 
 /** Всё, что нужно командам; внедряется, чтобы проверять без настоящего хранилища и терминала. */

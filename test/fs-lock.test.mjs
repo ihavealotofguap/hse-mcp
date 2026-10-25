@@ -1,8 +1,8 @@
-import { test } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { test } from "node:test";
 
 const { withFileLock, writeFileAtomic } = await import(
   new URL("../dist/fs-lock.js", import.meta.url).href

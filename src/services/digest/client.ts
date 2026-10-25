@@ -1,7 +1,7 @@
 import { addDays } from "../../date-utils.js";
 import { runSource as runGenericSource } from "../../run-source.js";
 import { endOfDay, sortItems, startOfDay, toLocalIso } from "./parse.js";
-import { realCollectors, type Collectors } from "./sources.js";
+import { type Collectors, realCollectors } from "./sources.js";
 import type {
   CollectorResult,
   CourseFilter,

@@ -1,8 +1,8 @@
-import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { z } from "zod";
 import { config } from "../../config.js";
 import { runTool } from "../../mcp-utils.js";
-import { CONFIRM_SCHEMA, WRITE_ANNOTATIONS, noteWritesDisabled } from "../writes/gate.js";
+import { CONFIRM_SCHEMA, noteWritesDisabled, WRITE_ANNOTATIONS } from "../writes/gate.js";
 import { defineWrite } from "../writes/runner.js";
 import * as lms from "./client.js";
 import { deleteAdapter, submitAdapter } from "./submissions.js";

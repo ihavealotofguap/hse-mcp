@@ -3,12 +3,12 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { Locator, Page } from "playwright";
-import { withPage, type PageCallContext } from "../../auth/browser-session.js";
+import { type PageCallContext, withPage } from "../../auth/browser-session.js";
 import { COMMIT_DEADLINE_MS } from "../../commit.js";
-import { resolveOutboxFiles, type OutboxFile } from "../writes/outbox.js";
+import { type OutboxFile, resolveOutboxFiles } from "../writes/outbox.js";
 import {
-  classifyError,
   type CommitPoint,
+  classifyError,
   type ExecuteResult,
   type WriteAdapter,
 } from "../writes/runner.js";

@@ -1,5 +1,5 @@
-import { test } from "node:test";
 import assert from "node:assert/strict";
+import { test } from "node:test";
 
 const m = await import(new URL("../dist/services/elk/certificate.js", import.meta.url).href);
 const {

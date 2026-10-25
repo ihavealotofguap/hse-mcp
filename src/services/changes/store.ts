@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { errCode, retryIo, withFileLock } from "../../fs-lock.js";
 import { projectRoot } from "../../project-root.js";
-import { STATE_VERSION, type Scope, type State } from "./types.js";
+import { type Scope, STATE_VERSION, type State } from "./types.js";
 
 export const JOURNAL_MAX_EVENTS = 500;
 export const JOURNAL_MAX_AGE_MS = 30 * 86_400_000;

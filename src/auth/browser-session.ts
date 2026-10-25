@@ -1,16 +1,16 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import fs from "node:fs";
 import path from "node:path";
-import { AsyncLocalStorage } from "node:async_hooks";
 import {
-  chromium,
   type APIRequestContext,
   type Browser,
   type BrowserContext,
+  chromium,
   type Page,
 } from "playwright";
+import { COMMIT_DEADLINE_MS } from "../commit.js";
 import { config } from "../config.js";
 import { waitForRenderedBody } from "../dom-utils.js";
-import { COMMIT_DEADLINE_MS } from "../commit.js";
 import { ensurePrivateDir, restrictFile } from "../fs-secure.js";
 import { acquirePageSlot, LEASE_GRACE_MS, type PageSlotRelease } from "../limiter.js";
 import { projectRoot } from "../project-root.js";

@@ -2,14 +2,14 @@ import type { ResourceCallOptions } from "../../resource.js";
 import { runSource, type SourceStatus } from "../../run-source.js";
 import { selectCourses } from "../digest/parse.js";
 import type { CourseFilter } from "../digest/types.js";
-import * as lms from "../lms/client.js";
 import type { CourseOverview } from "../lms/client.js";
+import * as lms from "../lms/client.js";
 import { diffSource } from "./diff.js";
 import {
-  gradesExtractor,
-  singleExtractors,
   type ExtractContext,
+  gradesExtractor,
   type SourceExtractor,
+  singleExtractors,
 } from "./extractors.js";
 import {
   defaultStateDir,
@@ -21,16 +21,16 @@ import {
   withStateLock,
 } from "./store.js";
 import {
-  DEFAULT_SCOPES,
-  SCOPES,
-  scopeOfSource,
   type ChangeEvent,
+  DEFAULT_SCOPES,
   type DiffFlags,
   type EventType,
   type FieldChange,
+  SCOPES,
   type Scope,
   type SourceResult,
   type State,
+  scopeOfSource,
 } from "./types.js";
 
 const RESPONSE_EVENT_LIMIT = 200;

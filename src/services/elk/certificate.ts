@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import type { Locator, Page, Request, Route } from "playwright";
-import { withPage, type PageCallContext } from "../../auth/browser-session.js";
+import { type PageCallContext, withPage } from "../../auth/browser-session.js";
+import { config } from "../../config.js";
 import type { ResourceCallOptions } from "../../resource.js";
 import { Refusal, sanitizeCommitError, sanitizeNavigationError } from "../lms/submissions.js";
 import {
@@ -10,8 +11,7 @@ import {
   type WriteAdapter,
 } from "../writes/runner.js";
 import type { Outcome } from "../writes/types.js";
-import { config } from "../../config.js";
-import { listRequests, type ElkClaim } from "./client.js";
+import { type ElkClaim, listRequests } from "./client.js";
 
 /**
  * Заказ справки в ЕЛК (спека №4 §10, §17, седьмой и восьмой проходы): разбор формы

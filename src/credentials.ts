@@ -1,5 +1,5 @@
-import { config as loadDotenv, parse as parseDotenv } from "dotenv";
 import fs from "node:fs";
+import { config as loadDotenv, parse as parseDotenv } from "dotenv";
 
 /** Откуда взят пароль: окружение процесса, системное хранилище, `.env` или нигде. */
 export type CredentialSource = "env" | "keychain" | "dotenv" | "none";

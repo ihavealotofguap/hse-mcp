@@ -2,8 +2,8 @@ import { addDays, formatLocalDate } from "../../date-utils.js";
 import type { ResourceCallOptions } from "../../resource.js";
 import { endOfDay, isExamType, startOfDay } from "../digest/parse.js";
 import * as elk from "../elk/client.js";
-import * as lms from "../lms/client.js";
 import type { CourseOverview } from "../lms/client.js";
+import * as lms from "../lms/client.js";
 import {
   canonicalAttrs,
   dedupeIds,

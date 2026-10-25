@@ -1,5 +1,5 @@
-import { test } from "node:test";
 import assert from "node:assert/strict";
+import { test } from "node:test";
 
 const { assertReadOnlyPath, resolveScopedUrl } = await import(
   new URL("../dist/url-utils.js", import.meta.url).href

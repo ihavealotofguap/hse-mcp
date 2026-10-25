@@ -1,11 +1,11 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { registerLmsTools } from "./services/lms/tools.js";
-import { registerElkTools } from "./services/elk/tools.js";
-import { registerSystemTools } from "./services/system/tools.js";
-import { registerDigestTools } from "./services/digest/tools.js";
-import { registerChangesTools } from "./services/changes/tools.js";
 import { closeBrowserSession } from "./auth/browser-session.js";
+import { registerChangesTools } from "./services/changes/tools.js";
+import { registerDigestTools } from "./services/digest/tools.js";
+import { registerElkTools } from "./services/elk/tools.js";
+import { registerLmsTools } from "./services/lms/tools.js";
+import { registerSystemTools } from "./services/system/tools.js";
 
 const server = new McpServer({
   name: "hsemcp",
