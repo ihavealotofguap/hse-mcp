@@ -5,7 +5,7 @@ import { addDays } from "../../date-utils.js";
 import { READ_ANNOTATIONS, runTool } from "../../mcp-utils.js";
 import { CONFIRM_SCHEMA, noteWritesDisabled, WRITE_ANNOTATIONS } from "../writes/gate.js";
 import { defineWrite } from "../writes/runner.js";
-import { certificateAdapter } from "./certificate.js";
+import { certificateAdapter } from "./certificate/index.js";
 import * as elk from "./client.js";
 
 const orderCertificate = defineWrite(certificateAdapter);
