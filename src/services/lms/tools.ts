@@ -5,7 +5,7 @@ import { runTool } from "../../mcp-utils.js";
 import { CONFIRM_SCHEMA, noteWritesDisabled, WRITE_ANNOTATIONS } from "../writes/gate.js";
 import { defineWrite } from "../writes/runner.js";
 import * as lms from "./client.js";
-import { deleteAdapter, submitAdapter } from "./submissions.js";
+import { deleteAdapter, submitAdapter } from "./submissions/index.js";
 
 const submitAssignment = defineWrite(submitAdapter);
 const deleteSubmission = defineWrite(deleteAdapter);
