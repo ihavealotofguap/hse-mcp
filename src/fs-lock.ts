@@ -6,10 +6,13 @@ const IO_RETRY_DELAYS_MS = [50, 100, 200, 400, 800];
 const LOCK_STALE_MS = 30_000;
 const LOCK_DEFAULT_WAIT_MS = 10_000;
 
-export const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
-export const errCode = (err: unknown): string | undefined => (err as NodeJS.ErrnoException | undefined)?.code;
+export const sleep = (ms: number): Promise<void> =>
+  new Promise((resolve) => setTimeout(resolve, ms));
+export const errCode = (err: unknown): string | undefined =>
+  (err as NodeJS.ErrnoException | undefined)?.code;
 /** Файл занят антивирусом/индексатором/другим процессом (Windows) — повторить, а не считать повреждением. */
-export const isBusy = (code: string | undefined): boolean => code === "EPERM" || code === "EACCES" || code === "EBUSY";
+export const isBusy = (code: string | undefined): boolean =>
+  code === "EPERM" || code === "EACCES" || code === "EBUSY";
 
 export async function retryIo<T>(op: () => T): Promise<T> {
   for (let attempt = 0; ; attempt++) {
@@ -49,7 +52,11 @@ const mutexTails = new Map<string, Promise<unknown>>();
  * Внутрипроцессный мьютекс на путь + lock-файл `wx` на цикл «прочитать → пересчитать → записать».
  * Сбор данных идёт вне блокировки. Устаревшая (> 30 с) блокировка снимается, чужая — нет.
  */
-export function withFileLock<T>(lockPath: string, fn: () => Promise<T>, opts: { waitMs?: number } = {}): Promise<T> {
+export function withFileLock<T>(
+  lockPath: string,
+  fn: () => Promise<T>,
+  opts: { waitMs?: number } = {}
+): Promise<T> {
   const waitMs = opts.waitMs ?? LOCK_DEFAULT_WAIT_MS;
   const key = path.resolve(lockPath);
   const tail = mutexTails.get(key) ?? Promise.resolve();
@@ -75,7 +82,10 @@ async function lockedRun<T>(lock: string, fn: () => Promise<T>, waitMs: number):
   const token = `${process.pid} ${Date.now()} ${crypto.randomBytes(6).toString("hex")}`;
   const deadline = Date.now() + waitMs;
   const subject = path.basename(lock).replace(/\.lock$/, "");
-  const timeout = (): Error => new Error(`${subject} занят другим процессом: блокировка не освободилась за ${waitMs / 1000} с`);
+  const timeout = (): Error =>
+    new Error(
+      `${subject} занят другим процессом: блокировка не освободилась за ${waitMs / 1000} с`
+    );
   let fd: number | null = null;
   while (fd === null) {
     try {
@@ -90,7 +100,8 @@ async function lockedRun<T>(lock: string, fn: () => Promise<T>, waitMs: number):
         const content = fs.readFileSync(lock, "utf8");
         const mtime = fs.statSync(lock).mtimeMs;
         if (Date.now() - mtime > LOCK_STALE_MS) {
-          if (fs.readFileSync(lock, "utf8") === content && fs.statSync(lock).mtimeMs === mtime) fs.unlinkSync(lock);
+          if (fs.readFileSync(lock, "utf8") === content && fs.statSync(lock).mtimeMs === mtime)
+            fs.unlinkSync(lock);
           retrySoon = true;
         }
       } catch (inner) {
@@ -98,7 +109,9 @@ async function lockedRun<T>(lock: string, fn: () => Promise<T>, waitMs: number):
         if (errCode(inner) === "ENOENT") retrySoon = true;
       }
       if (Date.now() > deadline) throw timeout();
-      await sleep(retrySoon ? 10 + Math.floor(Math.random() * 10) : 50 + Math.floor(Math.random() * 100));
+      await sleep(
+        retrySoon ? 10 + Math.floor(Math.random() * 10) : 50 + Math.floor(Math.random() * 100)
+      );
     }
   }
   let tokenWritten = false;

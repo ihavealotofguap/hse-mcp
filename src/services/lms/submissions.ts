@@ -6,7 +6,12 @@ import type { Locator, Page } from "playwright";
 import { withPage, type PageCallContext } from "../../auth/browser-session.js";
 import { COMMIT_DEADLINE_MS } from "../../commit.js";
 import { resolveOutboxFiles, type OutboxFile } from "../writes/outbox.js";
-import { classifyError, type CommitPoint, type ExecuteResult, type WriteAdapter } from "../writes/runner.js";
+import {
+  classifyError,
+  type CommitPoint,
+  type ExecuteResult,
+  type WriteAdapter,
+} from "../writes/runner.js";
 
 /**
  * Сдача, правка и удаление ответа на задание SmartLMS (спека №4 §9, §9.1): разбор страницы статуса
@@ -28,7 +33,8 @@ const BASE_URL = "https://edu.hse.ru";
 const viewUrl = (cmid: number) => `${BASE_URL}/mod/assign/view.php?id=${cmid}`;
 // Открытие формы правки записи сдачи не создаёт (§17, седьмой проход: 5 заданий из 5); «Сохранить» и
 // «Отмена» сухой прогон не нажимает, страница закрывается `page.close()` из `withPage`.
-const editUrl = (cmid: number) => `${BASE_URL}/mod/assign/view.php?id=${cmid}&action=editsubmission`;
+const editUrl = (cmid: number) =>
+  `${BASE_URL}/mod/assign/view.php?id=${cmid}&action=editsubmission`;
 
 // Подписи строк таблицы статуса и кнопок (§17 спеки, подпроект 4).
 const ROW_STATUS = "Состояние ответа на задание";
@@ -164,7 +170,11 @@ export function sanitizeNavigationError(err: unknown, what = "страница �
  * обращение к странице, и запись тоже: исключение `commitPoint` пробрасывается (очищенным), а не
  * глотается.
  */
-async function readPage<T>(url: string, fn: (page: Page, ctx: PageCallContext) => Promise<T>, signal?: AbortSignal): Promise<T> {
+async function readPage<T>(
+  url: string,
+  fn: (page: Page, ctx: PageCallContext) => Promise<T>,
+  signal?: AbortSignal
+): Promise<T> {
   try {
     return await withPage(url, fn, { signal });
   } catch (err) {
@@ -174,8 +184,24 @@ async function readPage<T>(url: string, fn: (page: Page, ctx: PageCallContext) =
 
 const sha256Hex = (data: string | Buffer) => crypto.createHash("sha256").update(data).digest("hex");
 
-const MONTHS = ["января", "февраля", "марта", "апреля", "мая", "июня", "июля", "августа", "сентября", "октября", "ноября", "декабря"];
-const RU_DATE_RE = new RegExp(`(\\d{1,2})\\s+(${MONTHS.join("|")})\\s+(\\d{4})(?:,?\\s*(\\d{1,2}):(\\d{2}))?`, "i");
+const MONTHS = [
+  "января",
+  "февраля",
+  "марта",
+  "апреля",
+  "мая",
+  "июня",
+  "июля",
+  "августа",
+  "сентября",
+  "октября",
+  "ноября",
+  "декабря",
+];
+const RU_DATE_RE = new RegExp(
+  `(\\d{1,2})\\s+(${MONTHS.join("|")})\\s+(\\d{4})(?:,?\\s*(\\d{1,2}):(\\d{2}))?`,
+  "i"
+);
 // Moodle показывает даты в поясе пользователя; у аккаунтов ВШЭ это Москва (UTC+3 без перехода).
 const MSK_OFFSET_MS = 3 * 3_600_000;
 
@@ -200,8 +226,14 @@ const UNITS: Record<string, number> = { байт: 1, кбайт: 1024, мбай�
  * Подпись лимитов формы правки (§17): «Максимальный размер новых файлов: 5 Мбайт, максимальное
  * количество прикрепленных файлов: 20». Не найдено или единица незнакома — `null` (лимит неизвестен).
  */
-export function parseEditLimits(text: string): { maxBytes: number | null; maxFiles: number | null } {
-  const size = /Максимальный размер новых файлов:\s*(\d+(?:[.,]\d+)?)\s*(Гбайт|Мбайт|Кбайт|байт)(?![\p{L}])/iu.exec(text);
+export function parseEditLimits(text: string): {
+  maxBytes: number | null;
+  maxFiles: number | null;
+} {
+  const size =
+    /Максимальный размер новых файлов:\s*(\d+(?:[.,]\d+)?)\s*(Гбайт|Мбайт|Кбайт|байт)(?![\p{L}])/iu.exec(
+      text
+    );
   const count = /максимальное количество прикрепл[её]нных файлов:\s*(\d+)/i.exec(text);
   const unit = size ? UNITS[size[2].toLowerCase()] : undefined;
   return {
@@ -214,7 +246,10 @@ export function parseEditLimits(text: string): { maxBytes: number | null; maxFil
 function lineValue(lines: string[], label: string): string | null {
   for (const line of lines) {
     if (!line.startsWith(label)) continue;
-    const value = line.slice(label.length).replace(/^:?\s*/, "").trim();
+    const value = line
+      .slice(label.length)
+      .replace(/^:?\s*/, "")
+      .trim();
     if (value) return value;
   }
   return null;
@@ -265,11 +300,16 @@ export function buildAssignmentView(
   if (/вне сайта/i.test(statusText)) {
     closed = { reason: "offsite", text: statusText };
   } else if (/просрочено на/i.test(remainingText) || /просрочено на/i.test(statusText)) {
-    closed = { reason: "overdue", text: /просрочено на/i.test(remainingText) ? remainingText : statusText };
+    closed = {
+      reason: "overdue",
+      text: /просрочено на/i.test(remainingText) ? remainingText : statusText,
+    };
   } else {
     const from = openFrom ? parseRuDateTime(openFrom) : null;
-    if (from && from.getTime() > now.getTime()) closed = { reason: "not-open", text: `Открыто с: ${openFrom}` };
-    else if (state === "none" && !canAdd && !canEdit) closed = { reason: "other", text: statusText };
+    if (from && from.getTime() > now.getTime())
+      closed = { reason: "not-open", text: `Открыто с: ${openFrom}` };
+    else if (state === "none" && !canAdd && !canEdit)
+      closed = { reason: "other", text: statusText };
   }
 
   return {
@@ -300,7 +340,17 @@ export function buildEditFormInfo(raw: Omit<RawEditForm, "hasForm">): EditFormIn
 export function stateFingerprint(view: Pick<AssignmentView, "state" | "files">): string {
   const files = view.files
     .map((f) => ({ name: f.name, size: f.size, sha256: f.sha256 }))
-    .sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : a.sha256 < b.sha256 ? -1 : a.sha256 > b.sha256 ? 1 : 0));
+    .sort((a, b) =>
+      a.name < b.name
+        ? -1
+        : a.name > b.name
+          ? 1
+          : a.sha256 < b.sha256
+            ? -1
+            : a.sha256 > b.sha256
+              ? 1
+              : 0
+    );
   return sha256Hex(JSON.stringify({ state: view.state, files }));
 }
 
@@ -314,8 +364,10 @@ function checkCmid(cmid: unknown): void {
 export function checkSubmitArgs(args: SubmitArgs): void {
   if (args.text !== undefined) throw new Refusal("онлайн-текст в v1 не поддерживается");
   checkCmid(args.cmid);
-  if (args.mode !== "draft" && args.mode !== "submit") throw new Refusal("mode должен быть draft или submit");
-  if (!Array.isArray(args.files) || args.files.length === 0) throw new Refusal("отправка без файлов не поддерживается");
+  if (args.mode !== "draft" && args.mode !== "submit")
+    throw new Refusal("mode должен быть draft или submit");
+  if (!Array.isArray(args.files) || args.files.length === 0)
+    throw new Refusal("отправка без файлов не поддерживается");
 }
 
 const CLOSED_REFUSAL: Record<NonNullable<AssignmentView["closed"]>["reason"], string> = {
@@ -328,9 +380,12 @@ const CLOSED_REFUSAL: Record<NonNullable<AssignmentView["closed"]>["reason"], st
 /** Предусловия по странице статуса: их проверяют до открытия формы правки. */
 function checkSubmittable(view: AssignmentView): void {
   if (hasDuplicateNames(view.files.map((f) => f.name))) {
-    throw new Refusal("в ответе несколько файлов с одинаковым именем (вложенные папки): такой ответ тул не правит");
+    throw new Refusal(
+      "в ответе несколько файлов с одинаковым именем (вложенные папки): такой ответ тул не правит"
+    );
   }
-  if (view.state === "unknown") throw new Refusal("состояние ответа на странице задания не распознано");
+  if (view.state === "unknown")
+    throw new Refusal("состояние ответа на странице задания не распознано");
   if (view.closed) throw new Refusal(CLOSED_REFUSAL[view.closed.reason]);
   if (!view.canAdd && !view.canEdit) throw new Refusal("нельзя добавить или править ответ");
 }
@@ -351,9 +406,14 @@ function formatBytes(n: number): string {
  * добавятся. Имя, совпадающее с файлом ответа только с точностью до регистра, — отказ: заменит его
  * Moodle или добавит второй, неизвестно.
  */
-export function planSubmission(view: AssignmentView, form: EditFormInfo, files: OutboxFile[]): SubmissionPlan {
+export function planSubmission(
+  view: AssignmentView,
+  form: EditFormInfo,
+  files: OutboxFile[]
+): SubmissionPlan {
   checkSubmittable(view);
-  if (!form.fileOnly) throw new Refusal("задание принимает не только файлы: в v1 поддерживается только сдача файлом");
+  if (!form.fileOnly)
+    throw new Refusal("задание принимает не только файлы: в v1 поддерживается только сдача файлом");
 
   const existing = new Map(view.files.map((f) => [f.name, f]));
   const existingFolded = new Set(view.files.map((f) => fold(f.name)));
@@ -364,25 +424,34 @@ export function planSubmission(view: AssignmentView, form: EditFormInfo, files: 
     const same = existing.get(name);
     if (same) replace.push({ name, size: f.size, currentSize: same.size });
     else if (existingFolded.has(fold(name))) {
-      throw new Refusal(`файл №${i + 1}: имя отличается от файла ответа только регистром букв — переименуйте файл`);
+      throw new Refusal(
+        `файл №${i + 1}: имя отличается от файла ответа только регистром букв — переименуйте файл`
+      );
     } else add.push({ name, size: f.size });
   });
 
   const total = existing.size + add.length;
   if (form.maxFiles !== null && total > form.maxFiles) {
-    throw new Refusal(`файлов в ответе будет больше, чем разрешает задание: не более ${form.maxFiles}`);
+    throw new Refusal(
+      `файлов в ответе будет больше, чем разрешает задание: не более ${form.maxFiles}`
+    );
   }
   if (form.maxBytes !== null) {
     const maxBytes = form.maxBytes;
     files.forEach((f, i) => {
-      if (f.size > maxBytes) throw new Refusal(`файл №${i + 1} больше допустимого размера задания (${formatBytes(maxBytes)})`);
+      if (f.size > maxBytes)
+        throw new Refusal(
+          `файл №${i + 1} больше допустимого размера задания (${formatBytes(maxBytes)})`
+        );
     });
   }
   // Проверка после сохранения скачивает файл со страницы статуса; крупнее предела скачивания исход
   // записи нельзя будет установить ни сразу, ни повтором — отказ до записи, а не отправка вслепую.
   files.forEach((f, i) => {
     if (f.size > MAX_VERIFY_DOWNLOAD) {
-      throw new Refusal(`файл №${i + 1} больше ${formatBytes(MAX_VERIFY_DOWNLOAD)}: результат отправки нельзя будет проверить`);
+      throw new Refusal(
+        `файл №${i + 1} больше ${formatBytes(MAX_VERIFY_DOWNLOAD)}: результат отправки нельзя будет проверить`
+      );
     }
   });
   return { add, replace, total };
@@ -390,9 +459,11 @@ export function planSubmission(view: AssignmentView, form: EditFormInfo, files: 
 
 /** Удаление: нужен представленный ответ и кнопка «Удалить ответ» на странице статуса. */
 export function checkDeletePreconditions(view: AssignmentView): void {
-  if (view.state === "unknown") throw new Refusal("состояние ответа на странице задания не распознано");
+  if (view.state === "unknown")
+    throw new Refusal("состояние ответа на странице задания не распознано");
   if (view.state === "none") throw new Refusal("нечего удалять: ответ на задание не представлен");
-  if (!view.canDelete) throw new Refusal("удалить ответ нельзя: на странице задания нет кнопки «Удалить ответ»");
+  if (!view.canDelete)
+    throw new Refusal("удалить ответ нельзя: на странице задания нет кнопки «Удалить ответ»");
 }
 
 /**
@@ -439,8 +510,10 @@ export function compareFiles(
   return { namesMatch, contentMatch };
 }
 
-const W_SUBMITTED_ON_SAVE = "работа отправлена на оценку сразу при сохранении: у этого задания нет отдельного шага «Отправить на оценку»";
-const W_DRAFT_ONLY = "ответ сохранён черновиком и на оценку не отправлен: отдельный шаг «Отправить на оценку» тул в v1 не выполняет";
+const W_SUBMITTED_ON_SAVE =
+  "работа отправлена на оценку сразу при сохранении: у этого задания нет отдельного шага «Отправить на оценку»";
+const W_DRAFT_ONLY =
+  "ответ сохранён черновиком и на оценку не отправлен: отдельный шаг «Отправить на оценку» тул в v1 не выполняет";
 
 /**
  * Исход сдачи по свежему чтению страницы статуса (§7). Файлы совпали: `submitted` — подтверждено
@@ -470,16 +543,34 @@ export function classifySubmitOutcome(input: {
   let extra = {};
   if (before) {
     const sent = new Set(expected.map((e) => fold(e.name)));
-    const untouched = before.files.filter((f) => !sent.has(fold(f.name))).map((f) => ({ name: f.name, sha256: f.sha256 }));
+    const untouched = before.files
+      .filter((f) => !sent.has(fold(f.name)))
+      .map((f) => ({ name: f.name, sha256: f.sha256 }));
     const kept = compareFiles(untouched, after.files);
     untouchedMatch = kept.namesMatch && kept.contentMatch;
     extra = { untouchedMatch, lastModifiedChanged: before.lastModified !== after.lastModified };
   }
-  const evidence = { state: after.state, files: after.files.length, namesMatch, contentMatch, errorShown, ...extra };
-  const filesOk = namesMatch && contentMatch && untouchedMatch && (expectedTotal == null || after.files.length === expectedTotal);
+  const evidence = {
+    state: after.state,
+    files: after.files.length,
+    namesMatch,
+    contentMatch,
+    errorShown,
+    ...extra,
+  };
+  const filesOk =
+    namesMatch &&
+    contentMatch &&
+    untouchedMatch &&
+    (expectedTotal == null || after.files.length === expectedTotal);
   if (filesOk) {
     if (after.state === "submitted") {
-      return { stage: "verified", outcome: "confirmed", evidence, warnings: mode === "draft" ? [W_SUBMITTED_ON_SAVE] : [] };
+      return {
+        stage: "verified",
+        outcome: "confirmed",
+        evidence,
+        warnings: mode === "draft" ? [W_SUBMITTED_ON_SAVE] : [],
+      };
     }
     if (after.state === "draft") {
       return mode === "draft"
@@ -506,7 +597,12 @@ export function classifyDeleteOutcome(input: {
 }): ExecuteResult {
   const { after, before } = input;
   const errorShown = input.errorShown === true;
-  const evidence = { state: after.state, files: after.files.length, canAdd: after.canAdd, errorShown };
+  const evidence = {
+    state: after.state,
+    files: after.files.length,
+    canAdd: after.canAdd,
+    errorShown,
+  };
   if (after.state === "none" && after.canAdd && after.files.length === 0) {
     return { stage: "verified", outcome: "confirmed", evidence, warnings: [] };
   }
@@ -524,12 +620,18 @@ async function extractAssignmentPage(page: Page): Promise<RawAssignmentPage> {
       const th = tr.querySelector("th");
       const td = tr.querySelector("td");
       if (!th || !td) continue;
-      rows.push({ label: clean(th.textContent).replace(/:$/, ""), text: clean(td.textContent), classes: Array.from(td.classList) });
+      rows.push({
+        label: clean(th.textContent).replace(/:$/, ""),
+        text: clean(td.textContent),
+        classes: Array.from(td.classList),
+      });
     }
     const heading = document.querySelector('[role="main"] h2, main h2');
     const seen = new Set<string>();
     const fileLinks: Array<{ name: string; href: string }> = [];
-    for (const el of Array.from(document.querySelectorAll('.fileuploadsubmission a[href*="pluginfile"]'))) {
+    for (const el of Array.from(
+      document.querySelectorAll('.fileuploadsubmission a[href*="pluginfile"]')
+    )) {
       const a = el as HTMLAnchorElement;
       if (seen.has(a.href)) continue;
       seen.add(a.href);
@@ -539,7 +641,9 @@ async function extractAssignmentPage(page: Page): Promise<RawAssignmentPage> {
       title: clean(heading?.textContent) || clean(document.title),
       rows,
       lines: document.body.innerText.split("\n").map(clean).filter(Boolean),
-      buttons: Array.from(document.querySelectorAll("button")).map((b) => clean(b.textContent)).filter(Boolean),
+      buttons: Array.from(document.querySelectorAll("button"))
+        .map((b) => clean(b.textContent))
+        .filter(Boolean),
       fileLinks,
     };
   });
@@ -556,7 +660,11 @@ class FileTooLarge extends Refusal {}
  * (§9.1, девятый проход). Переадресация (например, на вход) — отказ: хэшировать чужую страницу нельзя.
  * Крупнее `MAX_VERIFY_DOWNLOAD` (по `Content-Length` или по факту чтения, до сборки base64) — отказ.
  */
-async function downloadSubmissionFile(page: Page, href: string, n: number): Promise<{ size: number; sha256: string }> {
+async function downloadSubmissionFile(
+  page: Page,
+  href: string,
+  n: number
+): Promise<{ size: number; sha256: string }> {
   const r = await page.evaluate(
     async ({ url, max }) => {
       try {
@@ -627,7 +735,8 @@ async function extractEditForm(page: Page): Promise<RawEditForm> {
       hasForm: form !== null,
       hasFileManager: scope.querySelector(".filemanager") !== null,
       // Atto и TinyMCE в Moodle строятся поверх textarea; любое текстовое поле — не «только файл».
-      hasTextEditor: scope.querySelector('textarea, [contenteditable]:not([contenteditable="false"])') !== null,
+      hasTextEditor:
+        scope.querySelector('textarea, [contenteditable]:not([contenteditable="false"])') !== null,
       text: (scope instanceof HTMLElement ? scope : document.body).innerText,
       managerFiles: Array.from(scope.querySelectorAll(".filemanager .fp-filename"))
         .map((e) => clean(e.textContent))
@@ -648,7 +757,8 @@ const STATE_TEXT: Record<AssignmentView["state"], string> = {
   unknown: "не распознано",
 };
 
-const W_SAVE_MAY_SUBMIT = "сохранение может сразу отправить работу на оценку (у проверенных заданий отдельного шага нет)";
+const W_SAVE_MAY_SUBMIT =
+  "сохранение может сразу отправить работу на оценку (у проверенных заданий отдельного шага нет)";
 const W_FORM_OPENED = "форма правки открывалась и не сохранялась";
 
 // --- Запись: шаги файлового менеджера (§17, четвёртый и шестой проходы) ---
@@ -725,8 +835,15 @@ async function hashAt(p: string): Promise<{ size: number; sha256: string }> {
  * крупнее предела буфера — копия во временной папке под тем же именем, сверяется именно копия, и она
  * же загружается. Расхождение или ошибка чтения — отказ без имени и пути (до точки невозврата).
  */
-export async function prepareUpload(file: OutboxFile, n: number, opts: { maxBuffer?: number } = {}): Promise<PreparedUpload> {
-  const changed = () => new Refusal(`файл №${n} изменился после сухого прогона: выполните сухой прогон заново; операция прервана`);
+export async function prepareUpload(
+  file: OutboxFile,
+  n: number,
+  opts: { maxBuffer?: number } = {}
+): Promise<PreparedUpload> {
+  const changed = () =>
+    new Refusal(
+      `файл №${n} изменился после сухого прогона: выполните сухой прогон заново; операция прервана`
+    );
   const name = diskName(file);
   if (file.size <= (opts.maxBuffer ?? MAX_UPLOAD_BUFFER)) {
     let buffer: Buffer;
@@ -741,7 +858,8 @@ export async function prepareUpload(file: OutboxFile, n: number, opts: { maxBuff
     return { files: { name, mimeType, buffer }, cleanup: async () => {} };
   }
   // Сбой временной папки, копирования или чтения копии — свой текст (не «изменился») и без пути.
-  const notPrepared = () => new Refusal(`не удалось подготовить файл №${n} к отправке; операция прервана`);
+  const notPrepared = () =>
+    new Refusal(`не удалось подготовить файл №${n} к отправке; операция прервана`);
   let dir: string;
   try {
     dir = await fs.promises.mkdtemp(path.join(os.tmpdir(), UPLOAD_TMP_PREFIX));
@@ -770,7 +888,8 @@ export async function prepareUpload(file: OutboxFile, n: number, opts: { maxBuff
 async function exactlyOne(root: Page | Locator, selector: string, what: string): Promise<Locator> {
   const loc = root.locator(selector);
   const n = await loc.count();
-  if (n !== 1) throw new Refusal(`${what}: ожидался ровно один элемент, найдено ${n}; операция прервана`);
+  if (n !== 1)
+    throw new Refusal(`${what}: ожидался ровно один элемент, найдено ${n}; операция прервана`);
   return loc;
 }
 
@@ -785,22 +904,31 @@ async function clickOnce(root: Page | Locator, selector: string, what: string): 
  */
 async function formManager(page: Page, tail: string): Promise<Locator> {
   const forms = await page.locator(SEL_SUBMIT_FORM).count();
-  if (forms !== 1) throw new Refusal(`на странице не одна форма с кнопкой «Сохранить» (${forms}); ${tail}`);
+  if (forms !== 1)
+    throw new Refusal(`на странице не одна форма с кнопкой «Сохранить» (${forms}); ${tail}`);
   const manager = page.locator(SEL_SUBMIT_FORM).locator(".filemanager");
-  if ((await manager.count()) !== 1) throw new Refusal(`на форме не один файловый менеджер; ${tail}`);
-  if ((await page.locator(SEL_FP_SELECT).count()) > 0) throw new Refusal(`открыт диалог файла файлового менеджера; ${tail}`);
+  if ((await manager.count()) !== 1)
+    throw new Refusal(`на форме не один файловый менеджер; ${tail}`);
+  if ((await page.locator(SEL_FP_SELECT).count()) > 0)
+    throw new Refusal(`открыт диалог файла файлового менеджера; ${tail}`);
   return manager;
 }
 
 const visibleCount = (page: Page, selector: string) => page.locator(selector).count();
 const dupDialogShown = async (page: Page) =>
-  (await page.getByText(DUP_TEXT).filter({ visible: true }).count()) > 0 || (await visibleCount(page, SEL_OVERWRITE)) > 0;
+  (await page.getByText(DUP_TEXT).filter({ visible: true }).count()) > 0 ||
+  (await visibleCount(page, SEL_OVERWRITE)) > 0;
 
 /**
  * Ждёт появления элемента; не появился — отказ с понятной причиной. Отмена и дедлайн страницы
  * (сигнал `withPage`) пробрасываются как есть, чтобы не маскировать их под отказ.
  */
-async function waitShown(page: Page, selector: string, refusal: string, signal: AbortSignal): Promise<void> {
+async function waitShown(
+  page: Page,
+  selector: string,
+  refusal: string,
+  signal: AbortSignal
+): Promise<void> {
   try {
     await page.locator(selector).first().waitFor({ state: "visible", timeout: STEP_TIMEOUT_MS });
   } catch (err) {
@@ -876,10 +1004,19 @@ async function uploadPrepared(
   if ((await visibleCount(page, SEL_PICKER)) > 0 || (await dupDialogShown(page))) {
     throw new Refusal("файловый пикер или диалог уже открыт до загрузки; операция прервана");
   }
-  await clickOnce(await formManager(page, "операция прервана"), SEL_ADD, "кнопка «Добавить...» файлового менеджера");
+  await clickOnce(
+    await formManager(page, "операция прервана"),
+    SEL_ADD,
+    "кнопка «Добавить...» файлового менеджера"
+  );
   await waitShown(page, SEL_PICKER, "файловый пикер не открылся; операция прервана", signal);
   check();
-  await waitShown(page, SEL_UPLOAD_FORM, "в файловом пикере не активна вкладка «Загрузить файл»; операция прервана", signal);
+  await waitShown(
+    page,
+    SEL_UPLOAD_FORM,
+    "в файловом пикере не активна вкладка «Загрузить файл»; операция прервана",
+    signal
+  );
   const input = await exactlyOne(page, SEL_UPLOAD_INPUT, "поле файла на вкладке «Загрузить файл»");
   await input.setInputFiles(upload);
   const picked = await input.evaluate((el) =>
@@ -897,11 +1034,16 @@ async function uploadPrepared(
     check();
     signal.throwIfAborted();
     if ((await visibleCount(page, SEL_PICKER_ERROR)) > 0) {
-      throw new Refusal(`файловый пикер сообщил об ошибке при загрузке файла №${n}; операция прервана`);
+      throw new Refusal(
+        `файловый пикер сообщил об ошибке при загрузке файла №${n}; операция прервана`
+      );
     }
     const dup = await dupDialogShown(page);
     if (dup && !overwritten) {
-      if (!replace) throw new Refusal(`неожиданный диалог одноимённого файла для файла №${n}; операция прервана`);
+      if (!replace)
+        throw new Refusal(
+          `неожиданный диалог одноимённого файла для файла №${n}; операция прервана`
+        );
       if ((await page.getByText(DUP_TEXT).filter({ visible: true }).count()) === 0) {
         throw new Refusal("диалог одноимённого файла не распознан; операция прервана");
       }
@@ -909,9 +1051,17 @@ async function uploadPrepared(
       await clickOnce(page, SEL_OVERWRITE, "кнопка «Перезаписать»");
       overwritten = true;
     } else if (!dup && (overwritten || !replace) && (await visibleCount(page, SEL_PICKER)) === 0) {
-      if ((await managerNames(await formManager(page, "операция прервана"))).some((x) => fold(x) === fold(name))) return;
+      if (
+        (await managerNames(await formManager(page, "операция прервана"))).some(
+          (x) => fold(x) === fold(name)
+        )
+      )
+        return;
     }
-    if (Date.now() > deadline) throw new Refusal(`файл №${n} не загрузился в файловый менеджер за отведённое время; операция прервана`);
+    if (Date.now() > deadline)
+      throw new Refusal(
+        `файл №${n} не загрузился в файловый менеджер за отведённое время; операция прервана`
+      );
     await page.waitForTimeout(POLL_MS);
   }
 }
@@ -921,24 +1071,37 @@ async function uploadPrepared(
  * пикера нет, в форме с «Сохранить» один файловый менеджер, папок в нём нет, имена ровно ожидаемые,
  * «Сохранить» одна.
  */
-async function assertManagerState(page: Page, expected: string[], check: () => void): Promise<Locator> {
+async function assertManagerState(
+  page: Page,
+  expected: string[],
+  check: () => void
+): Promise<Locator> {
   check();
-  if ((await visibleCount(page, SEL_PICKER)) > 0) throw new Refusal("файловый пикер не закрылся; операция прервана до отправки");
-  if (await dupDialogShown(page)) throw new Refusal("диалог одноимённого файла не закрылся; операция прервана до отправки");
-  if ((await visibleCount(page, SEL_PICKER_ERROR)) > 0) throw new Refusal("файловый пикер показывает ошибку; операция прервана до отправки");
+  if ((await visibleCount(page, SEL_PICKER)) > 0)
+    throw new Refusal("файловый пикер не закрылся; операция прервана до отправки");
+  if (await dupDialogShown(page))
+    throw new Refusal("диалог одноимённого файла не закрылся; операция прервана до отправки");
+  if ((await visibleCount(page, SEL_PICKER_ERROR)) > 0)
+    throw new Refusal("файловый пикер показывает ошибку; операция прервана до отправки");
   const manager = await formManager(page, "операция прервана до отправки");
   if ((await manager.locator(".fp-folder").count()) > 0) {
     throw new Refusal("в файловом менеджере появилась папка; операция прервана до отправки");
   }
   if (!sameFileSet(await managerNames(manager), expected)) {
-    throw new Refusal("список файлов в файловом менеджере не совпадает с ожидаемым; операция прервана до отправки");
+    throw new Refusal(
+      "список файлов в файловом менеджере не совпадает с ожидаемым; операция прервана до отправки"
+    );
   }
   return exactlyOne(page, SEL_SAVE, "кнопка «Сохранить»");
 }
 
 /** Страница статуса того же задания после POST: Moodle переадресует на `action=view`. */
 function isViewUrl(url: URL, cmid: number, action = "view"): boolean {
-  return url.pathname.endsWith("/mod/assign/view.php") && url.searchParams.get("id") === String(cmid) && url.searchParams.get("action") === action;
+  return (
+    url.pathname.endsWith("/mod/assign/view.php") &&
+    url.searchParams.get("id") === String(cmid) &&
+    url.searchParams.get("action") === action
+  );
 }
 
 const moodleErrorShown = async (page: Page) => (await visibleCount(page, SEL_MOODLE_ERROR)) > 0;
@@ -986,15 +1149,35 @@ type ButtonFormKind = "save" | "delete" | "continue";
 // второй проход). «Удалить ответ»: GET на `action=removesubmissionconfirm` (§9.1). «Продолжить»: POST с
 // полями `id`, `action`, `userid`, `sesskey` (§17, шестой проход). Значение `action` у «Сохранить» и
 // «Продолжить» в §17 не записано — проверяется только наличие поля.
-const BUTTON_FORMS: Record<ButtonFormKind, { what: string; method: "get" | "post"; action?: string; required: string[]; tail: string }> = {
+const BUTTON_FORMS: Record<
+  ButtonFormKind,
+  { what: string; method: "get" | "post"; action?: string; required: string[]; tail: string }
+> = {
   save: {
     what: "кнопки «Сохранить»",
     method: "post",
-    required: ["lastmodified", "userid", "action", "_qf__mod_assign_submission_form", "files_filemanager"],
+    required: [
+      "lastmodified",
+      "userid",
+      "action",
+      "_qf__mod_assign_submission_form",
+      "files_filemanager",
+    ],
     tail: "операция прервана до отправки",
   },
-  delete: { what: "кнопки «Удалить ответ»", method: "get", action: "removesubmissionconfirm", required: ["action"], tail: "операция прервана" },
-  continue: { what: "кнопки «Продолжить»", method: "post", required: ["action", "userid", "sesskey"], tail: "операция прервана до отправки" },
+  delete: {
+    what: "кнопки «Удалить ответ»",
+    method: "get",
+    action: "removesubmissionconfirm",
+    required: ["action"],
+    tail: "операция прервана",
+  },
+  continue: {
+    what: "кнопки «Продолжить»",
+    method: "post",
+    required: ["action", "userid", "sesskey"],
+    tail: "операция прервана до отправки",
+  },
 };
 
 /**
@@ -1010,7 +1193,8 @@ export function checkButtonForm(raw: RawButtonForm, kind: ButtonFormKind, cmid: 
   };
   if (!raw.hasForm) fail("кнопка не в форме");
   if (raw.method !== rule.method) fail("неожиданный метод отправки");
-  if (raw.actionPath === null || !raw.actionPath.endsWith("/mod/assign/view.php")) fail("неожиданный адрес отправки");
+  if (raw.actionPath === null || !raw.actionPath.endsWith("/mod/assign/view.php"))
+    fail("неожиданный адрес отправки");
   const values = (name: string) => raw.fields.filter((f) => f.name === name).map((f) => f.value);
   const ids = values("id");
   if (ids.length !== 1 || ids[0] !== String(cmid)) fail("поле id не совпадает с заданием");
@@ -1018,7 +1202,8 @@ export function checkButtonForm(raw: RawButtonForm, kind: ButtonFormKind, cmid: 
     const v = values(name);
     if (v.length !== 1 || v[0] === "") fail("нет обязательного скрытого поля или оно повторяется");
   }
-  if (rule.action !== undefined && values("action")[0] !== rule.action) fail("неожиданное действие формы");
+  if (rule.action !== undefined && values("action")[0] !== rule.action)
+    fail("неожиданное действие формы");
 }
 
 /** Снимок формы кнопки для `checkButtonForm`; ничего не нажимает. */
@@ -1028,23 +1213,35 @@ async function readButtonForm(button: Locator): Promise<RawButtonForm> {
     const form = b.form;
     if (!form) return { hasForm: false, method: "", actionPath: null, fields: [] };
     // getAttribute, а не form.method/form.action: поле с name="action" затеняет свойство формы.
-    const method = (b.getAttribute("formmethod") ?? form.getAttribute("method") ?? "").trim().toLowerCase() || "get";
+    const method =
+      (b.getAttribute("formmethod") ?? form.getAttribute("method") ?? "").trim().toLowerCase() ||
+      "get";
     let actionPath: string | null = null;
     try {
-      const u = new URL(b.getAttribute("formaction") ?? form.getAttribute("action") ?? "", document.baseURI);
+      const u = new URL(
+        b.getAttribute("formaction") ?? form.getAttribute("action") ?? "",
+        document.baseURI
+      );
       if (u.origin === location.origin) actionPath = u.pathname;
     } catch {
       // адрес не разобран — null
     }
     const fields = Array.from(form.elements)
-      .filter((e): e is HTMLInputElement => e instanceof HTMLInputElement && e.type === "hidden" && e.name !== "")
+      .filter(
+        (e): e is HTMLInputElement =>
+          e instanceof HTMLInputElement && e.type === "hidden" && e.name !== ""
+      )
       .map((e) => ({ name: e.name, value: e.value }));
     return { hasForm: true, method, actionPath, fields };
   });
 }
 
 /** Кнопка проверена по своей форме (`checkButtonForm`); возвращается она же. */
-async function checkedButton(button: Locator, kind: ButtonFormKind, cmid: number): Promise<Locator> {
+async function checkedButton(
+  button: Locator,
+  kind: ButtonFormKind,
+  cmid: number
+): Promise<Locator> {
   checkButtonForm(await readButtonForm(button), kind, cmid);
   return button;
 }
@@ -1066,10 +1263,12 @@ async function commitAndClick(
   } catch (err) {
     throw sanitizeCommitError(err);
   }
-  const reached = page.waitForURL((u) => isViewUrl(u, cmid), { timeout: VIEW_WAIT_MS }).then(
-    () => true,
-    () => false
-  );
+  const reached = page
+    .waitForURL((u) => isViewUrl(u, cmid), { timeout: VIEW_WAIT_MS })
+    .then(
+      () => true,
+      () => false
+    );
   await button.click();
   return reached;
 }
@@ -1117,7 +1316,11 @@ export const submitAdapter: WriteAdapter<SubmitArgs, SubmitObserved> = {
     checkSubmitArgs(args);
     // Файл крупнее предела проверки всё равно будет отклонён (`planSubmission`): отказ до хеширования целиком.
     const files = await resolveOutboxFiles(args.files, { maxBytes: MAX_VERIFY_DOWNLOAD });
-    const view = await readPage(viewUrl(args.cmid), (page) => readAssignmentView(page, args.cmid), signal);
+    const view = await readPage(
+      viewUrl(args.cmid),
+      (page) => readAssignmentView(page, args.cmid),
+      signal
+    );
     checkSubmittable(view);
     const form = await readPage(
       editUrl(args.cmid),
@@ -1136,7 +1339,8 @@ export const submitAdapter: WriteAdapter<SubmitArgs, SubmitObserved> = {
   describe(args, { view, form, files }) {
     const plan = planSubmission(view, form, files);
     const warnings = [W_SAVE_MAY_SUBMIT, W_FORM_OPENED];
-    if (view.state === "submitted") warnings.push("ответ уже отправлен на оценку: сохранение изменит отправленную работу");
+    if (view.state === "submitted")
+      warnings.push("ответ уже отправлен на оценку: сохранение изменит отправленную работу");
     if (plan.replace.length > 0) warnings.push("одноимённые файлы ответа будут перезаписаны");
     if (form.maxBytes === null || form.maxFiles === null) {
       warnings.push("лимит размера или числа файлов на форме не найден: проверку выполнит Moodle");
@@ -1175,8 +1379,15 @@ export const submitAdapter: WriteAdapter<SubmitArgs, SubmitObserved> = {
         if (!raw.hasForm) throw new Refusal("форма правки ответа не открылась");
         const form = buildEditFormInfo(raw);
         const plan = planSubmission(view, form, files);
-        if (!sameFileSet(form.managerFiles, view.files.map((f) => f.name))) {
-          throw new Refusal("файлы в форме правки не совпадают с ответом на странице задания: состояние изменилось после сухого прогона");
+        if (
+          !sameFileSet(
+            form.managerFiles,
+            view.files.map((f) => f.name)
+          )
+        ) {
+          throw new Refusal(
+            "файлы в форме правки не совпадают с ответом на странице задания: состояние изменилось после сухого прогона"
+          );
         }
         let manager = form.managerFiles;
         for (const [i, file] of files.entries()) {
@@ -1184,7 +1395,11 @@ export const submitAdapter: WriteAdapter<SubmitArgs, SubmitObserved> = {
           await attachFile(page, file, i + 1, replace, check, pageCtx.signal);
           manager = expectedManagerFiles(manager, [diskName(file)]);
         }
-        const save = await checkedButton(await assertManagerState(page, manager, check), "save", args.cmid);
+        const save = await checkedButton(
+          await assertManagerState(page, manager, check),
+          "save",
+          args.cmid
+        );
         check();
 
         // Точка невозврата: дальше только ожидание и чтение.
@@ -1193,7 +1408,14 @@ export const submitAdapter: WriteAdapter<SubmitArgs, SubmitObserved> = {
         }
         const errorShown = await moodleErrorShown(page);
         const after = await readAssignmentView(page, args.cmid);
-        return classifySubmitOutcome({ mode: args.mode, expected, after, before: view, expectedTotal: plan.total, errorShown });
+        return classifySubmitOutcome({
+          mode: args.mode,
+          expected,
+          after,
+          before: view,
+          expectedTotal: plan.total,
+          errorShown,
+        });
       },
       ctx.signal
     );
@@ -1205,7 +1427,11 @@ export const submitAdapter: WriteAdapter<SubmitArgs, SubmitObserved> = {
     const after = await readForVerify(args.cmid, signal);
     if (!after) return tooLargeToVerify();
     // Без `before`: проверка повтора не выносит `rejected`.
-    const { outcome, evidence, warnings } = classifySubmitOutcome({ mode: args.mode, expected, after });
+    const { outcome, evidence, warnings } = classifySubmitOutcome({
+      mode: args.mode,
+      expected,
+      after,
+    });
     return { outcome: outcome === "rejected" ? "unknown" : outcome, evidence, warnings };
   },
 };
@@ -1216,13 +1442,20 @@ export const deleteAdapter: WriteAdapter<DeleteArgs, DeleteObserved> = {
   targetOf,
   async observe(args, signal) {
     checkCmid(args.cmid);
-    const view = await readPage(viewUrl(args.cmid), (page) => readAssignmentView(page, args.cmid), signal);
+    const view = await readPage(
+      viewUrl(args.cmid),
+      (page) => readAssignmentView(page, args.cmid),
+      signal
+    );
     checkDeletePreconditions(view);
     return { view };
   },
   describe(_args, { view }) {
     return {
-      preview: { ...viewSummary(view), files: view.files.map((f) => ({ name: f.name, size: f.size })) },
+      preview: {
+        ...viewSummary(view),
+        files: view.files.map((f) => ({ name: f.name, size: f.size })),
+      },
       warnings: [
         "удаление необратимо: ответ и его файлы будут удалены из системы; файлы в папке «исходящих» не трогаются",
       ],
@@ -1240,14 +1473,22 @@ export const deleteAdapter: WriteAdapter<DeleteArgs, DeleteObserved> = {
         const before = await readAssignmentView(page, args.cmid);
         checkDeletePreconditions(before);
         if (stateFingerprint(before) !== stateFingerprint(view)) {
-          throw new Refusal("состояние ответа изменилось после сухого прогона: выполните сухой прогон заново");
+          throw new Refusal(
+            "состояние ответа изменилось после сухого прогона: выполните сухой прогон заново"
+          );
         }
         // «Удалить ответ» только открывает страницу подтверждения (GET, §9.1) — это ещё чтение; форма
         // кнопки проверяется до клика, чтобы это не оказалась прямая необратимая отправка.
-        const del = await checkedButton(await exactlyOne(page, SEL_DELETE, "кнопка «Удалить ответ»"), "delete", args.cmid);
+        const del = await checkedButton(
+          await exactlyOne(page, SEL_DELETE, "кнопка «Удалить ответ»"),
+          "delete",
+          args.cmid
+        );
         await del.click();
         try {
-          await page.waitForURL((u) => isViewUrl(u, args.cmid, "removesubmissionconfirm"), { timeout: STEP_TIMEOUT_MS });
+          await page.waitForURL((u) => isViewUrl(u, args.cmid, "removesubmissionconfirm"), {
+            timeout: STEP_TIMEOUT_MS,
+          });
         } catch (err) {
           if (pageCtx.signal.aborted) throw err;
           throw new Refusal("страница подтверждения удаления не открылась; операция прервана");
@@ -1256,7 +1497,11 @@ export const deleteAdapter: WriteAdapter<DeleteArgs, DeleteObserved> = {
         if ((await page.getByText(CONFIRM_DELETE_TEXT).filter({ visible: true }).count()) === 0) {
           throw new Refusal("страница подтверждения удаления не распознана; операция прервана");
         }
-        const proceed = await checkedButton(await exactlyOne(page, SEL_CONTINUE, "кнопка «Продолжить»"), "continue", args.cmid);
+        const proceed = await checkedButton(
+          await exactlyOne(page, SEL_CONTINUE, "кнопка «Продолжить»"),
+          "continue",
+          args.cmid
+        );
         check();
 
         // Точка невозврата: дальше только ожидание и чтение.

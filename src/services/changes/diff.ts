@@ -1,5 +1,13 @@
 import { canonicalAttrs, dedupeIds, isEmptyGrade } from "./normalize.js";
-import type { Baseline, ChangeEvent, Coverage, DiffFlags, Fact, FieldChange, Scope } from "./types.js";
+import type {
+  Baseline,
+  ChangeEvent,
+  Coverage,
+  DiffFlags,
+  Fact,
+  FieldChange,
+  Scope,
+} from "./types.js";
 
 export type RawEvent = Omit<ChangeEvent, "seq" | "at">;
 
@@ -39,7 +47,10 @@ const inCoverage = (at: string | undefined, c: Coverage): boolean =>
   at === undefined || ((c.from === null || at >= c.from) && (c.to === null || at <= c.to));
 
 /** Различия по канонических значениям (как в отпечатке): пустое, `null` и отсутствие ключа равны. */
-function fieldChanges(before: Record<string, string | null>, after: Record<string, string | null>): FieldChange[] {
+function fieldChanges(
+  before: Record<string, string | null>,
+  after: Record<string, string | null>
+): FieldChange[] {
   const was = canonicalAttrs(before);
   const now = canonicalAttrs(after);
   const keys = [...new Set([...Object.keys(was), ...Object.keys(now)])].sort();
@@ -89,7 +100,10 @@ function mergeMoves(
       kind: newFact.kind,
       title: newFact.title,
       ...(newFact.course ? { course: newFact.course } : {}),
-      fields: [{ field: "start", from: oldFact.at ?? null, to: newFact.at ?? null }, ...fieldChanges(oldFact.attrs, newFact.attrs)],
+      fields: [
+        { field: "start", from: oldFact.at ?? null, to: newFact.at ?? null },
+        ...fieldChanges(oldFact.attrs, newFact.attrs),
+      ],
     });
   }
   return [...events.filter((e) => !dropped.has(e)), ...moved];
@@ -117,14 +131,19 @@ export function diffSource(input: DiffInput): DiffOutput {
     return { takenAt, ...(input.coverage ? { coverage: input.coverage } : {}), facts };
   };
 
-  if (input.baseline === null) return { events: [], baseline: makeBaseline([]), status: "baseline" };
+  if (input.baseline === null)
+    return { events: [], baseline: makeBaseline([]), status: "baseline" };
 
   const old = input.baseline;
   // Пустой ответ над непустой базой у источника без переноса отсутствующего (входящее, оценки) — скорее
   // сбой, чем «всё исчезло»: база переносится целиком, событий нет. Иначе база стёрлась бы, а следующий
   // нормальный ответ дал бы массовые `added`. `removed` у таких источников и так не выпускается.
   if (!carryMissing && fresh.size === 0 && Object.keys(old.facts).length > 0) {
-    return { events: [], baseline: { takenAt, ...(old.coverage ? { coverage: old.coverage } : {}), facts: old.facts }, status: "ok" };
+    return {
+      events: [],
+      baseline: { takenAt, ...(old.coverage ? { coverage: old.coverage } : {}), facts: old.facts },
+      status: "ok",
+    };
   }
   const overlap = intersect(old.coverage, input.coverage);
   const base = { source: input.source, scope: input.scope };
@@ -158,7 +177,8 @@ export function diffSource(input: DiffInput): DiffOutput {
     if (input.detectOverdue && f.attrs.due && UTC_MINUTE.test(f.attrs.due)) {
       const due = Date.parse(f.attrs.due);
       // Просрочка — ход часов: срок пересёк «сейчас» между снимками, а элемент всё ещё в источнике.
-      if (!Number.isNaN(due) && prevMs < due && due <= nowMs) events.push(make("overdue", f, { cause: "clock" }));
+      if (!Number.isNaN(due) && prevMs < due && due <= nowMs)
+        events.push(make("overdue", f, { cause: "clock" }));
     }
   }
 
@@ -166,7 +186,8 @@ export function diffSource(input: DiffInput): DiffOutput {
   for (const [id, before] of Object.entries(old.facts)) {
     if (fresh.has(id)) continue;
     // Ушёл ниже нового покрытия — окно сдвигается только вперёд, назад факт не вернётся: забываем.
-    if (input.coverage?.from != null && before.at !== undefined && before.at < input.coverage.from) continue;
+    if (input.coverage?.from != null && before.at !== undefined && before.at < input.coverage.from)
+      continue;
     if (emitRemoved && !input.truncated && inCoverage(before.at, overlap)) {
       events.push(make("removed", before));
       continue;

@@ -52,7 +52,9 @@ export async function fetchMoodleAjax<T>(
 ): Promise<T> {
   type MoodleWindow = { M?: { cfg?: { sesskey?: string } } };
   await page
-    .waitForFunction(() => !!(window as unknown as MoodleWindow).M?.cfg?.sesskey, undefined, { timeout: 15_000 })
+    .waitForFunction(() => !!(window as unknown as MoodleWindow).M?.cfg?.sesskey, undefined, {
+      timeout: 15_000,
+    })
     .catch(() => {});
   const sesskey = await page.evaluate(() => (window as unknown as MoodleWindow).M?.cfg?.sesskey);
   if (!sesskey) {
@@ -71,7 +73,9 @@ export async function fetchMoodleAjax<T>(
       }
       const body = (await res.json()) as MoodleAjaxResponse<T>[];
       if (body[0]?.error) {
-        throw new Error(`edu.hse.ru AJAX ${methodname}: ${body[0].exception?.message ?? "unknown error"}`);
+        throw new Error(
+          `edu.hse.ru AJAX ${methodname}: ${body[0].exception?.message ?? "unknown error"}`
+        );
       }
       return body[0].data;
     },
@@ -139,7 +143,15 @@ const lmsCourses = defineResource<void, CourseOverview[]>({
             sort: "fullname",
             customfieldname: "",
             customfieldvalue: "",
-            requiredfields: ["id", "fullname", "shortname", "showcoursecategory", "showshortname", "visible", "enddate"],
+            requiredfields: [
+              "id",
+              "fullname",
+              "shortname",
+              "showcoursecategory",
+              "showshortname",
+              "visible",
+              "enddate",
+            ],
           }
         );
         return data.courses.map((c) => ({
@@ -288,7 +300,11 @@ const lmsCalendar = defineResource<CalendarArgs, LmsActionEventsResult, LmsActio
  * просроченное несданное приходит с `overdue: true` и `actionable: false` (сдача закрыта) —
  * поэтому по `actionable` фильтровать нельзя. Ключ кэша: дата начала + корзина правой границы.
  */
-export function listActionEvents(from: Date, to: Date, opts?: ResourceCallOptions): Promise<LmsActionEventsResult> {
+export function listActionEvents(
+  from: Date,
+  to: Date,
+  opts?: ResourceCallOptions
+): Promise<LmsActionEventsResult> {
   return lmsCalendar({ from, to }, opts);
 }
 
@@ -409,7 +425,11 @@ const lmsMessage = defineResource<number, RawMailMessage, LmsMessage>({
     sender: m.sender.fullname,
     recipients: m.recipients.map((r) => r.fullname),
     time: unixToIso(m.time),
-    attachments: m.attachments.map((a) => ({ filename: a.filename, filesize: a.filesize, url: a.fileurl })),
+    attachments: m.attachments.map((a) => ({
+      filename: a.filename,
+      filesize: a.filesize,
+      url: a.fileurl,
+    })),
   }),
 });
 
@@ -429,7 +449,8 @@ const lmsMaterials = defineResource<number, ModuleLink[]>({
         page.evaluate(() => {
           const anchors = Array.from(document.querySelectorAll('a[href*="/mod/"]'));
           const seen = new Set<string>();
-          const result: Array<{ type: string; cmid: number | null; title: string; url: string }> = [];
+          const result: Array<{ type: string; cmid: number | null; title: string; url: string }> =
+            [];
           for (const a of anchors) {
             const href = (a as HTMLAnchorElement).href;
             const modMatch = href.match(/\/mod\/([a-z]+)\/view\.php/);
@@ -438,7 +459,12 @@ const lmsMaterials = defineResource<number, ModuleLink[]>({
             const title = a.textContent?.trim().replace(/\s+/g, " ") || "";
             if (!title || seen.has(href)) continue;
             seen.add(href);
-            result.push({ type: modMatch[1], cmid: idMatch ? Number(idMatch[1]) : null, title, url: href });
+            result.push({
+              type: modMatch[1],
+              cmid: idMatch ? Number(idMatch[1]) : null,
+              title,
+              url: href,
+            });
           }
           return result;
         }),
@@ -500,7 +526,10 @@ export function toGradeReport(courseId: number, table: GradeTable): GradeReport 
 }
 
 /** Оценки студента по курсу: элементы журнала с названием, путём категорий и оценкой. */
-export async function getGrades(courseId: number, opts?: ResourceCallOptions): Promise<GradeReport> {
+export async function getGrades(
+  courseId: number,
+  opts?: ResourceCallOptions
+): Promise<GradeReport> {
   return toGradeReport(courseId, await listGradeItems(courseId, opts));
 }
 

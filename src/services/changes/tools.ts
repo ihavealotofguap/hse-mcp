@@ -6,7 +6,8 @@ import * as changes from "./client.js";
 const SCOPE = z.enum(["deadlines", "schedule", "inbox", "claims", "grades"]);
 
 /** "7d", "12h" (до 4 цифр) или любая дата, которую разбирает `Date.parse`. */
-const isSince = (v: string): boolean => /^\d{1,4}[dh]$/.test(v.trim()) || !Number.isNaN(Date.parse(v));
+const isSince = (v: string): boolean =>
+  /^\d{1,4}[dh]$/.test(v.trim()) || !Number.isNaN(Date.parse(v));
 
 export function registerChangesTools(server: McpServer): void {
   server.registerTool(
@@ -36,11 +37,19 @@ export function registerChangesTools(server: McpServer): void {
           .optional()
           .describe("Области; по умолчанию deadlines, schedule, inbox, claims (без grades)."),
         courses: z
-          .array(z.union([z.number().int().positive().max(Number.MAX_SAFE_INTEGER), z.string().min(1).max(200)]))
+          .array(
+            z.union([
+              z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
+              z.string().min(1).max(200),
+            ])
+          )
           .max(50)
           .optional()
           .describe("Фильтр курсов для grades: число — id курса, строка — часть названия."),
-        fresh: z.boolean().optional().describe("true — игнорировать кэш (иначе принимаются данные не старше 60 с)."),
+        fresh: z
+          .boolean()
+          .optional()
+          .describe("true — игнорировать кэш (иначе принимаются данные не старше 60 с)."),
         since: z
           .string()
           .min(2)
@@ -66,7 +75,10 @@ export function registerChangesTools(server: McpServer): void {
       },
     },
     async ({ scopes, courses, fresh, since, ack }, extra) =>
-      runTool((signal) => changes.getChanges({ scopes, courses, fresh, since, ack, signal }), extra.signal)
+      runTool(
+        (signal) => changes.getChanges({ scopes, courses, fresh, since, ack, signal }),
+        extra.signal
+      )
   );
 
   server.registerTool(

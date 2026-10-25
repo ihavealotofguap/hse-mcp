@@ -25,7 +25,8 @@ const waiters: Waiter[] = [];
 let nextPageStartAt = 0;
 let nextApiStartAt = 0;
 
-const abortReason = (signal: AbortSignal): unknown => signal.reason ?? new Error("операция отменена");
+const abortReason = (signal: AbortSignal): unknown =>
+  signal.reason ?? new Error("операция отменена");
 
 function takeSlot(signal?: AbortSignal): Promise<void> {
   if (signal?.aborted) return Promise.reject(abortReason(signal));
@@ -91,7 +92,9 @@ export async function acquirePageSlot(
     if (lease) clearTimeout(lease);
     lease = setTimeout(() => {
       if (released) return;
-      console.error(`hsemcp: слот страницы удерживался дольше ${leaseMs} мс — освобождаю принудительно`);
+      console.error(
+        `hsemcp: слот страницы удерживался дольше ${leaseMs} мс — освобождаю принудительно`
+      );
       release();
     }, leaseMs);
     lease.unref?.();

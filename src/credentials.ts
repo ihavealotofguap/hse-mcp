@@ -25,7 +25,11 @@ interface KeyringEntry {
   setPassword(password: string): void;
   deleteCredential(): boolean;
 }
-type KeyringEntryCtor = new (service: string, account: string, options?: { linux?: { store?: string } }) => KeyringEntry;
+type KeyringEntryCtor = new (
+  service: string,
+  account: string,
+  options?: { linux?: { store?: string } }
+) => KeyringEntry;
 
 const importModule = (name: string): Promise<unknown> => import(name);
 
@@ -49,7 +53,10 @@ export async function loadKeyStore(
     const Entry = mod?.Entry;
     if (typeof Entry !== "function") return null;
     const options = platform === "linux" ? { linux: { store: "secret-service" } } : undefined;
-    const entryOf = (account: string): KeyringEntry => (options ? new Entry(KEYCHAIN_SERVICE, account, options) : new Entry(KEYCHAIN_SERVICE, account));
+    const entryOf = (account: string): KeyringEntry =>
+      options
+        ? new Entry(KEYCHAIN_SERVICE, account, options)
+        : new Entry(KEYCHAIN_SERVICE, account);
     if (platform === "linux") entryOf("availability-probe").getPassword();
     return {
       // Сбой чтения (хранилище заблокировано) — как «записи нет»: поиск пароля пойдёт дальше, к `.env`.
@@ -89,13 +96,19 @@ export function lookupPassword(args: {
 }
 
 /** Предупреждение о правах по режиму файла: только POSIX, любой бит группы/остальных — повод. */
-export function permissionWarningForMode(mode: number, platform: NodeJS.Platform = process.platform): string | null {
+export function permissionWarningForMode(
+  mode: number,
+  platform: NodeJS.Platform = process.platform
+): string | null {
   if (platform === "win32") return null;
   return (mode & 0o077) !== 0 ? DOTENV_PERMISSION_WARNING : null;
 }
 
 /** Предупреждение о правах на `.env` (без пути и значений); нет файла или Windows — `null`. */
-export function dotenvPermissionWarning(file: string, platform: NodeJS.Platform = process.platform): string | null {
+export function dotenvPermissionWarning(
+  file: string,
+  platform: NodeJS.Platform = process.platform
+): string | null {
   if (platform === "win32") return null;
   try {
     return permissionWarningForMode(fs.statSync(file).mode, platform);

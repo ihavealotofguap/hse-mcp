@@ -34,7 +34,11 @@ const isoOrUndefined = (text: string): string | undefined => {
 
 export interface Collectors {
   elkSchedule(range: DateRange): Promise<CollectorResult>;
-  lmsDeadlines(args: { range: DateRange; now: Date; courses?: CourseFilter }): Promise<CollectorResult>;
+  lmsDeadlines(args: {
+    range: DateRange;
+    now: Date;
+    courses?: CourseFilter;
+  }): Promise<CollectorResult>;
   lmsMessages(): Promise<CollectorResult>;
   elkNotifications(): Promise<CollectorResult>;
   elkClaims(): Promise<CollectorResult>;
@@ -101,16 +105,27 @@ export function pickDeadlineEvents(
   });
 }
 
-async function lmsDeadlines(args: { range: DateRange; now: Date; courses?: CourseFilter }): Promise<CollectorResult> {
+async function lmsDeadlines(args: {
+  range: DateRange;
+  now: Date;
+  courses?: CourseFilter;
+}): Promise<CollectorResult> {
   const { range, now, courses } = args;
   const lookback = addDays(startOfDay(now), -OVERDUE_LOOKBACK_DAYS);
   // Две независимые выборки — параллельно (открытия страниц всё равно сериализует loginLock).
-  const [allCourses, calendar] = await Promise.all([lms.listCourses(), lms.listActionEvents(lookback, range.to)]);
+  const [allCourses, calendar] = await Promise.all([
+    lms.listCourses(),
+    lms.listActionEvents(lookback, range.to),
+  ]);
   const candidates = selectCourses(allCourses, courses, now, { includeEnded: true });
   return {
     items: pickDeadlineEvents(calendar.events, candidates, now).map((e) => actionEventToItem(e)),
     ...(calendar.truncated
-      ? { warnings: ["календарь LMS усечён по лимиту событий — самые поздние дедлайны могут отсутствовать"] }
+      ? {
+          warnings: [
+            "календарь LMS усечён по лимиту событий — самые поздние дедлайны могут отсутствовать",
+          ],
+        }
       : {}),
   };
 }
@@ -212,10 +227,12 @@ export function windowToItem(row: Record<string, string>, now: Date): DigestItem
   const endText = byKey(/окончан|end/i);
   const explicitEnd = endText ? parseDateTime(endText, { endOfDayIfNoTime: true }) : null;
   const all = entries.flatMap(([, v]) => scanDates(v, { endOfDayIfNoTime: true }));
-  const end = explicitEnd ?? (all.length ? new Date(Math.max(...all.map((d) => d.getTime()))) : null);
+  const end =
+    explicitEnd ?? (all.length ? new Date(Math.max(...all.map((d) => d.getTime()))) : null);
   if (end && end.getTime() < now.getTime()) return null;
 
-  const period = byKey(/период|назван|period|name/i) ?? entries.find(([, v]) => v.length > 3)?.[1] ?? "окно";
+  const period =
+    byKey(/период|назван|period|name/i) ?? entries.find(([, v]) => v.length > 3)?.[1] ?? "окно";
   return {
     kind: "elk_window",
     when: end ? toLocalIso(end) : null,

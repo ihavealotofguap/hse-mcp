@@ -1,8 +1,20 @@
 import type { PageCallContext } from "../../auth/browser-session.js";
 import { errCode } from "../../fs-lock.js";
 import { defineResource, type LoadContext } from "../../resource.js";
-import { findUnresolvedByTarget, latestByToken, recordJournal, type JournalEntry } from "./journal.js";
-import { loadOrCreateKey, PREVIEW_TTL_MS, signPreview, targetIdOf, tokenIdOf, verifyPreview } from "./token.js";
+import {
+  findUnresolvedByTarget,
+  latestByToken,
+  recordJournal,
+  type JournalEntry,
+} from "./journal.js";
+import {
+  loadOrCreateKey,
+  PREVIEW_TTL_MS,
+  signPreview,
+  targetIdOf,
+  tokenIdOf,
+  verifyPreview,
+} from "./token.js";
 import type { ErrorClass, Outcome, PreviewPayload } from "./types.js";
 
 /**
@@ -65,7 +77,9 @@ export function abortableSleep(ms: number, signal?: AbortSignal): Promise<void> 
 }
 
 /** Шов только для проверок (`test/runner.test.mjs`): подмена ожидания следующей секунды в сухом прогоне. */
-export const testSeams: { sleep: (ms: number, signal?: AbortSignal) => Promise<void> } = { sleep: abortableSleep };
+export const testSeams: { sleep: (ms: number, signal?: AbortSignal) => Promise<void> } = {
+  sleep: abortableSleep,
+};
 
 /** Дедлайн коммита из адаптера: конечное положительное число, иначе `undefined` (раннер берёт значение по умолчанию). */
 const sanitizeDeadline = (ms: unknown): number | undefined =>
@@ -132,7 +146,8 @@ const NOT_SENT = "ничего не отправлено";
 const TOKEN_REFUSAL: Record<"malformed" | "expired" | "mismatch", string> = {
   malformed: "previewToken повреждён: выполните сухой прогон заново",
   expired: `previewToken просрочен (действует ${PREVIEW_TTL_MS / 60_000} мин): выполните сухой прогон заново`,
-  mismatch: "previewToken не совпадает с операцией, данными или текущим состоянием цели: выполните сухой прогон заново",
+  mismatch:
+    "previewToken не совпадает с операцией, данными или текущим состоянием цели: выполните сухой прогон заново",
 };
 
 /** Класс ошибки для журнала: текст ошибки не пишется никуда. */
@@ -140,7 +155,8 @@ export function classifyError(err: unknown): ErrorClass {
   // DOMException (AbortError, TimeoutError) в Node — тоже Error.
   const name = err instanceof Error ? err.name : "";
   const message = err instanceof Error ? err.message : String(err);
-  if (name === "AbortError" || name === "TimeoutError" || /не уложил/i.test(message)) return "timeout";
+  if (name === "AbortError" || name === "TimeoutError" || /не уложил/i.test(message))
+    return "timeout";
   if (/отмен[её]н/i.test(message)) return "cancelled";
   if (/net::|ERR_|fetch/.test(message)) return "network";
   if (/\b401\b|вход/i.test(message)) return "auth";
@@ -165,7 +181,9 @@ async function guardFs<T>(fn: () => Promise<T>): Promise<T> {
   } catch (err) {
     const code = errCode(err);
     if (code === undefined) throw err;
-    throw new Error(`служебные файлы записи недоступны (${code}); запись не выполнена`, { cause: err });
+    throw new Error(`служебные файлы записи недоступны (${code}); запись не выполнена`, {
+      cause: err,
+    });
   }
 }
 
@@ -206,9 +224,15 @@ function commitPointFor(call: WriteCall, ctx: LoadContext, deadlineMs?: number):
       if (!call.sending) {
         // Вызов уже отклонён: запись `sending` осталась бы висеть без исхода.
         if (call.done || ctx.signal.aborted || pageCtx.signal.aborted) {
-          throw ctx.signal.reason ?? pageCtx.signal.reason ?? new Error("вызов уже завершён, точка невозврата недоступна");
+          throw (
+            ctx.signal.reason ??
+            pageCtx.signal.reason ??
+            new Error("вызов уже завершён, точка невозврата недоступна")
+          );
         }
-        const pending = guardFs(() => recordJournal({ ...call.ids, at: new Date().toISOString(), stage: "sending" })).then(() => {
+        const pending = guardFs(() =>
+          recordJournal({ ...call.ids, at: new Date().toISOString(), stage: "sending" })
+        ).then(() => {
           call.sending = true;
         });
         call.pending = pending;
@@ -232,7 +256,11 @@ async function journalOutcome(entry: Omit<JournalEntry, "at">, warnings: string[
   }
 }
 
-function withUnknownWarning(outcome: Outcome, warnings: string[], lead: readonly string[] = []): string[] {
+function withUnknownWarning(
+  outcome: Outcome,
+  warnings: string[],
+  lead: readonly string[] = []
+): string[] {
   if (outcome !== "unknown") return warnings;
   // Предупреждения адаптера для `unknown` — первыми, без дублей; общее предупреждение раннера — следом.
   const own = lead.filter((w) => !warnings.includes(w));
@@ -248,7 +276,10 @@ export function defineWrite<A extends object, Obs>(
     cache: false,
     invalidates: adapter.invalidates,
     load: (x, ctx) =>
-      adapter.execute(x.args, x.observed, { signal: ctx.signal, commitPoint: commitPointFor(x.call, ctx, sanitizeDeadline(adapter.commitDeadlineMs)) }),
+      adapter.execute(x.args, x.observed, {
+        signal: ctx.signal,
+        commitPoint: commitPointFor(x.call, ctx, sanitizeDeadline(adapter.commitDeadlineMs)),
+      }),
   });
 
   const payloadFor = (args: A, observed: Obs): PreviewPayload => ({
@@ -273,7 +304,9 @@ export function defineWrite<A extends object, Obs>(
       previewToken = signPreview(key, payload, now);
     }
     const { preview, warnings } = adapter.describe(args, observed);
-    const priorUnknown = (await guardFs(() => findUnresolvedByTarget(targetIdOf(key, adapter.op, payload.target)))).length > 0;
+    const priorUnknown =
+      (await guardFs(() => findUnresolvedByTarget(targetIdOf(key, adapter.op, payload.target))))
+        .length > 0;
     return {
       stage: "preview",
       previewToken,
@@ -285,33 +318,66 @@ export function defineWrite<A extends object, Obs>(
   }
 
   /** Повтор по токену из журнала: только чтение, токен на HMAC и состояние не проверяется. */
-  async function replay(args: A, prior: JournalEntry, targetId: string, signal?: AbortSignal): Promise<WriteResponse> {
+  async function replay(
+    args: A,
+    prior: JournalEntry,
+    targetId: string,
+    signal?: AbortSignal
+  ): Promise<WriteResponse> {
     if (prior.op !== adapter.op || prior.targetId !== targetId) {
-      throw new Error(`previewToken выдан для другой операции или цели: выполните сухой прогон заново; ${NOT_SENT}`);
+      throw new Error(
+        `previewToken выдан для другой операции или цели: выполните сухой прогон заново; ${NOT_SENT}`
+      );
     }
-    if (prior.stage === "verified" && (prior.outcome === "confirmed" || prior.outcome === "rejected")) {
-      return { stage: "verified", outcome: prior.outcome, evidence: { fromJournal: true }, warnings: [], sent: prior.outcome === "confirmed" };
+    if (
+      prior.stage === "verified" &&
+      (prior.outcome === "confirmed" || prior.outcome === "rejected")
+    ) {
+      return {
+        stage: "verified",
+        outcome: prior.outcome,
+        evidence: { fromJournal: true },
+        warnings: [],
+        sent: prior.outcome === "confirmed",
+      };
     }
     const started = Date.now();
     const checked = await adapter.verifyOnly(args, signal);
     // Контракт verifyOnly: только confirmed/unknown. `rejected` от проверки чтением не принимается как
     // исход — отправка по токену уже начиналась, значит исход неизвестен.
     const outcome: Outcome = checked.outcome === "rejected" ? "unknown" : checked.outcome;
-    const extra = checked.outcome === "rejected" ? ["verifyOnly вернул «отклонено», что ему не разрешено: исход считается неизвестным."] : [];
-    const warnings = withUnknownWarning(outcome, [...checked.warnings, ...extra], adapter.unknownWarnings);
+    const extra =
+      checked.outcome === "rejected"
+        ? ["verifyOnly вернул «отклонено», что ему не разрешено: исход считается неизвестным."]
+        : [];
+    const warnings = withUnknownWarning(
+      outcome,
+      [...checked.warnings, ...extra],
+      adapter.unknownWarnings
+    );
     const ids = { op: prior.op, tokenId: prior.tokenId, targetId: prior.targetId };
-    await journalOutcome({ ...ids, stage: "verified", outcome, durationMs: Date.now() - started }, warnings);
+    await journalOutcome(
+      { ...ids, stage: "verified", outcome, durationMs: Date.now() - started },
+      warnings
+    );
     // Отправка по токену уже начиналась: «не отправлено» утверждается только записанным в журнале отказом.
     return { stage: "verified", outcome, evidence: checked.evidence, warnings, sent: true };
   }
 
-  async function write(args: A, token: string, acknowledgeUnknown: boolean, signal?: AbortSignal): Promise<WriteResponse> {
+  async function write(
+    args: A,
+    token: string,
+    acknowledgeUnknown: boolean,
+    signal?: AbortSignal
+  ): Promise<WriteResponse> {
     if (signal?.aborted) throw notSent(signal.reason ?? new Error("операция отменена"));
     const key = await guardFs(loadOrCreateKey);
     const targetId = targetIdOf(key, adapter.op, adapter.targetOf(args));
     const priorTokenId = tokenIdOf(token);
     // Строго: повреждённый журнал не считается пустым — иначе уже использованный токен ушёл бы в новую отправку.
-    const prior = priorTokenId ? await guardFs(() => latestByToken(priorTokenId, undefined, true)) : undefined;
+    const prior = priorTokenId
+      ? await guardFs(() => latestByToken(priorTokenId, undefined, true))
+      : undefined;
     if (prior) return replay(args, prior, targetId, signal);
 
     let observed: Obs;
@@ -323,14 +389,22 @@ export function defineWrite<A extends object, Obs>(
     const verdict = verifyPreview(key, token, payloadFor(args, observed));
     if (!verdict.ok) throw new Error(`${TOKEN_REFUSAL[verdict.reason]}; ${NOT_SENT}`);
     const tokenId = verdict.tokenId;
-    if (!acknowledgeUnknown && (await guardFs(() => findUnresolvedByTarget(targetId, undefined, tokenId, true))).length > 0) {
+    if (
+      !acknowledgeUnknown &&
+      (await guardFs(() => findUnresolvedByTarget(targetId, undefined, tokenId, true))).length > 0
+    ) {
       throw new Error(
         "По этой цели есть запись с неизвестным исходом: проверьте состояние сухим прогоном и повторите " +
           `с acknowledgeUnknown: true; ${NOT_SENT}`
       );
     }
 
-    const call: WriteCall = { ids: { op: adapter.op, tokenId, targetId }, done: false, sending: false, refused: false };
+    const call: WriteCall = {
+      ids: { op: adapter.op, tokenId, targetId },
+      done: false,
+      sending: false,
+      refused: false,
+    };
     const started = Date.now();
     let result: ExecuteResult | undefined;
     let failure: unknown;
@@ -351,23 +425,36 @@ export function defineWrite<A extends object, Obs>(
       // Сбой после точки невозврата либо адаптер проглотил отказ commitPoint: исход неизвестен.
       const errorClass: ErrorClass = failed ? classifyError(failure) : "other";
       const warnings = withUnknownWarning("unknown", [], adapter.unknownWarnings);
-      await journalOutcome({ ...call.ids, stage: "sent", outcome: "unknown", durationMs, errorClass }, warnings);
+      await journalOutcome(
+        { ...call.ids, stage: "sent", outcome: "unknown", durationMs, errorClass },
+        warnings
+      );
       return { stage: "sent", outcome: "unknown", evidence: { errorClass }, warnings, sent: true };
     }
 
     const done = result as ExecuteResult;
     const warnings = withUnknownWarning(done.outcome, [...done.warnings], adapter.unknownWarnings);
     if (call.sending) {
-      await journalOutcome({ ...call.ids, stage: "verified", outcome: done.outcome, durationMs }, warnings);
+      await journalOutcome(
+        { ...call.ids, stage: "verified", outcome: done.outcome, durationMs },
+        warnings
+      );
     }
-    return { stage: done.stage, outcome: done.outcome, evidence: done.evidence, warnings, sent: call.sending };
+    return {
+      stage: done.stage,
+      outcome: done.outcome,
+      evidence: done.evidence,
+      warnings,
+      sent: call.sending,
+    };
   }
 
   return async (input, signal) => {
     const { confirm, previewToken, acknowledgeUnknown, ...rest } = input;
     const args = rest as unknown as A;
     if (!confirm) return preview(args, signal);
-    if (!previewToken) throw new Error(`confirm требует previewToken: сначала выполните сухой прогон; ${NOT_SENT}`);
+    if (!previewToken)
+      throw new Error(`confirm требует previewToken: сначала выполните сухой прогон; ${NOT_SENT}`);
     return runExclusive(() => write(args, previewToken, acknowledgeUnknown === true, signal));
   };
 }

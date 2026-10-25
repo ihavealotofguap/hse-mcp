@@ -45,7 +45,8 @@ export interface ResourceDef<A, Raw, R = Raw> {
 }
 
 /** Ресурс записи: не кэшируется, поэтому TTL и ключ не нужны. */
-export interface WriteResourceDef<A, Raw, R = Raw> extends Omit<ResourceDef<A, Raw, R>, "ttl" | "key" | "cache"> {
+export interface WriteResourceDef<A, Raw, R = Raw>
+  extends Omit<ResourceDef<A, Raw, R>, "ttl" | "key" | "cache"> {
   cache: false;
 }
 
@@ -105,7 +106,10 @@ async function loadWithDeadline<A, Raw>(
       // Вызов уже отклонён (дедлайн, отмена) или завершён: точку невозврата проходить поздно —
       // загрузчик должен упасть до необратимого шага, а не отправить данные, исход которых никто не увидит.
       if (settled || ctrl.signal.aborted) {
-        throw ctrl.signal.reason ?? new Error(`${def.name}: вызов уже завершён, точка невозврата недоступна`);
+        throw (
+          ctrl.signal.reason ??
+          new Error(`${def.name}: вызов уже завершён, точка невозврата недоступна`)
+        );
       }
       state.committed = true;
       const commitMs = ms ?? COMMIT_DEADLINE_MS;
@@ -205,7 +209,9 @@ export function defineResource<A, Raw, R = Raw>(
         { maxAgeMs: opts.maxAgeMs }
       );
     }
-    const projected = shared.then((raw) => (def.project ? def.project(raw, args) : (raw as unknown as R)));
+    const projected = shared.then((raw) =>
+      def.project ? def.project(raw, args) : (raw as unknown as R)
+    );
     return detach(projected, state, opts.signal);
   };
 }

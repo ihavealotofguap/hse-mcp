@@ -55,10 +55,22 @@ test("action в /mod/assign/ отклоняется", () => {
 });
 
 test("action: ключ в любом регистре, повторы и кодирование", () => {
-  assert.throws(() => assertReadOnlyPath(`${BASE}/mod/assign/view.php?id=5&ACTION=grading`), /action/);
-  assert.throws(() => assertReadOnlyPath(`${BASE}/mod/assign/view.php?action=&action=submit`), /action/);
-  assert.throws(() => assertReadOnlyPath(`${BASE}/mod/assign/view.php?id=5&%61ction=submit`), /action/);
-  assert.throws(() => assertReadOnlyPath(`${BASE}/mod/assign/view.php?id=5&action=%65dit`), /action/);
+  assert.throws(
+    () => assertReadOnlyPath(`${BASE}/mod/assign/view.php?id=5&ACTION=grading`),
+    /action/
+  );
+  assert.throws(
+    () => assertReadOnlyPath(`${BASE}/mod/assign/view.php?action=&action=submit`),
+    /action/
+  );
+  assert.throws(
+    () => assertReadOnlyPath(`${BASE}/mod/assign/view.php?id=5&%61ction=submit`),
+    /action/
+  );
+  assert.throws(
+    () => assertReadOnlyPath(`${BASE}/mod/assign/view.php?id=5&action=%65dit`),
+    /action/
+  );
 });
 
 test("пути /mod/assign/ распознаются независимо от регистра и лишних слэшей", () => {
@@ -76,8 +88,14 @@ test("ключи-массивы sesskey[] / sesskey%5B%5D / sesskey[0] счит�
 });
 
 test("action[] на assign считается action", () => {
-  assert.throws(() => assertReadOnlyPath(`${BASE}/mod/assign/view.php?id=5&action[]=editsubmission`), /action/);
-  assert.throws(() => assertReadOnlyPath(`${BASE}/mod/assign/view.php?id=5&action%5B%5D=submit`), /action/);
+  assert.throws(
+    () => assertReadOnlyPath(`${BASE}/mod/assign/view.php?id=5&action[]=editsubmission`),
+    /action/
+  );
+  assert.throws(
+    () => assertReadOnlyPath(`${BASE}/mod/assign/view.php?id=5&action%5B%5D=submit`),
+    /action/
+  );
   assert.doesNotThrow(() => assertReadOnlyPath(`${BASE}/mod/assign/view.php?id=5&action[]=`));
   assert.doesNotThrow(() => assertReadOnlyPath(`${BASE}/mod/forum/view.php?action[]=view`));
 });
@@ -130,9 +148,18 @@ test("ведущий пробел в ключе (%20, +) не обходит ses
   assert.throws(() => assertReadOnlyPath(`${BASE}/x?+sesskey=1`), /sesskey/);
   assert.throws(() => assertReadOnlyPath(`${BASE}/x?++%20SessKey=1`), /sesskey/);
   assert.throws(() => assertReadOnlyPath(`${BASE}/x#a=1&%20sesskey=1`), /sesskey/);
-  assert.throws(() => assertReadOnlyPath(`${BASE}/mod/assign/view.php?id=5&+action=editsubmission`), /action/);
-  assert.throws(() => assertReadOnlyPath(`${BASE}/mod/assign/view.php?id=5&%20%20ACTION=submit`), /action/);
-  assert.throws(() => assertReadOnlyPath(`${BASE}/mod/assign/view.php?%20action[]=submit`), /action/);
+  assert.throws(
+    () => assertReadOnlyPath(`${BASE}/mod/assign/view.php?id=5&+action=editsubmission`),
+    /action/
+  );
+  assert.throws(
+    () => assertReadOnlyPath(`${BASE}/mod/assign/view.php?id=5&%20%20ACTION=submit`),
+    /action/
+  );
+  assert.throws(
+    () => assertReadOnlyPath(`${BASE}/mod/assign/view.php?%20action[]=submit`),
+    /action/
+  );
 });
 
 test("несколько и хвостовые группы скобок: sesskey[a][b], sesskey[]x, action[0]", () => {
@@ -141,9 +168,18 @@ test("несколько и хвостовые группы скобок: sesske
   assert.throws(() => assertReadOnlyPath(`${BASE}/x?sesskey[]x=1`), /sesskey/);
   assert.throws(() => assertReadOnlyPath(`${BASE}/x?sesskey[0=1`), /sesskey/);
   assert.throws(() => assertReadOnlyPath(`${BASE}/x#sesskey[a][b]=1`), /sesskey/);
-  assert.throws(() => assertReadOnlyPath(`${BASE}/mod/assign/view.php?id=5&action[0]=submit`), /action/);
-  assert.throws(() => assertReadOnlyPath(`${BASE}/mod/assign/view.php?id=5&action[a][b]=submit`), /action/);
-  assert.throws(() => assertReadOnlyPath(`${BASE}/mod/assign/view.php?id=5&action[]x=submit`), /action/);
+  assert.throws(
+    () => assertReadOnlyPath(`${BASE}/mod/assign/view.php?id=5&action[0]=submit`),
+    /action/
+  );
+  assert.throws(
+    () => assertReadOnlyPath(`${BASE}/mod/assign/view.php?id=5&action[a][b]=submit`),
+    /action/
+  );
+  assert.throws(
+    () => assertReadOnlyPath(`${BASE}/mod/assign/view.php?id=5&action[]x=submit`),
+    /action/
+  );
 });
 
 test("нормализация ключей не задевает обычные параметры", () => {
@@ -151,7 +187,9 @@ test("нормализация ключей не задевает обычные
   assert.doesNotThrow(() => assertReadOnlyPath(`${BASE}/calendar/view.php?view=month&%20course=5`));
   assert.doesNotThrow(() => assertReadOnlyPath(`${BASE}/x?ids[]=5&ids[]=6&id[0]=7`));
   assert.doesNotThrow(() => assertReadOnlyPath(`${BASE}/x?my sesskey=1&sesskeyx=2`));
-  assert.doesNotThrow(() => assertReadOnlyPath(`${BASE}/mod/assign/view.php?id=5&my+action=submit&actions[0]=x`));
+  assert.doesNotThrow(() =>
+    assertReadOnlyPath(`${BASE}/mod/assign/view.php?id=5&my+action=submit&actions[0]=x`)
+  );
   assert.doesNotThrow(() => assertReadOnlyPath(`${BASE}/mod/assign/view.php?id=5&%20action=`));
 });
 
@@ -162,15 +200,23 @@ test("NUL в ключе обрезает имя: sesskey%00x, action%00, %20sess
   assert.throws(() => assertReadOnlyPath(`${BASE}/x?%20sesskey%00=1`), /sesskey/);
   assert.throws(() => assertReadOnlyPath(`${BASE}/x?SESSKEY%00[a]=1`), /sesskey/);
   assert.throws(() => assertReadOnlyPath(`${BASE}/x#a=1&sesskey%00x=1`), /sesskey/);
-  assert.throws(() => assertReadOnlyPath(`${BASE}/mod/assign/view.php?id=5&action%00=submit`), /action/);
-  assert.throws(() => assertReadOnlyPath(`${BASE}/mod/assign/view.php?action%00x=editsubmission`), /action/);
+  assert.throws(
+    () => assertReadOnlyPath(`${BASE}/mod/assign/view.php?id=5&action%00=submit`),
+    /action/
+  );
+  assert.throws(
+    () => assertReadOnlyPath(`${BASE}/mod/assign/view.php?action%00x=editsubmission`),
+    /action/
+  );
   assert.throws(() => assertReadOnlyPath(`${BASE}/mod/assign?action%00=submit`), /action/);
   assert.throws(() => assertReadOnlyPath(`${BASE}/mod/assign/?%20ACTION%00junk=submit`), /action/);
 });
 
 test("NUL: ключ, начинающийся с NUL, и NUL в значении не дают ложных срабатываний", () => {
   assert.doesNotThrow(() => assertReadOnlyPath(`${BASE}/x?%00sesskey=1`));
-  assert.doesNotThrow(() => assertReadOnlyPath(`${BASE}/mod/assign/view.php?id=5&%00action=submit`));
+  assert.doesNotThrow(() =>
+    assertReadOnlyPath(`${BASE}/mod/assign/view.php?id=5&%00action=submit`)
+  );
   assert.doesNotThrow(() => assertReadOnlyPath(`${BASE}/mod/assign/view.php?id=5%00`));
   assert.doesNotThrow(() => assertReadOnlyPath(`${BASE}/x?id=5&mysesskey=1&mysesskey%00x=2`));
   assert.doesNotThrow(() => assertReadOnlyPath(`${BASE}/mod/assign/view.php?id=5&action=&x=%00`));
@@ -180,7 +226,10 @@ test("NUL: ключ, начинающийся с NUL, и NUL в значении
 
 test("сообщение при нормализованных ключах не повторяет URL и значение", () => {
   const secret = "SECRETVALUE456";
-  for (const url of [`${BASE}/x?%20sesskey=${secret}`, `${BASE}/mod/assign/view.php?id=5&action[0]=${secret}`]) {
+  for (const url of [
+    `${BASE}/x?%20sesskey=${secret}`,
+    `${BASE}/mod/assign/view.php?id=5&action[0]=${secret}`,
+  ]) {
     let msg = "";
     try {
       assertReadOnlyPath(url);

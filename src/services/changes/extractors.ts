@@ -4,7 +4,16 @@ import { endOfDay, isExamType, startOfDay } from "../digest/parse.js";
 import * as elk from "../elk/client.js";
 import * as lms from "../lms/client.js";
 import type { CourseOverview } from "../lms/client.js";
-import { canonicalAttrs, dedupeIds, fingerprint, isEmptyGrade, mskNaive, normText, sopNaive, utcMinute } from "./normalize.js";
+import {
+  canonicalAttrs,
+  dedupeIds,
+  fingerprint,
+  isEmptyGrade,
+  mskNaive,
+  normText,
+  sopNaive,
+  utcMinute,
+} from "./normalize.js";
 import type { DiffFlags, Fact, Scope, SourceResult } from "./types.js";
 
 export const CALENDAR_LOOKBACK_DAYS = 180;
@@ -47,18 +56,22 @@ export const realClients: ClientDeps = {
   listRequests: elk.listRequests,
 };
 
-const maxString = (values: string[]): string | null => (values.length ? values.reduce((m, x) => (x > m ? x : m)) : null);
-const minString = (values: string[]): string | null => (values.length ? values.reduce((m, x) => (x < m ? x : m)) : null);
+const maxString = (values: string[]): string | null =>
+  values.length ? values.reduce((m, x) => (x > m ? x : m)) : null;
+const minString = (values: string[]): string | null =>
+  values.length ? values.reduce((m, x) => (x < m ? x : m)) : null;
 const orUndefined = (s: string): string | undefined => (s === "" ? undefined : s);
 /** Элементы с нераспознанной датой пропускаются — но не молча: счётчик уходит в предупреждения. */
-const skippedWarning = (n: number, what: string): string[] => (n > 0 ? [`${what} без распознанной даты пропущено: ${n}`] : []);
+const skippedWarning = (n: number, what: string): string[] =>
+  n > 0 ? [`${what} без распознанной даты пропущено: ${n}`] : [];
 
 /**
  * Пропущены все элементы непустого ответа — формат даты не распознан: это ошибка источника, а не
  * «ок с нулём фактов» (иначе база источника обнулилась бы). Частичный пропуск остаётся предупреждением.
  */
 function assertDatesParsed(total: number, kept: number): void {
-  if (total > 0 && kept === 0) throw new Error(`не удалось разобрать даты элементов: ${total} из ${total}`);
+  if (total > 0 && kept === 0)
+    throw new Error(`не удалось разобрать даты элементов: ${total} из ${total}`);
 }
 
 /**
@@ -67,7 +80,9 @@ function assertDatesParsed(total: number, kept: number): void {
  */
 function stableDedupe(facts: Fact[]): Fact[] {
   const keyed = facts.map((fact) => ({ fact, fp: fingerprint(fact.attrs) }));
-  keyed.sort((a, b) => (a.fact.id < b.fact.id ? -1 : a.fact.id > b.fact.id ? 1 : a.fp < b.fp ? -1 : a.fp > b.fp ? 1 : 0));
+  keyed.sort((a, b) =>
+    a.fact.id < b.fact.id ? -1 : a.fact.id > b.fact.id ? 1 : a.fp < b.fp ? -1 : a.fp > b.fp ? 1 : 0
+  );
   return dedupeIds(keyed.map((k) => k.fact));
 }
 
@@ -97,7 +112,12 @@ function lmsCalendar(deps: ClientDeps): SourceExtractor {
             {
               id: String(e.id),
               scope: "deadlines",
-              kind: e.module === "assign" ? "assignment" : e.module === "quiz" ? "quiz" : "lms_activity",
+              kind:
+                e.module === "assign"
+                  ? "assignment"
+                  : e.module === "quiz"
+                    ? "quiz"
+                    : "lms_activity",
               title: name,
               ...(orUndefined(normText(e.course)) ? { course: normText(e.course) } : {}),
               attrs: canonicalAttrs({ due, name }),
@@ -119,7 +139,9 @@ function lmsCalendar(deps: ClientDeps): SourceExtractor {
         truncated: res.truncated,
         warnings: [
           ...(res.truncated
-            ? ["календарь LMS усечён по лимиту событий: покрытие сужено, «пропало из календаря» не вычисляется"]
+            ? [
+                "календарь LMS усечён по лимиту событий: покрытие сужено, «пропало из календаря» не вычисляется",
+              ]
             : []),
           ...skippedWarning(res.events.length - facts.length, "событий календаря LMS"),
         ],
@@ -139,7 +161,8 @@ function elkWindows(deps: ClientDeps): SourceExtractor {
       const table = await deps.getCourseEvaluationTable(ctx.opts);
       // Таблица не отрисовалась (таймаут рендера, SSO-мост не туда) — отказ источника, а не «окон нет»:
       // у окон нет оси покрытия, и пустой ответ дал бы `removed` по каждому окну.
-      if (!table.found) throw new Error("таблица окон СОП не найдена на странице (сбой загрузки или входа)");
+      if (!table.found)
+        throw new Error("таблица окон СОП не найдена на странице (сбой загрузки или входа)");
       const rows = table.rows;
       const facts: Fact[] = [];
       for (const row of rows) {
@@ -151,7 +174,10 @@ function elkWindows(deps: ClientDeps): SourceExtractor {
           scope: "deadlines",
           kind: "elk_window",
           title: `Оценка курсов (СОП): ${period}`,
-          attrs: canonicalAttrs({ end: sopNaive(pick(row, /окончан|end/i)), status: pick(row, /статус|status/i) }),
+          attrs: canonicalAttrs({
+            end: sopNaive(pick(row, /окончан|end/i)),
+            status: pick(row, /статус|status/i),
+          }),
         });
       }
       // Без периода нет стабильного id. Пропущены все строки непустого ответа — колонка не распознана:
@@ -194,7 +220,11 @@ function elkSchedule(deps: ClientDeps): SourceExtractor {
             scope: "schedule",
             kind: isExamType(type) ? "exam" : "lesson",
             title: name,
-            attrs: canonicalAttrs({ end, auditorium: normText(l.auditorium), building: normText(l.building) }),
+            attrs: canonicalAttrs({
+              end,
+              auditorium: normText(l.auditorium),
+              building: normText(l.building),
+            }),
             at: begin,
             matchKey: `${name}|${type}`,
           });
@@ -203,7 +233,10 @@ function elkSchedule(deps: ClientDeps): SourceExtractor {
       // `from` — полночь локальная (МСК пользователя): границы покрытия — по локальным компонентам даты.
       return {
         facts: stableDedupe(facts),
-        coverage: { from: `${formatLocalDate(from, "-")}T00:00`, to: `${formatLocalDate(to, "-")}T23:59` },
+        coverage: {
+          from: `${formatLocalDate(from, "-")}T00:00`,
+          to: `${formatLocalDate(to, "-")}T23:59`,
+        },
         warnings: skippedWarning(skipped, "занятий расписания ЕЛК"),
       };
     },
@@ -263,11 +296,22 @@ function elkNotifications(deps: ClientDeps): SourceExtractor {
           const at = /^\d{4}-\d{2}-\d{2}(?!\d)/.test(raw) ? raw.slice(0, 10) : utcMinute(raw);
           if (at === null) return [];
           const title = normText(n.title);
-          return [{ id: String(n.id), scope: "inbox", kind: "notification", title, attrs: canonicalAttrs({ title }), at }];
+          return [
+            {
+              id: String(n.id),
+              scope: "inbox",
+              kind: "notification",
+              title,
+              attrs: canonicalAttrs({ title }),
+              at,
+            },
+          ];
         })
       );
       assertDatesParsed(res.notifications.length, facts.length);
-      const full = res.notifications.length >= INBOX_NOTIFICATIONS_LIMIT || res.count > res.notifications.length;
+      const full =
+        res.notifications.length >= INBOX_NOTIFICATIONS_LIMIT ||
+        res.count > res.notifications.length;
       return {
         facts,
         coverage: { from: full ? minString(facts.map((f) => f.at as string)) : null, to: null },
@@ -315,11 +359,21 @@ function elkClaims(deps: ClientDeps): SourceExtractor {
 
 /** Шесть источников областей `deadlines`, `schedule`, `inbox`, `claims`. */
 export function singleExtractors(deps: ClientDeps = realClients): SourceExtractor[] {
-  return [lmsCalendar(deps), elkWindows(deps), elkSchedule(deps), lmsMessages(deps), elkNotifications(deps), elkClaims(deps)];
+  return [
+    lmsCalendar(deps),
+    elkWindows(deps),
+    elkSchedule(deps),
+    lmsMessages(deps),
+    elkNotifications(deps),
+    elkClaims(deps),
+  ];
 }
 
 /** Оценки одного курса (`lms_grades:<id>`). Нераспознанная таблица — ошибка источника, а не ложные события. */
-export function gradesExtractor(course: CourseOverview, deps: ClientDeps = realClients): SourceExtractor {
+export function gradesExtractor(
+  course: CourseOverview,
+  deps: ClientDeps = realClients
+): SourceExtractor {
   return {
     source: `lms_grades:${course.id}`,
     scope: "grades",

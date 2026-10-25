@@ -19,14 +19,24 @@ export interface SourceOutcome<T> {
   status: SourceStatus;
 }
 
-export function withTimeout<T>(promise: Promise<T>, ms: number, name: string, signal?: AbortSignal): Promise<T> {
+export function withTimeout<T>(
+  promise: Promise<T>,
+  ms: number,
+  name: string,
+  signal?: AbortSignal
+): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   let onAbort: (() => void) | undefined;
   const guard = new Promise<never>((_, reject) => {
-    timer = setTimeout(() => reject(new Error(`источник ${name} не ответил за ${ms / 1000} с`)), ms);
+    timer = setTimeout(
+      () => reject(new Error(`источник ${name} не ответил за ${ms / 1000} с`)),
+      ms
+    );
     if (signal) {
       onAbort = () =>
-        reject(signal.reason instanceof Error ? signal.reason : new Error(`источник ${name} отменён`));
+        reject(
+          signal.reason instanceof Error ? signal.reason : new Error(`источник ${name} отменён`)
+        );
       if (signal.aborted) onAbort();
       else signal.addEventListener("abort", onAbort, { once: true });
     }
@@ -60,7 +70,11 @@ export async function runSource<T extends { warnings?: string[] }>(
     return {
       name,
       value: null,
-      status: { status: "error", error: err instanceof Error ? err.message : String(err), ms: Date.now() - started },
+      status: {
+        status: "error",
+        error: err instanceof Error ? err.message : String(err),
+        ms: Date.now() - started,
+      },
     };
   }
 }

@@ -62,7 +62,11 @@ export function registerLmsTools(server: McpServer): void {
         "Список элементов курса SmartLMS (файлы, задания, тесты, форумы и т.п.) по id курса " +
         "(см. lms_list_courses). Возвращает тип, название и ссылку каждого элемента.",
       inputSchema: {
-        courseId: z.number().int().positive().describe("id курса на edu.hse.ru (course/view.php?id=...)"),
+        courseId: z
+          .number()
+          .int()
+          .positive()
+          .describe("id курса на edu.hse.ru (course/view.php?id=...)"),
       },
     },
     async ({ courseId }) => runTool(() => lms.getCourseMaterials(courseId))
@@ -105,7 +109,9 @@ export function registerLmsTools(server: McpServer): void {
         "авторизованной сессией и вернуть видимый текст и ссылки. Полезно для сценариев, не покрытых " +
         "готовыми тулами.",
       inputSchema: {
-        path: z.string().describe("Относительный путь на edu.hse.ru, напр. /calendar/view.php?view=month"),
+        path: z
+          .string()
+          .describe("Относительный путь на edu.hse.ru, напр. /calendar/view.php?view=month"),
       },
     },
     async ({ path }) => runTool(() => lms.openPage(path))
@@ -147,7 +153,11 @@ export function registerLmsTools(server: McpServer): void {
           .min(1)
           .max(10)
           .describe("Имена файлов из папки «исходящих» (только имя, без пути)."),
-        text: z.string().max(100_000).optional().describe("Онлайн-текст: НЕ поддерживается, вызов будет отклонён."),
+        text: z
+          .string()
+          .max(100_000)
+          .optional()
+          .describe("Онлайн-текст: НЕ поддерживается, вызов будет отклонён."),
         ...CONFIRM_SCHEMA,
       },
       annotations: WRITE_ANNOTATIONS,

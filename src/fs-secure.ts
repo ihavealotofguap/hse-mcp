@@ -15,7 +15,10 @@ export function windowsAccount(env: NodeJS.ProcessEnv = process.env): string | n
 function icaclsOwnerOnly(path: string, grant: string): void {
   const account = windowsAccount();
   if (!account || !fs.existsSync(path)) return;
-  execFileSync("icacls", [path, "/grant:r", `${account}:${grant}`, "/inheritance:r"], { stdio: "ignore", windowsHide: true });
+  execFileSync("icacls", [path, "/grant:r", `${account}:${grant}`, "/inheritance:r"], {
+    stdio: "ignore",
+    windowsHide: true,
+  });
 }
 
 /**

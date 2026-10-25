@@ -4,9 +4,15 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-const { signPreview, verifyPreview, tokenIdOf, targetIdOf, loadOrCreateKey, PREVIEW_TTL_MS, writesDir } = await import(
-  new URL("../dist/services/writes/token.js", import.meta.url).href
-);
+const {
+  signPreview,
+  verifyPreview,
+  tokenIdOf,
+  targetIdOf,
+  loadOrCreateKey,
+  PREVIEW_TTL_MS,
+  writesDir,
+} = await import(new URL("../dist/services/writes/token.js", import.meta.url).href);
 
 const KEY = Buffer.alloc(32, 7);
 const NOW = new Date("2026-01-01T12:00:00Z");
@@ -65,13 +71,19 @@ test("токен submit не подходит к delete", () => {
 
 test("другой ключ — mismatch", () => {
   const token = signPreview(KEY, payload(), NOW);
-  assert.deepEqual(verifyPreview(Buffer.alloc(32, 8), token, payload(), NOW), { ok: false, reason: "mismatch" });
+  assert.deepEqual(verifyPreview(Buffer.alloc(32, 8), token, payload(), NOW), {
+    ok: false,
+    reason: "mismatch",
+  });
 });
 
 test("срок: +16 мин — expired, +14 мин — ok", () => {
   assert.equal(PREVIEW_TTL_MS, 15 * 60_000);
   const token = signPreview(KEY, payload(), NOW);
-  assert.deepEqual(verifyPreview(KEY, token, payload(), minutes(16)), { ok: false, reason: "expired" });
+  assert.deepEqual(verifyPreview(KEY, token, payload(), minutes(16)), {
+    ok: false,
+    reason: "expired",
+  });
   assert.equal(verifyPreview(KEY, token, payload(), minutes(14)).ok, true);
 });
 
@@ -79,27 +91,52 @@ test("граница срока: ровно 15:00.000 принимается (с
   const token = signPreview(KEY, payload(), NOW);
   const at = (ms) => new Date(NOW.getTime() + ms);
   assert.equal(verifyPreview(KEY, token, payload(), at(PREVIEW_TTL_MS)).ok, true);
-  assert.deepEqual(verifyPreview(KEY, token, payload(), at(PREVIEW_TTL_MS + 1)), { ok: false, reason: "expired" });
-  assert.deepEqual(verifyPreview(KEY, token, payload(), at(PREVIEW_TTL_MS + 60_000)), { ok: false, reason: "expired" });
+  assert.deepEqual(verifyPreview(KEY, token, payload(), at(PREVIEW_TTL_MS + 1)), {
+    ok: false,
+    reason: "expired",
+  });
+  assert.deepEqual(verifyPreview(KEY, token, payload(), at(PREVIEW_TTL_MS + 60_000)), {
+    ok: false,
+    reason: "expired",
+  });
 });
 
 test("токен из далёкого будущего (> now + 60 с) — expired, перекос часов до 60 с допустим", () => {
   const future = (ms) => signPreview(KEY, payload(), new Date(NOW.getTime() + ms));
   assert.equal(verifyPreview(KEY, future(60_000), payload(), NOW).ok, true);
-  assert.deepEqual(verifyPreview(KEY, future(61_000), payload(), NOW), { ok: false, reason: "expired" });
-  assert.deepEqual(verifyPreview(KEY, future(10 * 60_000), payload(), NOW), { ok: false, reason: "expired" });
+  assert.deepEqual(verifyPreview(KEY, future(61_000), payload(), NOW), {
+    ok: false,
+    reason: "expired",
+  });
+  assert.deepEqual(verifyPreview(KEY, future(10 * 60_000), payload(), NOW), {
+    ok: false,
+    reason: "expired",
+  });
 });
 
 test("неканоническое время выпуска — malformed: ведущие нули, > 2^53, слишком длинное", () => {
   const token = signPreview(KEY, payload(), NOW);
   const [sec, hash] = token.split(".");
-  const bad = [`0${sec}.${hash}`, `00.${hash}`, `${"9".repeat(16)}.${hash}`, `${"1".repeat(17)}.${hash}`, `9007199254740992.${hash}`];
+  const bad = [
+    `0${sec}.${hash}`,
+    `00.${hash}`,
+    `${"9".repeat(16)}.${hash}`,
+    `${"1".repeat(17)}.${hash}`,
+    `9007199254740992.${hash}`,
+  ];
   for (const b of bad) {
-    assert.deepEqual(verifyPreview(KEY, b, payload(), NOW), { ok: false, reason: "malformed" }, b.slice(0, 20));
+    assert.deepEqual(
+      verifyPreview(KEY, b, payload(), NOW),
+      { ok: false, reason: "malformed" },
+      b.slice(0, 20)
+    );
     assert.equal(tokenIdOf(b), null, b.slice(0, 20));
   }
   // "0" само по себе — каноническое число (но подпись не сойдётся)
-  assert.deepEqual(verifyPreview(KEY, `0.${hash}`, payload(), NOW), { ok: false, reason: "mismatch" });
+  assert.deepEqual(verifyPreview(KEY, `0.${hash}`, payload(), NOW), {
+    ok: false,
+    reason: "mismatch",
+  });
 });
 
 test("signPreview: Invalid Date — понятная ошибка, а не токен «NaN.…»", () => {
@@ -107,8 +144,21 @@ test("signPreview: Invalid Date — понятная ошибка, а не то�
 });
 
 test("мусор и пустая строка — malformed", () => {
-  for (const bad of ["garbage", "1.zz", "", ".", "1.", `.${"a".repeat(64)}`, `x.${"a".repeat(64)}`, `1.${"a".repeat(63)}`]) {
-    assert.deepEqual(verifyPreview(KEY, bad, payload(), NOW), { ok: false, reason: "malformed" }, JSON.stringify(bad));
+  for (const bad of [
+    "garbage",
+    "1.zz",
+    "",
+    ".",
+    "1.",
+    `.${"a".repeat(64)}`,
+    `x.${"a".repeat(64)}`,
+    `1.${"a".repeat(63)}`,
+  ]) {
+    assert.deepEqual(
+      verifyPreview(KEY, bad, payload(), NOW),
+      { ok: false, reason: "malformed" },
+      JSON.stringify(bad)
+    );
     assert.equal(tokenIdOf(bad), null, JSON.stringify(bad));
   }
 });
@@ -118,13 +168,19 @@ test("подмена хеша той же длины — mismatch", () => {
   const [sec, hash] = token.split(".");
   const flipped = (hash[0] === "0" ? "1" : "0") + hash.slice(1);
   assert.equal(flipped.length, hash.length);
-  assert.deepEqual(verifyPreview(KEY, `${sec}.${flipped}`, payload(), NOW), { ok: false, reason: "mismatch" });
+  assert.deepEqual(verifyPreview(KEY, `${sec}.${flipped}`, payload(), NOW), {
+    ok: false,
+    reason: "mismatch",
+  });
 });
 
 test("подмена времени выпуска в токене — mismatch", () => {
   const token = signPreview(KEY, payload(), NOW);
   const [sec, hash] = token.split(".");
-  assert.deepEqual(verifyPreview(KEY, `${Number(sec) + 1}.${hash}`, payload(), NOW), { ok: false, reason: "mismatch" });
+  assert.deepEqual(verifyPreview(KEY, `${Number(sec) + 1}.${hash}`, payload(), NOW), {
+    ok: false,
+    reason: "mismatch",
+  });
 });
 
 test("два signPreview с разным now дают разные токены", () => {
