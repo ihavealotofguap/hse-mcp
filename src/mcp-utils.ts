@@ -4,6 +4,17 @@ export interface ToolTextResult {
   isError?: boolean;
 }
 
+/**
+ * Аннотации тулов чтения: только читают внешние системы ВШЭ, ответ которых меняется со временем.
+ * Аннотации тулов записи — `WRITE_ANNOTATIONS` в `services/writes/gate.ts`.
+ */
+export const READ_ANNOTATIONS = {
+  readOnlyHint: true,
+  destructiveHint: false,
+  idempotentHint: true,
+  openWorldHint: true,
+} as const;
+
 function toText(data: unknown): string {
   if (typeof data === "string") return data;
   // JSON.stringify(undefined, ...) возвращает undefined, а не строку — нарушало бы контракт

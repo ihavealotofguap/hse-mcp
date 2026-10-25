@@ -1,7 +1,7 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { config } from "../../config.js";
-import { runTool } from "../../mcp-utils.js";
+import { READ_ANNOTATIONS, runTool } from "../../mcp-utils.js";
 import { CONFIRM_SCHEMA, noteWritesDisabled, WRITE_ANNOTATIONS } from "../writes/gate.js";
 import { defineWrite } from "../writes/runner.js";
 import * as lms from "./client.js";
@@ -20,6 +20,7 @@ export function registerLmsTools(server: McpServer): void {
         "категория, даты начала/окончания, процент прохождения, избранное/скрытое. Требует " +
         "входа через единый SSO ВШЭ (выполняется автоматически, credentials из .env).",
       inputSchema: {},
+      annotations: READ_ANNOTATIONS,
     },
     async () => runTool(() => lms.listCourses())
   );
@@ -36,6 +37,7 @@ export function registerLmsTools(server: McpServer): void {
       inputSchema: {
         limit: z.number().int().min(1).max(200).default(50).describe("Максимум писем"),
       },
+      annotations: READ_ANNOTATIONS,
     },
     async ({ limit }) => runTool(() => lms.listMessages(limit))
   );
@@ -50,6 +52,7 @@ export function registerLmsTools(server: McpServer): void {
       inputSchema: {
         messageId: z.number().int().positive().describe("id письма (из lms_list_messages)"),
       },
+      annotations: READ_ANNOTATIONS,
     },
     async ({ messageId }) => runTool(() => lms.getMessage(messageId))
   );
@@ -68,6 +71,7 @@ export function registerLmsTools(server: McpServer): void {
           .positive()
           .describe("id курса на edu.hse.ru (course/view.php?id=...)"),
       },
+      annotations: READ_ANNOTATIONS,
     },
     async ({ courseId }) => runTool(() => lms.getCourseMaterials(courseId))
   );
@@ -80,6 +84,7 @@ export function registerLmsTools(server: McpServer): void {
       inputSchema: {
         courseId: z.number().int().positive().describe("id курса на edu.hse.ru"),
       },
+      annotations: READ_ANNOTATIONS,
     },
     async ({ courseId }) => runTool(() => lms.listAssignments(courseId))
   );
@@ -96,6 +101,7 @@ export function registerLmsTools(server: McpServer): void {
       inputSchema: {
         courseId: z.number().int().positive().describe("id курса на edu.hse.ru"),
       },
+      annotations: READ_ANNOTATIONS,
     },
     async ({ courseId }) => runTool(() => lms.getGrades(courseId))
   );
@@ -113,6 +119,7 @@ export function registerLmsTools(server: McpServer): void {
           .string()
           .describe("Относительный путь на edu.hse.ru, напр. /calendar/view.php?view=month"),
       },
+      annotations: READ_ANNOTATIONS,
     },
     async ({ path }) => runTool(() => lms.openPage(path))
   );

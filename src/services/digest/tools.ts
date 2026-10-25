@@ -1,6 +1,6 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { runTool } from "../../mcp-utils.js";
+import { READ_ANNOTATIONS, runTool } from "../../mcp-utils.js";
 import * as digest from "./client.js";
 
 const RESULT_NOTE =
@@ -22,6 +22,7 @@ export function registerDigestTools(server: McpServer): void {
         "ЕЛК. " +
         RESULT_NOTE,
       inputSchema: {},
+      annotations: READ_ANNOTATIONS,
     },
     async () => runTool(() => digest.getToday())
   );
@@ -36,6 +37,7 @@ export function registerDigestTools(server: McpServer): void {
         "my_today. " +
         RESULT_NOTE,
       inputSchema: {},
+      annotations: READ_ANNOTATIONS,
     },
     async () => runTool(() => digest.getWeek())
   );
@@ -62,6 +64,7 @@ export function registerDigestTools(server: McpServer): void {
               "источники фильтром не ограничиваются."
           ),
       },
+      annotations: READ_ANNOTATIONS,
     },
     async ({ days, courses }) => runTool(() => digest.getDeadlines({ days, courses }))
   );

@@ -1,6 +1,6 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { runTool } from "../../mcp-utils.js";
+import { READ_ANNOTATIONS, runTool } from "../../mcp-utils.js";
 import * as changes from "./client.js";
 
 const SCOPE = z.enum(["deadlines", "schedule", "inbox", "claims", "grades"]);
@@ -8,6 +8,16 @@ const SCOPE = z.enum(["deadlines", "schedule", "inbox", "claims", "grades"]);
 /** "7d", "12h" (до 4 цифр) или любая дата, которую разбирает `Date.parse`. */
 const isSince = (v: string): boolean =>
   /^\d{1,4}[dh]$/.test(v.trim()) || !Number.isNaN(Date.parse(v));
+
+// Сброс стирает локальную базу снимков без возможности вернуть её: следующий hse_changes начнёт
+// с baseline и не покажет изменений, случившихся до сброса, поэтому destructive. Повторный сброс
+// той же области ничего не меняет (idempotent); внешние системы не трогаются (closed world).
+const RESET_ANNOTATIONS = {
+  readOnlyHint: false,
+  destructiveHint: true,
+  idempotentHint: true,
+  openWorldHint: false,
+} as const;
 
 export function registerChangesTools(server: McpServer): void {
   server.registerTool(
@@ -73,6 +83,7 @@ export function registerChangesTools(server: McpServer): void {
               "является. События до ackSeq считаются полученными и больше не возвращаются."
           ),
       },
+      annotations: READ_ANNOTATIONS,
     },
     async ({ scopes, courses, fresh, since, ack }, extra) =>
       runTool(
@@ -94,6 +105,7 @@ export function registerChangesTools(server: McpServer): void {
         scope: SCOPE.optional().describe("Область; без неё — все."),
         confirm: z.boolean().describe("Должно быть true: подтверждение стирания."),
       },
+      annotations: RESET_ANNOTATIONS,
     },
     async ({ scope, confirm }) => runTool(() => changes.resetChanges({ scope, confirm }))
   );

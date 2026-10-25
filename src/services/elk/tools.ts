@@ -2,7 +2,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { config } from "../../config.js";
 import { addDays } from "../../date-utils.js";
-import { runTool } from "../../mcp-utils.js";
+import { READ_ANNOTATIONS, runTool } from "../../mcp-utils.js";
 import { CONFIRM_SCHEMA, noteWritesDisabled, WRITE_ANNOTATIONS } from "../writes/gate.js";
 import { defineWrite } from "../writes/runner.js";
 import { certificateAdapter } from "./certificate.js";
@@ -29,6 +29,7 @@ export function registerElkTools(server: McpServer): void {
           .default(7)
           .describe("На сколько дней вперёд от сегодня"),
       },
+      annotations: READ_ANNOTATIONS,
     },
     async ({ daysAhead }) =>
       runTool(async () => {
@@ -47,6 +48,7 @@ export function registerElkTools(server: McpServer): void {
         "email, роли (студент/ДПО и т.п.). Не содержит академическую карточку (рейтинг, группа, " +
         "факультет) — за ней используйте elk_get_academic_data.",
       inputSchema: {},
+      annotations: READ_ANNOTATIONS,
     },
     async () => runTool(() => elk.getUserInfo())
   );
@@ -60,6 +62,7 @@ export function registerElkTools(server: McpServer): void {
         "рейтинг, GPA, кредиты, КУД, программа обучения, факультет, курс, группа, форма и " +
         "уровень обучения, статус. Структурированная замена разделу profile в elk_get_section.",
       inputSchema: {},
+      annotations: READ_ANNOTATIONS,
     },
     async () => runTool(() => elk.getAcademicData())
   );
@@ -80,6 +83,7 @@ export function registerElkTools(server: McpServer): void {
         query: z.string().min(1).describe("Поисковый запрос, напр. 'справка' или 'стипендия'"),
         limit: z.number().int().min(1).max(50).default(10).describe("Максимум результатов"),
       },
+      annotations: READ_ANNOTATIONS,
     },
     async ({ query, limit }) => runTool(() => elk.searchServices(query, limit))
   );
@@ -96,6 +100,7 @@ export function registerElkTools(server: McpServer): void {
       inputSchema: {
         limit: z.number().int().min(1).max(500).default(500).describe("Максимум заявок"),
       },
+      annotations: READ_ANNOTATIONS,
     },
     async ({ limit }) => runTool(() => elk.listRequests(limit))
   );
@@ -110,6 +115,7 @@ export function registerElkTools(server: McpServer): void {
       inputSchema: {
         limit: z.number().int().min(1).max(100).default(20).describe("Максимум уведомлений"),
       },
+      annotations: READ_ANNOTATIONS,
     },
     async ({ limit }) => runTool(() => elk.getNotifications(limit))
   );
@@ -148,6 +154,7 @@ export function registerElkTools(server: McpServer): void {
           .optional()
           .describe("Только для login_history: смещение для пагинации (по умолчанию 0)"),
       },
+      annotations: READ_ANNOTATIONS,
     },
     async ({ section, limit, offset }) => runTool(() => elk.getSection(section, { limit, offset }))
   );
@@ -172,6 +179,7 @@ export function registerElkTools(server: McpServer): void {
             "Относительный путь на lk.hse.ru, напр. /claim или /student-services?section=documents"
           ),
       },
+      annotations: READ_ANNOTATIONS,
     },
     async ({ path }) => runTool(() => elk.openPage(path))
   );
