@@ -126,47 +126,67 @@ export async function buildDigest(
   };
 }
 
-export function getToday(now: Date = new Date()): Promise<DigestResult> {
+export function getToday(
+  now: Date = new Date(),
+  src: Collectors = realCollectors
+): Promise<DigestResult> {
   const from = startOfDay(now);
   const todayEnd = endOfDay(now);
   const tomorrowEnd = endOfDay(addDays(now, 1));
-  return buildDigest({
-    now,
-    window: { from, to: tomorrowEnd },
-    schedule: { range: { from, to: tomorrowEnd }, lessonsUntil: todayEnd, examsUntil: tomorrowEnd },
-    deadlinesUntil: tomorrowEnd,
-    includeUndated: false,
-    include: { lmsMessages: true, notifications: true, claims: true, tasks: true },
-  });
+  return buildDigest(
+    {
+      now,
+      window: { from, to: tomorrowEnd },
+      schedule: {
+        range: { from, to: tomorrowEnd },
+        lessonsUntil: todayEnd,
+        examsUntil: tomorrowEnd,
+      },
+      deadlinesUntil: tomorrowEnd,
+      includeUndated: false,
+      include: { lmsMessages: true, notifications: true, claims: true, tasks: true },
+    },
+    src
+  );
 }
 
-export function getWeek(now: Date = new Date()): Promise<DigestResult> {
+export function getWeek(
+  now: Date = new Date(),
+  src: Collectors = realCollectors
+): Promise<DigestResult> {
   const from = startOfDay(now);
   const end = endOfDay(addDays(now, 6)); // сегодня + 6 дней = 7 дней
-  return buildDigest({
-    now,
-    window: { from, to: end },
-    schedule: { range: { from, to: end }, lessonsUntil: end, examsUntil: end },
-    deadlinesUntil: end,
-    includeUndated: false,
-    include: { lmsMessages: false, notifications: false, claims: false, tasks: false },
-  });
+  return buildDigest(
+    {
+      now,
+      window: { from, to: end },
+      schedule: { range: { from, to: end }, lessonsUntil: end, examsUntil: end },
+      deadlinesUntil: end,
+      includeUndated: false,
+      include: { lmsMessages: false, notifications: false, claims: false, tasks: false },
+    },
+    src
+  );
 }
 
 export function getDeadlines(
   opts: { days?: number; courses?: CourseFilter } = {},
-  now: Date = new Date()
+  now: Date = new Date(),
+  src: Collectors = realCollectors
 ): Promise<DigestResult> {
   const from = startOfDay(now);
   const end = endOfDay(addDays(now, opts.days ?? 14));
-  return buildDigest({
-    now,
-    window: { from, to: end },
-    // Расписание нужно только ради экзаменов/зачётов — обычные занятия отбрасываются.
-    schedule: { range: { from, to: end }, lessonsUntil: null, examsUntil: end },
-    deadlinesUntil: end,
-    courses: opts.courses,
-    includeUndated: true,
-    include: { lmsMessages: false, notifications: false, claims: true, tasks: true },
-  });
+  return buildDigest(
+    {
+      now,
+      window: { from, to: end },
+      // Расписание нужно только ради экзаменов/зачётов — обычные занятия отбрасываются.
+      schedule: { range: { from, to: end }, lessonsUntil: null, examsUntil: end },
+      deadlinesUntil: end,
+      courses: opts.courses,
+      includeUndated: true,
+      include: { lmsMessages: false, notifications: false, claims: true, tasks: true },
+    },
+    src
+  );
 }
