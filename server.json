@@ -1,0 +1,40 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.ihavealotofguap/hsemcp",
+  "title": "HSE SmartLMS and personal account",
+  "description": "HSE University (NIU VShE) SmartLMS and personal account (lk.hse.ru) via browser SSO",
+  "repository": {
+    "url": "https://github.com/ihavealotofguap/hsemcp",
+    "source": "github"
+  },
+  "version": "0.1.0",
+  "packages": [
+    {
+      "registryType": "npm",
+      "identifier": "hsemcp",
+      "version": "0.1.0",
+      "transport": {
+        "type": "stdio"
+      },
+      "environmentVariables": [
+        {
+          "name": "HSE_EMAIL",
+          "description": "HSE login (login@edu.hse.ru)",
+          "isRequired": true,
+          "format": "string"
+        },
+        {
+          "name": "HSE_PASSWORD",
+          "description": "HSE password; or store it in the system keychain: npx hsemcp credentials set",
+          "isSecret": true,
+          "format": "string"
+        },
+        {
+          "name": "HSE_ENABLE_WRITES",
+          "description": "true enables tools that submit data to SmartLMS and ELK (off by default)",
+          "format": "boolean"
+        }
+      ]
+    }
+  ]
+}

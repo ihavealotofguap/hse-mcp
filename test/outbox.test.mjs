@@ -178,10 +178,15 @@ test("maxBytes: файл больше лимита — отказ, не боль
   }
 });
 
-test("несуществующая папка — отказ без пути", async () => {
+test("несуществующая папка создаётся, если есть родитель; иначе — отказ без пути", async () => {
   const s = setup();
   try {
-    await assertRefused(["a.txt"], { dir: path.join(s.root, "no-such-dir") });
+    const created = path.join(s.root, "new-outbox");
+    await assertRefused(["a.txt"], { dir: created }, /файл №1: не найден/i);
+    assert.ok(fs.statSync(created).isDirectory());
+    const orphan = path.join(s.root, "no-such-parent", "outbox");
+    await assertRefused(["a.txt"], { dir: orphan }, /недоступна/);
+    assert.equal(fs.existsSync(orphan), false);
   } finally {
     s.cleanup();
   }
@@ -491,12 +496,37 @@ test("isInsideDir: граница по разделителю, регистр, �
   }
 });
 
+test("каталог данных вне проекта (пакет .mcpb, npx): закрыт так же, как storage", async () => {
+  const s = setup();
+  try {
+    const fakeRoot = path.join(s.root, "install");
+    const data = path.join(s.root, "data");
+    fs.mkdirSync(fakeRoot);
+    fs.mkdirSync(path.join(data, "writes"), { recursive: true });
+    fs.mkdirSync(path.join(data, "outbox"));
+    fs.writeFileSync(path.join(data, "writes", "key"), "0".repeat(64));
+    fs.writeFileSync(path.join(data, "outbox", "ok.txt"), "ok");
+    const refusal = /Папка «исходящих» настроена неверно/;
+    const opts = { projectRoot: fakeRoot, dataDir: data };
+    await assertRefused(["key"], { ...opts, dir: path.join(data, "writes") }, refusal);
+    await assertRefused(["writes"], { ...opts, dir: data }, refusal);
+    await assertRefused(["a.txt"], { ...opts, dir: fakeRoot }, refusal);
+    const files = await resolveOutboxFiles(["ok.txt"], { ...opts, dir: path.join(data, "outbox") });
+    assert.equal(files[0].name, "ok.txt");
+  } finally {
+    s.cleanup();
+  }
+});
+
 test("config.outboxDir: по умолчанию storage/outbox, HSE_OUTBOX_DIR абсолютный и относительный", () => {
   const saved = process.env.HSE_OUTBOX_DIR;
   try {
     delete process.env.HSE_OUTBOX_DIR;
     assert.equal(config.outboxDir, path.join(projectRoot, "storage", "outbox"));
     process.env.HSE_OUTBOX_DIR = "   ";
+    assert.equal(config.outboxDir, path.join(projectRoot, "storage", "outbox"));
+    // хост .mcpb не подставил значение пустого поля
+    process.env.HSE_OUTBOX_DIR = `$${"{"}user_config.outbox_dir}`;
     assert.equal(config.outboxDir, path.join(projectRoot, "storage", "outbox"));
     const abs = path.join(os.tmpdir(), "hsemcp-outbox-abs");
     process.env.HSE_OUTBOX_DIR = abs;

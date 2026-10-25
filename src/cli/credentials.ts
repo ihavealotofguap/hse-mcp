@@ -22,7 +22,8 @@ export interface CliDeps {
   err(line: string): void;
 }
 
-const USAGE = "Использование: npm run credentials:set | credentials:clear | credentials:status";
+const USAGE =
+  "Использование: hsemcp credentials set | clear | status (из клона: npm run credentials:set | credentials:clear | credentials:status)";
 
 // Сообщения об ошибках хранилища нарочно не выводим: в них могут оказаться учётная запись или значение.
 async function setPassword(deps: CliDeps): Promise<number> {
@@ -224,11 +225,12 @@ export function createStdinIo(
   };
 }
 
-async function main(): Promise<void> {
+/** Команда с настоящим хранилищем и терминалом; возвращает код выхода. */
+export async function credentialsCommand(argv: string[]): Promise<number> {
   // Конфигурация подключается здесь, а не в начале файла: проверкам нужен только `runCli`.
   const { credentialInputs, optionalEmail } = await import("../config.js");
   const io = createStdinIo(process.stdin, process.stderr);
-  const code = await runCli(process.argv.slice(2), {
+  return runCli(argv, {
     env: credentialInputs.env,
     dotenv: credentialInputs.dotenv,
     dotenvFile: credentialInputs.dotenvFile,
@@ -239,12 +241,14 @@ async function main(): Promise<void> {
     out: (line) => console.log(line),
     err: (line) => console.error(line),
   });
-  process.exit(code);
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  main().catch(() => {
-    console.error("команда завершилась ошибкой");
-    process.exit(1);
-  });
+  credentialsCommand(process.argv.slice(2)).then(
+    (code) => process.exit(code),
+    () => {
+      console.error("команда завершилась ошибкой");
+      process.exit(1);
+    }
+  );
 }

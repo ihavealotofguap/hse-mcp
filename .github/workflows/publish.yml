@@ -1,0 +1,200 @@
+name: Publish
+
+# Публикация в npm (trusted publishing, без токена), реестр MCP (GitHub OIDC) и пакет Claude Desktop
+# (.mcpb) в GitHub Release.
+# - push в master с изменениями в src/ или manifest.json: patch-релиз сам — коммит «Release X.Y.Z» и
+#   тег vX.Y.Z.
+#   Если версию в package.json подняли вручную и её ещё нет в npm, публикуется она без бампа.
+# - Тег vX.Y.Z: публикуется версия из тега.
+# - Ручной запуск (workflow_dispatch) делает то же, что push, и дотягивает реестр MCP.
+on:
+  push:
+    branches: [master]
+    tags: ["v*"]
+    paths: ["src/**", "package.json", "server.json", "manifest.json"]
+  workflow_dispatch:
+
+permissions:
+  # write — для коммита «Release X.Y.Z» и тега.
+  contents: write
+  id-token: write
+
+# Релизы по очереди: два параллельных бампа выдали бы одну версию.
+concurrency:
+  group: publish
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    # Ручной запуск — только с master: иначе с любой ветки уйдёт в npm неопубликованная версия.
+    if: github.ref_type == 'tag' || github.ref == 'refs/heads/master'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Теги и история нужны, чтобы сравнить src/ и manifest.json с последним релизом.
+          fetch-depth: 0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+          package-manager-cache: false
+
+      - name: Check versions
+        id: version
+        run: |
+          VERSION="$(node -p "require('./package.json').version")"
+          test "$(jq -r .version server.json)" = "$VERSION"
+          test "$(jq -r '.packages[0].version' server.json)" = "$VERSION"
+          test "$(jq -r .version manifest.json)" = "$VERSION"
+          if [ "$GITHUB_REF_TYPE" = tag ]; then test "${GITHUB_REF_NAME#v}" = "$VERSION"; fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      # Сравниваем с тегом текущей версии, а не с прошлым коммитом: если релиз однажды не
+      # прошёл, следующий запуск всё равно увидит невыпущенные изменения.
+      - name: Plan release
+        id: plan
+        if: github.ref_type != 'tag'
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          if ! npm view "hsemcp@$VERSION" version >/dev/null 2>&1; then
+            echo "$VERSION ещё нет в npm, публикую без бампа"
+            echo "release=true" >> "$GITHUB_OUTPUT"
+          elif git rev-parse -q --verify "refs/tags/v$VERSION" >/dev/null &&
+            git diff --quiet "v$VERSION" HEAD -- src manifest.json; then
+            echo "src/ и manifest.json не менялись с v$VERSION, релиз не нужен"
+            echo "release=false" >> "$GITHUB_OUTPUT"
+          else
+            NEW="$(npm version patch --no-git-tag-version | sed 's/^v//')"
+            jq --arg v "$NEW" '.version = $v | .packages[0].version = $v' server.json > server.tmp
+            mv server.tmp server.json
+            # В manifest.json правим только первую строку версии (верхний уровень), не трогая формат.
+            sed -i "0,/\"version\": \"$VERSION\"/s//\"version\": \"$NEW\"/" manifest.json
+            echo "Бамп $VERSION → $NEW"
+            echo "version=$NEW" >> "$GITHUB_OUTPUT"
+            echo "bump=true" >> "$GITHUB_OUTPUT"
+            echo "release=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - run: npm ci
+        if: steps.plan.outputs.release != 'false' || github.event_name == 'workflow_dispatch'
+      - run: npm test
+        if: steps.plan.outputs.release != 'false' || github.event_name == 'workflow_dispatch'
+      # Пакет Claude Desktop собирается до коммита релиза: если сборка упадёт, ни тега, ни npm не будет.
+      - run: npm run pack:mcpb
+        if: steps.plan.outputs.release != 'false' || github.event_name == 'workflow_dispatch'
+
+      # Коммит и тег создаются через API: такой коммит GitHub подписывает сам, и тег в списке
+      # помечен Verified. Master двигаем до публикации и без force: если он уже ушёл вперёд,
+      # шаг упадёт и в npm ничего не уйдёт. Изменения через GITHUB_TOKEN не запускают workflow.
+      - name: Commit and tag release
+        if: steps.plan.outputs.release == 'true'
+        env:
+          VERSION: ${{ steps.plan.outputs.version || steps.version.outputs.version }}
+          BUMP: ${{ steps.plan.outputs.bump }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          API="repos/$GITHUB_REPOSITORY/git"
+          SHA="$(git rev-parse HEAD)"
+          if [ "$BUMP" = true ]; then
+            TREE="$(jq -n --arg base "$(git rev-parse 'HEAD^{tree}')" \
+              --rawfile pkg package.json --rawfile lock package-lock.json --rawfile srv server.json \
+              --rawfile mf manifest.json \
+              '{base_tree: $base, tree: [
+                {path: "package.json", mode: "100644", type: "blob", content: $pkg},
+                {path: "package-lock.json", mode: "100644", type: "blob", content: $lock},
+                {path: "server.json", mode: "100644", type: "blob", content: $srv},
+                {path: "manifest.json", mode: "100644", type: "blob", content: $mf}]}' |
+              gh api "$API/trees" --input - --jq .sha)"
+            SHA="$(jq -n --arg tree "$TREE" --arg parent "$SHA" --arg msg "Release $VERSION" \
+              '{message: $msg, tree: $tree, parents: [$parent]}' |
+              gh api "$API/commits" --input - --jq .sha)"
+            gh api -X PATCH "$API/refs/heads/master" -f sha="$SHA" -F force=false >/dev/null
+          fi
+          if ! git ls-remote --exit-code --tags origin "refs/tags/v$VERSION" >/dev/null; then
+            gh api "$API/refs" -f ref="refs/tags/v$VERSION" -f sha="$SHA" >/dev/null
+          fi
+
+      - name: Publish to npm
+        if: steps.plan.outputs.release != 'false' || github.event_name == 'workflow_dispatch'
+        env:
+          VERSION: ${{ steps.plan.outputs.version || steps.version.outputs.version }}
+        run: |
+          if npm view "hsemcp@$VERSION" version >/dev/null 2>&1; then
+            echo "hsemcp@$VERSION уже в npm, пропускаю"
+          else
+            npm publish --provenance --access public
+          fi
+
+      # Реестр MCP проверяет версию в npm, а свежий релиз появляется там не сразу.
+      - name: Wait for npm
+        if: steps.plan.outputs.release != 'false' || github.event_name == 'workflow_dispatch'
+        env:
+          VERSION: ${{ steps.plan.outputs.version || steps.version.outputs.version }}
+        run: |
+          for i in $(seq 1 30); do
+            npm view "hsemcp@$VERSION" version --prefer-online >/dev/null 2>&1 && exit 0
+            sleep 10
+          done
+          echo "hsemcp@$VERSION не появился в npm за 5 минут" >&2
+          exit 1
+
+      # Реестр не принимает версию повторно, а ручной запуск доходит сюда и без нового релиза.
+      - name: Check MCP registry
+        id: registry
+        if: steps.plan.outputs.release != 'false' || github.event_name == 'workflow_dispatch'
+        env:
+          VERSION: ${{ steps.plan.outputs.version || steps.version.outputs.version }}
+        run: |
+          NAME="$(jq -r .name server.json | jq -Rr @uri)"
+          if curl -fsS -o /dev/null "https://registry.modelcontextprotocol.io/v0/servers/$NAME/versions/$VERSION"; then
+            echo "$VERSION уже в реестре MCP, пропускаю"
+            echo "published=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "published=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      # Версия и sha256 закреплены: бинарник запускается в джобе с id-token: write. При обновлении
+      # хеш брать из registry_<версия>_checksums.txt того же релиза.
+      - name: Install mcp-publisher
+        if: steps.registry.outputs.published == 'false'
+        env:
+          MCP_PUBLISHER_VERSION: v1.8.4
+          MCP_PUBLISHER_SHA256: 5dc2fd415369c73551259f31cd33e2aacc9e0d1021e7f08fef1492d93b781628
+        run: |
+          curl -fsSL -o mcp-publisher.tar.gz \
+            "https://github.com/modelcontextprotocol/registry/releases/download/$MCP_PUBLISHER_VERSION/mcp-publisher_linux_amd64.tar.gz"
+          echo "$MCP_PUBLISHER_SHA256  mcp-publisher.tar.gz" | sha256sum -c -
+          tar xzf mcp-publisher.tar.gz mcp-publisher
+      - run: ./mcp-publisher login github-oidc
+        if: steps.registry.outputs.published == 'false'
+      - run: ./mcp-publisher publish
+        if: steps.registry.outputs.published == 'false'
+
+      # Релиз на GitHub для каждого тега, у которого его ещё нет: заодно дотягивает старые теги.
+      # Список изменений GitHub собирает сам из PR с прошлого тега; Latest — только у старшей версии.
+      - name: Create GitHub releases
+        if: steps.plan.outputs.release != 'false' || github.event_name == 'workflow_dispatch'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          TAGS="$(gh api "repos/$GH_REPO/tags" --paginate --jq '.[].name' | grep '^v' | sort -V)"
+          HAVE="$(gh release list --limit 1000 --json tagName --jq '.[].tagName')"
+          NEWEST="$(echo "$TAGS" | tail -n 1)"
+          for TAG in $TAGS; do
+            if echo "$HAVE" | grep -qxF "$TAG"; then continue; fi
+            LATEST=false
+            if [ "$TAG" = "$NEWEST" ]; then LATEST=true; fi
+            gh release create "$TAG" --verify-tag --generate-notes --title "$TAG" --latest="$LATEST"
+          done
+
+      # Пакет текущей версии — к её релизу; повторный запуск заменяет файл тем же содержимым.
+      - name: Attach mcpb to the release
+        if: steps.plan.outputs.release != 'false' || github.event_name == 'workflow_dispatch'
+        env:
+          VERSION: ${{ steps.plan.outputs.version || steps.version.outputs.version }}
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: gh release upload "v$VERSION" "build/hsemcp-$VERSION.mcpb" --clobber

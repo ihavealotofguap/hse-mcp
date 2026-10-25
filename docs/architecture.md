@@ -46,14 +46,18 @@ src/auth, src/cli)       блокировки файлов, учётные да�
 
 ```
 src/
-  index.ts                 McpServer, регистрация тулов, закрытие браузера по SIGINT/SIGTERM
+  index.ts                 McpServer, регистрация тулов, закрытие браузера по SIGINT/SIGTERM;
+                           подкоманды исполняемого файла (cli/commands.ts)
   config.ts                .env и переменные окружения (ленивые геттеры)
-  credentials.ts, cli/     пароль: окружение → системное хранилище → .env; CLI credentials:set
+  data-dir.ts              каталог данных: HSE_DATA_DIR, storage/ клона или каталог пользователя
+  credentials.ts, cli/     пароль: окружение → системное хранилище → .env; hsemcp credentials,
+                           hsemcp install-browser
   auth/browser-session.ts  общий Playwright-браузер и SSO ВШЭ (withPage)
+  auth/browser-launch.ts   выбор браузера: Chromium Playwright → Edge/Chrome → скачивание Chromium
   limiter.ts, breaker.ts   потолок страниц и запросов; выключатель прямого пути ЕЛК
   resource.ts, cache.ts    кэшируемые ресурсы (defineResource) поверх кэша в памяти
   commit.ts, fs-lock.ts,   точка невозврата для записи; блокировки и атомарная запись файлов;
-  fs-secure.ts             права на файлы в storage/
+  fs-secure.ts             права на файлы в каталоге данных
   dom-utils.ts, url-utils.ts  разбор страниц (extractTable, dumpPage) и проверка URL
   mcp-utils.ts             runTool(): результат → компактный JSON (объект — ещё и structuredContent),
                            исключение → isError; READ_ANNOTATIONS
@@ -71,7 +75,9 @@ src/
     system/    hse_clear_cache
 test/          node:test, без сети и браузера; architecture.test.mjs — правила слоёв
 docs/          требования, архитектура, статус, спецификации и планы подпроектов
-storage/       локальные данные пользователя (в .gitignore)
+scripts/       pack-mcpb.mjs — сборка пакета Claude Desktop (.mcpb)
+manifest.json  манифест .mcpb; server.json — реестр MCP
+storage/       каталог данных клона (в .gitignore); у .mcpb и npx — каталог пользователя
 ```
 
 ## Как устроен сервис
@@ -102,7 +108,11 @@ storage/       локальные данные пользователя (в .git
 - **SmartLMS и ЕЛК** (`services/lms/`, `services/elk/`) — через общий Playwright-браузер
   `src/auth/browser-session.ts` (через `withPage`), который проходит единый SSO ВШЭ
   (Keycloak, `saml.hse.ru`, realm `hse`) при первом обращении и переиспользует контекст/сессию
-  между вызовами тулов (`storage/hse-session.json` — переживает перезапуск сервера). SmartLMS —
+  между вызовами тулов (`hse-session.json` каталога данных — переживает перезапуск сервера).
+  Браузер выбирает `auth/browser-launch.ts`: скачанный Playwright Chromium, затем системный Edge или
+  Chrome (`channel`, headless), а если нет ни одного — Chromium скачивается в фоне
+  (`playwright install --only-shell chromium` отдельным процессом), и вызов просит повторить позже.
+  Неверный пароль распознаётся по сообщению Keycloak на новой странице формы. SmartLMS —
   Moodle; парсинг материалов/заданий/оценок опирается на стандартные Moodle URL-паттерны
   (`/mod/<type>/view.php?id=`), а не на CSS-классы (тема оформления ВШЭ кастомизирована).
   ЕЛК (`lk.hse.ru`) вне `/profile` не имеет документированной структуры, поэтому его тулы
@@ -174,9 +184,9 @@ storage/       локальные данные пользователя (в .git
   проверяет чтением, новая запись по цели требует `acknowledgeUnknown: true` и ручной проверки сайта.
   Одновременно — одна запись на процесс. Журнал: 90 дней, ≤ 200 записей, только технические поля
   (`at, op, tokenId, targetId, stage, outcome?, durationMs?, errorClass?`), без содержимого, имён
-  файлов, ФИО и id. Папка «исходящих» — `storage/outbox/` или `HSE_OUTBOX_DIR`: ≤ 10 файлов, только
-  имена без путей, обычные непустые файлы, `realpath` внутри папки; папка не может быть корнем проекта
-  или `storage` либо содержать их (допустима только `storage/outbox`); файлы не перемещаются и не
+  файлов, ФИО и id. Папка «исходящих» — `outbox/` каталога данных или `HSE_OUTBOX_DIR` (создаётся, если есть
+  родитель): ≤ 10 файлов, только имена без путей, обычные непустые файлы, `realpath` внутри папки; папка
+  не может быть корнем проекта или каталогом данных либо содержать их (допустима только его `outbox/`); файлы не перемещаются и не
   удаляются, отправляемые байты сверяются с sha256 из сухого прогона, файл крупнее 64 МиБ отклоняется
   (результат нельзя проверить). Запись идёт через `defineResource` с `cache: false` (без кэша и
   дедупликации; `invalidates` сбрасывает `lms.assignments`/`lms.calendar` после точки невозврата при
@@ -193,6 +203,26 @@ storage/       локальные данные пользователя (в .git
 потому что сторонние хосты (Claude Desktop и т.п.) запускают stdio-сервер с произвольным рабочим
 каталогом. Обязательные значения (`HSE_EMAIL` и пароль: окружение, системное хранилище или `.env`) читаются лениво
 через геттеры и бросают понятную ошибку при отсутствии.
+
+Каталог данных (`src/data-dir.ts`): `HSE_DATA_DIR`, иначе `storage/` в корне проекта, если там есть
+`.git` или уже есть `storage/`, иначе каталог пользователя (`%LOCALAPPDATA%\hsemcp`,
+`~/Library/Application Support/hsemcp`, `~/.local/share/hsemcp`). Пакет `.mcpb` и npx ставятся в папку,
+которую хост может пересоздать при обновлении, и журнал записей с сессией пропали бы вместе с ней.
+
+### Распространение
+
+- **Пакет Claude Desktop** — `manifest.json` (`server.type: node`, `dist/index.js`); `user_config`:
+  email и пароль (`sensitive`, оба обязательны), галочка записи (`false` по умолчанию), папка
+  «исходящих» (`${DOCUMENTS}/hsemcp-outbox`). Значения приходят в окружение (`HSE_EMAIL`,
+  `HSE_PASSWORD`, `HSE_ENABLE_WRITES`, `HSE_OUTBOX_DIR`), системное хранилище выключено
+  (`HSE_DISABLE_KEYCHAIN=true`); неподставленное значение вида `${…}` считается незаданным.
+  `npm run pack:mcpb` собирает пакет из `dist/` и production-зависимостей без необязательных
+  (`@napi-rs/keyring` — платформенный бинарник, в пакете не нужен) и проверяет манифест CLI `mcpb`.
+  `test/manifest.test.mjs` сверяет манифест с `package.json` и тулами сервера.
+- **npm** (`npx -y hsemcp`) — `files: ["dist"]`, `bin` с shebang; пароль — `hsemcp credentials set`.
+- **Релиз** — `.github/workflows/publish.yml` по образцу hse-ruz-mcp: patch-бамп при изменениях
+  `src/` или `manifest.json`, npm (trusted publishing), реестр MCP (`server.json`), GitHub Release с
+  прикреплённым `.mcpb`. CI собирает пакет на каждом PR.
 
 ### Надёжность и скорость
 
@@ -278,11 +308,11 @@ storage/       локальные данные пользователя (в .git
 - **`.mcpb`** ([modelcontextprotocol/mcpb](https://github.com/modelcontextprotocol/mcpb)): установка
   двойным щелчком в Claude Desktop, поля `user_config` (строка с `sensitive: true` хранится
   защищённо), Node.js поставляется с Claude для macOS и Windows; браузер для Playwright в пакет не
-  входит — этот вопрос не проверен.
+  входит — берётся системный Edge или Chrome либо скачивается (см. «Распространение»).
 
-Что из этого берём в следующие шаги (объединение тулов ЕЛК, аннотации и `outputSchema` уже сделаны):
-описание тула как объект с регистрацией списком; тест-снимок схем тулов; распространение через npx
-и `.mcpb`.
+Что из этого берём в следующие шаги (объединение тулов ЕЛК, аннотации и `outputSchema`,
+распространение через npx и `.mcpb` уже сделаны): описание тула как объект с регистрацией списком;
+тест-снимок схем тулов.
 
 ## Roadmap
 

@@ -6,6 +6,7 @@ import {
   loadKeyStore,
   lookupPassword,
 } from "./credentials.js";
+import { dataDir } from "./data-dir.js";
 import { projectRoot } from "./project-root.js";
 
 // Ищем .env рядом с проектом, а не в process.cwd() — иначе при запуске сервера
@@ -49,7 +50,7 @@ function resolvePassword(): string {
   });
   if (password === null) {
     throw new Error(
-      "Не найден пароль ВШЭ: выполните npm run credentials:set (системное хранилище) или задайте HSE_PASSWORD в .env."
+      "Не найден пароль ВШЭ: укажите его в настройках расширения hsemcp, выполните hsemcp credentials set (из клона — npm run credentials:set) или задайте HSE_PASSWORD."
     );
   }
   if (source === "dotenv" && !dotenvWarned) {
@@ -72,10 +73,13 @@ export const config = {
   get browserHeadless(): boolean {
     return process.env.HSE_BROWSER_HEADLESS !== "false";
   },
-  /** Папка «исходящих»: `HSE_OUTBOX_DIR` (абсолютный путь или относительно корня проекта), иначе `storage/outbox`. */
+  /** Папка «исходящих»: `HSE_OUTBOX_DIR` (абсолютный путь или относительно корня проекта), иначе `outbox` в каталоге данных. */
   get outboxDir(): string {
     const value = process.env.HSE_OUTBOX_DIR?.trim();
-    return value ? path.resolve(projectRoot, value) : path.join(projectRoot, "storage", "outbox");
+    // `${…}` — хост `.mcpb` не подставил значение (поле не заполнено): считаем, что папка не задана.
+    return value && !value.includes("${")
+      ? path.resolve(projectRoot, value)
+      : path.join(dataDir(), "outbox");
   },
   /** Тулы записи — opt-in: включены только при `HSE_ENABLE_WRITES=true` (без учёта регистра и пробелов). */
   get writesEnabled(): boolean {

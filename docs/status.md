@@ -14,6 +14,8 @@
 | Каркас записи | — | `services/writes/` | `runner`, `token`, `journal`, `outbox`, `tools-gating` | да |
 | Запись в SmartLMS | `lms_submit_assignment`, `lms_delete_submission` | `services/lms/submissions/` | `submissions-pure` | да, один аккаунт, один семестр |
 | Заказ справки в ЕЛК | `elk_order_certificate` | `services/elk/certificate/` | `certificate-pure` | один заказ; тул всегда отвечает `unknown`, исход проверяется вручную |
+| Выбор браузера, каталог данных | — | `src/auth/browser-launch.ts`, `src/data-dir.ts` | `browser-launch`, `data-dir` | нет: Edge, Chrome и скачивание Chromium на Windows и macOS не проверялись |
+| Пакет Claude Desktop, npm | — | `manifest.json`, `scripts/pack-mcpb.mjs`, `.github/workflows/publish.yml` | `manifest`; сборка пакета в CI | нет: установка `.mcpb` в Claude Desktop не проверялась |
 | Архитектура | — | — | `architecture`: импорты соблюдают слои | — |
 | Оформление тулов | все | `src/mcp-utils.ts`, `*/tools.ts` | `tools-annotations`: аннотации у каждого тула, `runTool`, `outputSchema` на типичных ответах, `tools/list` через stdio | — |
 
@@ -27,3 +29,5 @@
 - Нет тестов разбора страниц LMS и ЕЛК на сохранённых HTML-образцах.
 - `outputSchema` есть только у основных тулов (`elk_get_schedule`, `my_today`, `my_week`,
   `my_deadlines`, `lms_list_assignments`, `lms_list_courses`); у остальных ответ описан только текстом.
+- Распознавание неверного пароля по сообщению Keycloak (`#input-error`, `.kc-feedback-text`,
+  `.alert-error`) на теме ВШЭ вживую не проверено.

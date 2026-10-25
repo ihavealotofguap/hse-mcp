@@ -181,9 +181,9 @@ test("контроль шпиона: настоящее открытие стр�
   const before = launches;
   const result = await client.callTool({ name: "lms_open_page", arguments: { path: "/" } });
   assert.equal(result.isError, true);
-  assert.equal(
-    launches,
-    before + 1,
+  // Больше одного: после сбоя запуска перебираются и системные браузеры (browser-launch.ts).
+  assert.ok(
+    launches > before,
     "шпион на chromium.launch не сработал — проверка выше ничего не доказывает"
   );
 });
@@ -354,7 +354,7 @@ test("elk_order_certificate: пустой fields не отклоняется з�
     arguments: { serviceId: 1, fields: {} },
   });
   assert.equal(result.isError, true);
-  assert.equal(launches, before + 1, "форма должна открываться: запуск браузера отклонён шпионом");
+  assert.ok(launches > before, "форма должна открываться: запуск браузера отклонён шпионом");
   assert.match(result.content[0].text, /форма заказа справки/);
   assert.doesNotMatch(result.content[0].text, /не заданы обязательные поля|fields/);
 });

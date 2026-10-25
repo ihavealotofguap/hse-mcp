@@ -1,10 +1,27 @@
 {
   "name": "hsemcp",
   "version": "0.1.0",
-  "description": "MCP server for HSE (NIU VShE) student infrastructure: SmartLMS, ELK",
+  "description": "MCP server for HSE University (NIU VShE) student services: SmartLMS (edu.hse.ru) and the personal account (lk.hse.ru)",
+  "mcpName": "io.github.ihavealotofguap/hsemcp",
+  "keywords": [
+    "mcp",
+    "mcp-server",
+    "model-context-protocol",
+    "hse",
+    "smartlms",
+    "moodle",
+    "claude"
+  ],
+  "homepage": "https://github.com/ihavealotofguap/hsemcp#readme",
+  "bugs": {
+    "url": "https://github.com/ihavealotofguap/hsemcp/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ihavealotofguap/hsemcp.git"
+  },
   "type": "module",
   "license": "MIT",
-  "private": true,
   "engines": {
     "node": ">=22"
   },
@@ -12,6 +29,9 @@
   "bin": {
     "hsemcp": "dist/index.js"
   },
+  "files": [
+    "dist"
+  ],
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "start": "node dist/index.js",
@@ -21,7 +41,9 @@
     "test": "npm run build && node --import ./test/setup-env.mjs --test \"test/*.test.mjs\"",
     "credentials:set": "node dist/cli/credentials.js set",
     "credentials:clear": "node dist/cli/credentials.js clear",
-    "credentials:status": "node dist/cli/credentials.js status"
+    "credentials:status": "node dist/cli/credentials.js status",
+    "prepublishOnly": "npm test",
+    "pack:mcpb": "npm run build && node scripts/pack-mcpb.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.12.0",
@@ -30,6 +52,7 @@
     "zod": "^3.23.8"
   },
   "devDependencies": {
+    "@anthropic-ai/mcpb": "2.1.2",
     "@biomejs/biome": "2.6.3",
     "@types/node": "^22.20.5",
     "typescript": "^5.5.4"

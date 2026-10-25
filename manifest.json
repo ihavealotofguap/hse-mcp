@@ -1,0 +1,93 @@
+{
+  "$schema": "https://raw.githubusercontent.com/modelcontextprotocol/mcpb/main/schemas/mcpb-manifest-v0.3.schema.json",
+  "manifest_version": "0.3",
+  "name": "hsemcp",
+  "display_name": "ВШЭ: SmartLMS и ЕЛК",
+  "version": "0.1.0",
+  "description": "Курсы, задания, оценки и почта SmartLMS (edu.hse.ru), расписание, заявки и данные ЕЛК (lk.hse.ru) — через единый вход ВШЭ.",
+  "long_description": "Локальный MCP-сервер для студентов НИУ ВШЭ. Входит в SmartLMS и ЕЛК вашим логином через браузер (Microsoft Edge, Google Chrome или скачанный при первом запуске Chromium), без окна на экране. Пароль хранится в системной связке ключей и передаётся только на сайт входа ВШЭ. Тулы, которые что-то отправляют (сдача заданий, заказ справки), по умолчанию выключены. Неофициальный проект, с ВШЭ не связан.",
+  "author": {
+    "name": "ihavealotofguap",
+    "url": "https://github.com/ihavealotofguap"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/ihavealotofguap/hsemcp"
+  },
+  "homepage": "https://github.com/ihavealotofguap/hsemcp#readme",
+  "support": "https://github.com/ihavealotofguap/hsemcp/issues",
+  "license": "MIT",
+  "keywords": ["hse", "вшэ", "smartlms", "moodle", "лк"],
+  "server": {
+    "type": "node",
+    "entry_point": "dist/index.js",
+    "mcp_config": {
+      "command": "node",
+      "args": ["${__dirname}/dist/index.js"],
+      "env": {
+        "HSE_EMAIL": "${user_config.email}",
+        "HSE_PASSWORD": "${user_config.password}",
+        "HSE_ENABLE_WRITES": "${user_config.enable_writes}",
+        "HSE_OUTBOX_DIR": "${user_config.outbox_dir}",
+        "HSE_DISABLE_KEYCHAIN": "true"
+      }
+    }
+  },
+  "user_config": {
+    "email": {
+      "type": "string",
+      "title": "Email ВШЭ",
+      "description": "Логин единого входа ВШЭ, например ivanov@edu.hse.ru.",
+      "required": true
+    },
+    "password": {
+      "type": "string",
+      "title": "Пароль ВШЭ",
+      "description": "Пароль единого входа ВШЭ. Хранится в системной связке ключей и отправляется только на saml.hse.ru.",
+      "sensitive": true,
+      "required": true
+    },
+    "enable_writes": {
+      "type": "boolean",
+      "title": "Разрешить отправку данных",
+      "description": "Включает сдачу и удаление ответов на задания SmartLMS и заказ справок в ЕЛК (заказ необратим). Каждое действие всё равно требует вашего подтверждения.",
+      "default": false
+    },
+    "outbox_dir": {
+      "type": "directory",
+      "title": "Папка для сдачи заданий",
+      "description": "Только из этой папки берутся файлы для сдачи заданий. Создаётся сама.",
+      "default": "${DOCUMENTS}/hsemcp-outbox"
+    }
+  },
+  "tools_generated": true,
+  "tools": [
+    { "name": "lms_list_courses", "description": "Список курсов SmartLMS" },
+    { "name": "lms_list_messages", "description": "Входящие внутренней почты SmartLMS" },
+    { "name": "lms_get_message", "description": "Письмо внутренней почты SmartLMS" },
+    { "name": "lms_get_course_materials", "description": "Материалы курса" },
+    { "name": "lms_list_assignments", "description": "Задания курса" },
+    { "name": "lms_get_grades", "description": "Оценки по курсу" },
+    { "name": "lms_open_page", "description": "Открыть произвольную страницу SmartLMS" },
+    { "name": "elk_get_schedule", "description": "Расписание через ЕЛК" },
+    { "name": "elk_get_user_info", "description": "Данные аккаунта ЕЛК" },
+    { "name": "elk_get_academic_data", "description": "Академическая карточка ЕЛК" },
+    { "name": "elk_search_services", "description": "Поиск сервисов в каталоге ЕЛК" },
+    { "name": "elk_list_requests", "description": "История заявок в ЕЛК" },
+    { "name": "elk_get_notifications", "description": "Уведомления ЕЛК" },
+    { "name": "elk_get_section", "description": "Раздел ЕЛК" },
+    { "name": "elk_open_page", "description": "Открыть произвольную страницу ЕЛК" },
+    { "name": "hse_clear_cache", "description": "Сбросить кэш данных ВШЭ" },
+    { "name": "my_today", "description": "Сводка на сегодня" },
+    { "name": "my_week", "description": "Сводка на неделю" },
+    { "name": "my_deadlines", "description": "Дедлайны" },
+    { "name": "hse_changes", "description": "Что изменилось с прошлого раза" },
+    { "name": "hse_changes_reset", "description": "Сбросить накопленные изменения" }
+  ],
+  "compatibility": {
+    "platforms": ["darwin", "win32"],
+    "runtimes": {
+      "node": ">=22.0.0"
+    }
+  }
+}

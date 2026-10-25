@@ -10,17 +10,21 @@ import {
 } from "playwright";
 import { COMMIT_DEADLINE_MS } from "../commit.js";
 import { config } from "../config.js";
+import { dataDir } from "../data-dir.js";
 import { waitForRenderedBody } from "../dom-utils.js";
 import { ensurePrivateDir, restrictFile } from "../fs-secure.js";
 import { acquirePageSlot, LEASE_GRACE_MS, type PageSlotRelease } from "../limiter.js";
-import { projectRoot } from "../project-root.js";
+import { backgroundDownload, browserCandidates, launchWithFallback } from "./browser-launch.js";
 
-// Корень проекта берём из общего хелпера (от расположения файла, а не process.cwd()) — хосты вроде
-// Claude Desktop запускают stdio-сервер с произвольным (иногда непишущим, напр.
+// Каталог данных — от расположения проекта или каталога пользователя (data-dir.ts), а не process.cwd():
+// хосты вроде Claude Desktop запускают stdio-сервер с произвольным (иногда непишущим, напр.
 // C:\WINDOWS\system32) cwd, и mkdir там падает с EPERM.
-const STORAGE_DIR = path.join(projectRoot, "storage");
-const STORAGE_STATE_PATH = path.join(STORAGE_DIR, "hse-session.json");
+const storageStatePath = (): string => path.join(dataDir(), "hse-session.json");
 const KEYCLOAK_HOST = "saml.hse.ru";
+// Сообщение об ошибке входа в стандартных темах Keycloak (keycloak и keycloak.v2).
+const LOGIN_ERROR_SELECTOR = "#input-error, .kc-feedback-text, .alert-error";
+const LOGIN_FAILED_MESSAGE =
+  "Вход в ВШЭ не удался: Keycloak отклонил email или пароль — проверьте их в настройках hsemcp";
 
 /** Верхняя граница на всё в `withPage`: слот, открытие, вход и тело вызова. */
 export const PAGE_DEADLINE_MS = 45_000;
@@ -39,15 +43,24 @@ async function getContext(): Promise<BrowserContext> {
   if (!contextPromise) {
     contextPromise = (async () => {
       try {
-        ensurePrivateDir(STORAGE_DIR);
+        ensurePrivateDir(dataDir());
         if (!browserPromise) {
-          browserPromise = chromium.launch({ headless: config.browserHeadless }).catch((err) => {
+          const headless = config.browserHeadless;
+          const log = (line: string) => console.error(line);
+          browserPromise = launchWithFallback(
+            browserCandidates(process.env.HSE_BROWSER_CHANNEL, process.platform),
+            {
+              launch: (channel) => chromium.launch({ headless, channel }),
+              download: () => backgroundDownload(headless, log),
+              log,
+            }
+          ).catch((err) => {
             browserPromise = null;
             throw err;
           });
         }
         const browser = await browserPromise;
-        const storageState = fs.existsSync(STORAGE_STATE_PATH) ? STORAGE_STATE_PATH : undefined;
+        const storageState = fs.existsSync(storageStatePath()) ? storageStatePath() : undefined;
         return await browser.newContext({ storageState });
       } catch (err) {
         // Без сброса rejected promise остаётся закэширован навсегда (if (!contextPromise) не
@@ -87,7 +100,20 @@ function labelOf(url: string): string {
 async function performKeycloakLogin(page: Page): Promise<void> {
   await page.locator("#username").fill(config.hseEmail);
   await page.locator('input[name="password"]').fill(config.hsePassword);
+  // Неверный пароль: Keycloak отвечает той же формой с ошибкой. Ошибку ищем только на новой странице
+  // (после её load): сообщение, оставшееся с прошлой формы, иначе приняли бы за отказ. Селекторы —
+  // стандартных тем Keycloak; на теме ВШЭ вживую не проверены, без совпадения остаётся прежний таймаут.
+  const loaded = page.waitForEvent("load", { timeout: 20_000 });
   await page.getByRole("button", { name: "Войти" }).click();
+  await loaded;
+  if (hostnameOf(page.url()) === KEYCLOAK_HOST) {
+    const rejected = await page
+      .locator(LOGIN_ERROR_SELECTOR)
+      .first()
+      .isVisible()
+      .catch(() => false);
+    if (rejected) throw new Error(LOGIN_FAILED_MESSAGE);
+  }
   await page.waitForURL((url) => url.hostname !== KEYCLOAK_HOST, { timeout: 20_000 });
 }
 
@@ -175,10 +201,10 @@ async function needsLogin(page: Page): Promise<boolean> {
  */
 async function saveStorageState(context: BrowserContext): Promise<void> {
   const state = await context.storageState();
-  const tmp = `${STORAGE_STATE_PATH}.${process.pid}.tmp`;
+  const tmp = `${storageStatePath()}.${process.pid}.tmp`;
   fs.writeFileSync(tmp, JSON.stringify(state), { mode: 0o600 });
-  fs.renameSync(tmp, STORAGE_STATE_PATH);
-  restrictFile(STORAGE_STATE_PATH);
+  fs.renameSync(tmp, storageStatePath());
+  restrictFile(storageStatePath());
 }
 
 /**
