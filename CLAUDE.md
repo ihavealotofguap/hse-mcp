@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 hsemcp — локальный MCP-сервер (stdio) для инфраструктуры НИУ ВШЭ: SmartLMS (edu.hse.ru, Moodle) и
 Единый личный кабинет (lk.hse.ru). Оба сайта — через общий Playwright-браузер с единым SSO ВШЭ
-(Keycloak, `saml.hse.ru`). 30 тулов чтения и 3 тула записи (за `HSE_ENABLE_WRITES`).
+(Keycloak, `saml.hse.ru`). 21 тул чтения и 3 тула записи (за `HSE_ENABLE_WRITES`).
 
 Куда смотреть:
 
