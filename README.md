@@ -324,4 +324,4 @@ icacls .env /inheritance:r /grant:r "$($env:USERNAME):(F)"
 
 ## Лицензия
 
-Лицензия: MIT (см. `LICENSE`).
+[MIT](LICENSE)
