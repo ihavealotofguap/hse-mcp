@@ -175,8 +175,14 @@ export function readSecretFrom(
     };
     const onData = (chunk: Buffer): void => {
       for (const ch of chunk.toString("utf8")) {
-        if (ch === "\r" || ch === "\n") return finish(() => resolve(value));
-        if (ch === "\u0003") return finish(() => reject(new Error("прервано")));
+        if (ch === "\r" || ch === "\n") {
+          finish(() => resolve(value));
+          return;
+        }
+        if (ch === "\u0003") {
+          finish(() => reject(new Error("прервано")));
+          return;
+        }
         if (ch === "\u007f" || ch === "\b") value = value.slice(0, -1);
         else if (ch >= " ") value += ch;
       }
@@ -198,7 +204,10 @@ export function createStdinIo(
 ): { readLine(prompt: string): Promise<string>; readSecret(prompt: string): Promise<string> } {
   let shared: LineReader | null = null;
   const lazyShared: LineReader = {
-    readLine: (prompt) => (shared ??= createLineReader(input, output)).readLine(prompt),
+    readLine: (prompt) => {
+      shared ??= createLineReader(input, output);
+      return shared.readLine(prompt);
+    },
     close: () => shared?.close(),
   };
   return {

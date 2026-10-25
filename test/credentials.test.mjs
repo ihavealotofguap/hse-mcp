@@ -227,7 +227,7 @@ test("loadKeyStore: оборачивает Entry со службой hsemcp и �
 test("loadKeyStore: на Linux запись создаётся с secret-service; недоступен — null", async () => {
   const seen = [];
   class FakeEntry {
-    constructor(service, account, options) {
+    constructor(_service, _account, options) {
       seen.push(options);
     }
     getPassword() {

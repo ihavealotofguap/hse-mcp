@@ -339,18 +339,20 @@ test("abort вызывающего синхронно внутри load (до п
       defineResource({
         name: "t.syncabort1",
         cache: false,
-        load: (_a, _ctx) => (
-          ctrl.abort(new Error("отменено")), Promise.reject(new Error("после отмены"))
-        ),
+        load: (_a, _ctx) => {
+          ctrl.abort(new Error("отменено"));
+          return Promise.reject(new Error("после отмены"));
+        },
       }),
     кэшируемый: (ctrl) =>
       defineResource({
         name: "t.syncabort2",
         ttl: 1000,
         key: () => "k",
-        load: (_a, _ctx) => (
-          ctrl.abort(new Error("отменено")), Promise.reject(new Error("после отмены"))
-        ),
+        load: (_a, _ctx) => {
+          ctrl.abort(new Error("отменено"));
+          return Promise.reject(new Error("после отмены"));
+        },
       }),
   };
   for (const [label, make] of Object.entries(variants)) {

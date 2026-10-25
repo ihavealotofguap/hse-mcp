@@ -39,7 +39,7 @@ function takeSlot(signal?: AbortSignal): Promise<void> {
     const onAbort = () => {
       const i = waiters.indexOf(waiter);
       if (i >= 0) waiters.splice(i, 1);
-      reject(abortReason(signal!));
+      if (signal) reject(abortReason(signal));
     };
     const waiter: Waiter = {
       grant: () => {
@@ -65,7 +65,7 @@ function waitUntil(startAt: number, signal?: AbortSignal): Promise<void> {
   return new Promise<void>((resolve, reject) => {
     const onAbort = () => {
       clearTimeout(timer);
-      reject(abortReason(signal!));
+      if (signal) reject(abortReason(signal));
     };
     const timer = setTimeout(() => {
       signal?.removeEventListener("abort", onAbort);

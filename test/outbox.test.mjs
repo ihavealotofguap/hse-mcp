@@ -123,7 +123,7 @@ const BAD_NAMES = [
 ];
 
 for (const [name, hint] of BAD_NAMES) {
-  test(`отказ без имени в тексте: ${JSON.stringify(name.length > 20 ? name.slice(0, 5) + "…" : name)}`, async () => {
+  test(`отказ без имени в тексте: ${JSON.stringify(name.length > 20 ? `${name.slice(0, 5)}…` : name)}`, async () => {
     const s = setup();
     try {
       await assertRefused([name], { dir: s.dir }, hint);
@@ -470,9 +470,9 @@ test("storage — junction наружу: папка внутри цели juncti
 test("isInsideDir: граница по разделителю, регистр, хвостовой разделитель, корень", () => {
   const sep = path.sep;
   const base = process.platform === "win32" ? "C:\\box" : "/box";
-  assert.equal(isInsideDir(base, base + sep + "a.txt"), true);
-  assert.equal(isInsideDir(base + sep, base + sep + "a.txt"), true);
-  assert.equal(isInsideDir(base, base + "-evil" + sep + "a.txt"), false);
+  assert.equal(isInsideDir(base, `${base + sep}a.txt`), true);
+  assert.equal(isInsideDir(base + sep, `${base + sep}a.txt`), true);
+  assert.equal(isInsideDir(base, `${base}-evil${sep}a.txt`), false);
   assert.equal(isInsideDir(base, base), false);
   assert.equal(isInsideDir(base, path.dirname(base)), false);
   if (process.platform === "win32") {

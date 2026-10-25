@@ -24,12 +24,13 @@ export interface OutboxFile {
 // Служебные имена устройств Windows: открываются как устройство независимо от расширения.
 const RESERVED_RE = /^(con|prn|aux|nul|com[0-9¹²³]|lpt[0-9¹²³]|conin\$|conout\$)$/i;
 // Управляющие символы (включая NUL) и знаки, недопустимые в именах Windows; `/`, `\`, `:` — пути и потоки.
+// biome-ignore lint/suspicious/noControlCharactersInRegex: управляющие символы в именах файлов отклоняются намеренно.
 const BAD_CHAR_RE = /[\x00-\x1f<>"|?*/\\:]/;
 
 /** Приводит путь к виду для сравнения: без `\\?\`, нормализованный, на Windows без учёта регистра. */
 function comparable(p: string): string {
   let s = p;
-  if (s.startsWith("\\\\?\\UNC\\")) s = "\\\\" + s.slice(8);
+  if (s.startsWith("\\\\?\\UNC\\")) s = `\\\\${s.slice(8)}`;
   else if (s.startsWith("\\\\?\\")) s = s.slice(4);
   s = path.resolve(s);
   return process.platform === "win32" ? s.toLowerCase() : s;

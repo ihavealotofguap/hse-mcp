@@ -10,6 +10,7 @@
     "enabled": true,
     "rules": {
       "preset": "recommended",
+      "complexity": { "useMathMinMax": "off" },
       "performance": { "useDomNodeTextContent": "off" }
     }
   },

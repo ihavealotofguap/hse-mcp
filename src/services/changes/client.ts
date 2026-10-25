@@ -312,7 +312,8 @@ function applyAck(draft: State, scopes: Scope[], ack: number, warn: (w: string) 
  * Хранятся последние `ISSUES_MAX_ENTRIES` по величине `ackSeq`.
  */
 function recordIssue(draft: State, ackSeq: number, scopes: Scope[]): void {
-  const issues = (draft.issues ??= {});
+  draft.issues ??= {};
+  const issues = draft.issues;
   const key = String(ackSeq);
   const prev = issues[key];
   issues[key] = prev ? scopes.filter((s) => prev.includes(s)) : [...scopes];
