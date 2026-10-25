@@ -28,3 +28,7 @@ jobs:
         if: matrix.os == 'ubuntu-latest'
       # Браузер тестам не нужен: запуск Chromium подменён заглушкой, сети ВШЭ нет.
       - run: npm test
+      # Пакет Claude Desktop: манифест проходит проверку mcpb, в пакет не попадают .env, storage и
+      # хранилище паролей. Собирается на обеих ОС: скрипт должен работать и у разработчика на Windows.
+      - run: npm run pack:mcpb
+        if: matrix.node == 24
