@@ -7,7 +7,7 @@ import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 
 // Ключ и журнал записей — во временном каталоге; задаётся до импорта модулей.
-const dir = fs.mkdtempSync(path.join(os.tmpdir(), "hsemcp-gating-"));
+const dir = fs.mkdtempSync(path.join(os.tmpdir(), "hse-mcp-gating-"));
 process.env.HSE_WRITES_DIR = dir;
 
 // Перехват stderr: уведомление «тулы записи выключены» печатается один раз на экземпляр модуля.
@@ -202,16 +202,16 @@ test("уведомление «тулы записи выключены» печ
   await connect("true");
   assert.equal(writesOffNotices().length, total);
   for (const line of writesOffNotices())
-    assert.equal(line, "hsemcp: тулы записи выключены (HSE_ENABLE_WRITES не задан)");
+    assert.equal(line, "hse-mcp: тулы записи выключены (HSE_ENABLE_WRITES не задан)");
 });
 
 test("уведомление «тулы записи выключены»: свежий процесс, две регистрации с выключенным флагом — ровно одна строка", () => {
   const script = `
     const { McpServer } = await import("@modelcontextprotocol/sdk/server/mcp.js");
-    const { registerLmsTools } = await import(process.env.HSEMCP_TEST_TOOLS_URL);
+    const { registerLmsTools } = await import(process.env.HSE_MCP_TEST_TOOLS_URL);
     for (let i = 0; i < 2; i++) registerLmsTools(new McpServer({ name: "child", version: "0.0.0" }));
   `;
-  const childDir = fs.mkdtempSync(path.join(os.tmpdir(), "hsemcp-gating-child-"));
+  const childDir = fs.mkdtempSync(path.join(os.tmpdir(), "hse-mcp-gating-child-"));
   try {
     const res = spawnSync(process.execPath, ["--input-type=module", "-e", script], {
       cwd: fileURLToPath(new URL("..", import.meta.url)), // отсюда разрешается @modelcontextprotocol/sdk
@@ -219,14 +219,14 @@ test("уведомление «тулы записи выключены»: св�
         ...process.env,
         HSE_ENABLE_WRITES: "",
         HSE_WRITES_DIR: childDir,
-        HSEMCP_TEST_TOOLS_URL: new URL("../dist/services/lms/tools.js", import.meta.url).href,
+        HSE_MCP_TEST_TOOLS_URL: new URL("../dist/services/lms/tools.js", import.meta.url).href,
       },
       encoding: "utf8",
       timeout: 60_000,
     });
     assert.equal(res.status, 0, `дочерний процесс: ${res.stderr}`);
     const notices = res.stderr.split(/\r?\n/).filter((l) => /тулы записи выключены/.test(l));
-    assert.deepEqual(notices, ["hsemcp: тулы записи выключены (HSE_ENABLE_WRITES не задан)"]);
+    assert.deepEqual(notices, ["hse-mcp: тулы записи выключены (HSE_ENABLE_WRITES не задан)"]);
   } finally {
     fs.rmSync(childDir, { recursive: true, force: true });
   }
@@ -362,14 +362,14 @@ test("elk_order_certificate: пустой fields не отклоняется з�
 test("уведомление «тулы записи выключены»: LMS и ЕЛК в одном процессе — ровно одна строка", () => {
   const script = `
     const { McpServer } = await import("@modelcontextprotocol/sdk/server/mcp.js");
-    const { registerLmsTools } = await import(process.env.HSEMCP_TEST_LMS_URL);
-    const { registerElkTools } = await import(process.env.HSEMCP_TEST_ELK_URL);
+    const { registerLmsTools } = await import(process.env.HSE_MCP_TEST_LMS_URL);
+    const { registerElkTools } = await import(process.env.HSE_MCP_TEST_ELK_URL);
     for (let i = 0; i < 2; i++) {
       registerLmsTools(new McpServer({ name: "child", version: "0.0.0" }));
       registerElkTools(new McpServer({ name: "child", version: "0.0.0" }));
     }
   `;
-  const childDir = fs.mkdtempSync(path.join(os.tmpdir(), "hsemcp-gating-child-"));
+  const childDir = fs.mkdtempSync(path.join(os.tmpdir(), "hse-mcp-gating-child-"));
   try {
     const res = spawnSync(process.execPath, ["--input-type=module", "-e", script], {
       cwd: fileURLToPath(new URL("..", import.meta.url)),
@@ -377,15 +377,15 @@ test("уведомление «тулы записи выключены»: LMS �
         ...process.env,
         HSE_ENABLE_WRITES: "",
         HSE_WRITES_DIR: childDir,
-        HSEMCP_TEST_LMS_URL: new URL("../dist/services/lms/tools.js", import.meta.url).href,
-        HSEMCP_TEST_ELK_URL: new URL("../dist/services/elk/tools.js", import.meta.url).href,
+        HSE_MCP_TEST_LMS_URL: new URL("../dist/services/lms/tools.js", import.meta.url).href,
+        HSE_MCP_TEST_ELK_URL: new URL("../dist/services/elk/tools.js", import.meta.url).href,
       },
       encoding: "utf8",
       timeout: 60_000,
     });
     assert.equal(res.status, 0, `дочерний процесс: ${res.stderr}`);
     const notices = res.stderr.split(/\r?\n/).filter((l) => /тулы записи выключены/.test(l));
-    assert.deepEqual(notices, ["hsemcp: тулы записи выключены (HSE_ENABLE_WRITES не задан)"]);
+    assert.deepEqual(notices, ["hse-mcp: тулы записи выключены (HSE_ENABLE_WRITES не задан)"]);
   } finally {
     fs.rmSync(childDir, { recursive: true, force: true });
   }

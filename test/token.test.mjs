@@ -30,7 +30,7 @@ const payload = () => ({
 });
 
 function tmpDir() {
-  return fs.mkdtempSync(path.join(os.tmpdir(), "hsemcp-token-"));
+  return fs.mkdtempSync(path.join(os.tmpdir(), "hse-mcp-token-"));
 }
 
 test("verify(sign(p)) — ok, tokenId из 12 hex совпадает с tokenIdOf", () => {
@@ -260,7 +260,7 @@ test("targetIdOf: детерминирован, 12 hex, зависит от op, 
 test("writesDir: HSE_WRITES_DIR переопределяет каталог", () => {
   const saved = process.env.HSE_WRITES_DIR;
   try {
-    process.env.HSE_WRITES_DIR = path.join(os.tmpdir(), "hsemcp-writes-x");
+    process.env.HSE_WRITES_DIR = path.join(os.tmpdir(), "hse-mcp-writes-x");
     assert.equal(writesDir(), process.env.HSE_WRITES_DIR);
     delete process.env.HSE_WRITES_DIR;
     assert.match(writesDir().replaceAll("\\", "/"), /storage\/writes$/);

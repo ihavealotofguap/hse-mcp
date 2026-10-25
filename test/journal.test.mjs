@@ -5,7 +5,7 @@ import path from "node:path";
 import { test } from "node:test";
 
 // Каталог журнала — временный; задаётся до импорта модуля.
-const base = fs.mkdtempSync(path.join(os.tmpdir(), "hsemcp-journal-"));
+const base = fs.mkdtempSync(path.join(os.tmpdir(), "hse-mcp-journal-"));
 process.env.HSE_WRITES_DIR = path.join(base, "default");
 
 const {

@@ -35,5 +35,5 @@ let writesOffNoted = false;
 export function noteWritesDisabled(): void {
   if (writesOffNoted) return;
   writesOffNoted = true;
-  console.error("hsemcp: тулы записи выключены (HSE_ENABLE_WRITES не задан)");
+  console.error("hse-mcp: тулы записи выключены (HSE_ENABLE_WRITES не задан)");
 }

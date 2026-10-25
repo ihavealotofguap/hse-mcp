@@ -5,7 +5,7 @@ import path from "node:path";
 import { test } from "node:test";
 
 // Как в tools-gating: ключ записей во временном каталоге, браузер не запускается.
-const dir = fs.mkdtempSync(path.join(os.tmpdir(), "hsemcp-elk-section-"));
+const dir = fs.mkdtempSync(path.join(os.tmpdir(), "hse-mcp-elk-section-"));
 process.env.HSE_WRITES_DIR = dir;
 process.env.HSE_ENABLE_WRITES = "";
 // Логин нужен разделам на API ЕЛК (имя пользователя в запросе); пароль до запуска браузера не читается.

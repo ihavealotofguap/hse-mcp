@@ -7,7 +7,7 @@ const { resolveDataDir, dataDir } = await import(
 );
 const { projectRoot } = await import(new URL("../dist/project-root.js", import.meta.url).href);
 
-const root = path.resolve("/opt/hsemcp");
+const root = path.resolve("/opt/hse-mcp");
 const home = path.resolve("/home/student");
 const args = (over = {}) => ({
   env: {},
@@ -24,7 +24,7 @@ test("HSE_DATA_DIR: абсолютный как есть, относительн
   assert.equal(resolveDataDir(args({ env: { HSE_DATA_DIR: "data" } })), path.join(root, "data"));
   assert.equal(
     resolveDataDir(args({ env: { HSE_DATA_DIR: "  " } })),
-    path.join(home, ".local", "share", "hsemcp")
+    path.join(home, ".local", "share", "hse-mcp")
   );
 });
 
@@ -40,19 +40,19 @@ test("пакет без .git — каталог пользователя по п
     resolveDataDir(
       args({ platform: "win32", env: { LOCALAPPDATA: "C:\\Users\\s\\AppData\\Local" } })
     ),
-    path.join("C:\\Users\\s\\AppData\\Local", "hsemcp")
+    path.join("C:\\Users\\s\\AppData\\Local", "hse-mcp")
   );
   assert.equal(
     resolveDataDir(args({ platform: "win32" })),
-    path.join(home, "AppData", "Local", "hsemcp")
+    path.join(home, "AppData", "Local", "hse-mcp")
   );
   assert.equal(
     resolveDataDir(args({ platform: "darwin" })),
-    path.join(home, "Library", "Application Support", "hsemcp")
+    path.join(home, "Library", "Application Support", "hse-mcp")
   );
   assert.equal(
     resolveDataDir(args({ env: { XDG_DATA_HOME: "/xdg" } })),
-    path.join("/xdg", "hsemcp")
+    path.join("/xdg", "hse-mcp")
   );
 });
 

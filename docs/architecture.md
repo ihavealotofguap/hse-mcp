@@ -1,4 +1,4 @@
-# Архитектура hsemcp
+# Архитектура hse-mcp
 
 Как устроен код, где что лежит и по каким правилам добавлять новое. Что из этого покрыто тестами и
 проверено вживую — в [`status.md`](status.md); требования — в [`requirements.md`](requirements.md);
@@ -50,8 +50,8 @@ src/
                            подкоманды исполняемого файла (cli/commands.ts)
   config.ts                .env и переменные окружения (ленивые геттеры)
   data-dir.ts              каталог данных: HSE_DATA_DIR, storage/ клона или каталог пользователя
-  credentials.ts, cli/     пароль: окружение → системное хранилище → .env; hsemcp credentials,
-                           hsemcp install-browser
+  credentials.ts, cli/     пароль: окружение → системное хранилище → .env; hse-mcp credentials,
+                           hse-mcp install-browser
   auth/browser-session.ts  общий Playwright-браузер и SSO ВШЭ (withPage)
   auth/browser-launch.ts   выбор браузера: Chromium Playwright → Edge/Chrome → скачивание Chromium
   limiter.ts, breaker.ts   потолок страниц и запросов; выключатель прямого пути ЕЛК
@@ -207,21 +207,21 @@ storage/       каталог данных клона (в .gitignore); у .mcpb 
 через геттеры и бросают понятную ошибку при отсутствии.
 
 Каталог данных (`src/data-dir.ts`): `HSE_DATA_DIR`, иначе `storage/` в корне проекта, если там есть
-`.git` или уже есть `storage/`, иначе каталог пользователя (`%LOCALAPPDATA%\hsemcp`,
-`~/Library/Application Support/hsemcp`, `~/.local/share/hsemcp`). Пакет `.mcpb` и npx ставятся в папку,
+`.git` или уже есть `storage/`, иначе каталог пользователя (`%LOCALAPPDATA%\hse-mcp`,
+`~/Library/Application Support/hse-mcp`, `~/.local/share/hse-mcp`). Пакет `.mcpb` и npx ставятся в папку,
 которую хост может пересоздать при обновлении, и журнал записей с сессией пропали бы вместе с ней.
 
 ### Распространение
 
 - **Пакет Claude Desktop** — `manifest.json` (`server.type: node`, `dist/index.js`); `user_config`:
   email и пароль (`sensitive`, оба обязательны), галочка записи (`false` по умолчанию), папка
-  «исходящих» (`${DOCUMENTS}/hsemcp-outbox`). Значения приходят в окружение (`HSE_EMAIL`,
+  «исходящих» (`${DOCUMENTS}/hse-mcp-outbox`). Значения приходят в окружение (`HSE_EMAIL`,
   `HSE_PASSWORD`, `HSE_ENABLE_WRITES`, `HSE_OUTBOX_DIR`), системное хранилище выключено
   (`HSE_DISABLE_KEYCHAIN=true`); неподставленное значение вида `${…}` считается незаданным.
   `npm run pack:mcpb` собирает пакет из `dist/` и production-зависимостей без необязательных
   (`@napi-rs/keyring` — платформенный бинарник, в пакете не нужен) и проверяет манифест CLI `mcpb`.
   `test/manifest.test.mjs` сверяет манифест с `package.json` и тулами сервера.
-- **npm** (`npx -y hsemcp`) — `files: ["dist"]`, `bin` с shebang; пароль — `hsemcp credentials set`.
+- **npm** (`npx -y hse-mcp`) — `files: ["dist"]`, `bin` с shebang; пароль — `hse-mcp credentials set`.
 - **Релиз** — `.github/workflows/publish.yml` по образцу hse-ruz-mcp: patch-бамп при изменениях
   `src/` или `manifest.json`, npm (trusted publishing), реестр MCP (`server.json`), GitHub Release с
   прикреплённым `.mcpb`. CI собирает пакет на каждом PR.

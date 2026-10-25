@@ -50,7 +50,7 @@ function resolvePassword(): string {
   });
   if (password === null) {
     throw new Error(
-      "Не найден пароль ВШЭ: укажите его в настройках расширения hsemcp, выполните hsemcp credentials set (из клона — npm run credentials:set) или задайте HSE_PASSWORD."
+      "Не найден пароль ВШЭ: укажите его в настройках расширения hse-mcp, выполните hse-mcp credentials set (из клона — npm run credentials:set) или задайте HSE_PASSWORD."
     );
   }
   if (source === "dotenv" && !dotenvWarned) {

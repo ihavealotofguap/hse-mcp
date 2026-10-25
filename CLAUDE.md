@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## О проекте
 
-hsemcp — локальный MCP-сервер (stdio) для инфраструктуры НИУ ВШЭ: SmartLMS (edu.hse.ru, Moodle) и
+hse-mcp — локальный MCP-сервер (stdio) для инфраструктуры НИУ ВШЭ: SmartLMS (edu.hse.ru, Moodle) и
 Единый личный кабинет (lk.hse.ru). Оба сайта — через общий Playwright-браузер с единым SSO ВШЭ
 (Keycloak, `saml.hse.ru`). 21 тул чтения и 3 тула записи (за `HSE_ENABLE_WRITES`).
 
@@ -35,8 +35,8 @@ hsemcp — локальный MCP-сервер (stdio) для инфрастру
 - `npm run lint` — Biome (линтер и формат); `npm run format` — автоисправление.
 - `npx playwright install chromium` — один раз для живой работы LMS/ЕЛК (без него сервер берёт
   системный Edge или Chrome, иначе скачивает Chromium сам).
-- `npm run pack:mcpb` — пакет Claude Desktop в `build/hsemcp-<версия>.mcpb` (`manifest.json`).
-- Подключение: `claude mcp add hsemcp -- node <путь-к-проекту>/dist/index.js`; перед первым запуском
+- `npm run pack:mcpb` — пакет Claude Desktop в `build/hse-mcp-<версия>.mcpb` (`manifest.json`).
+- Подключение: `claude mcp add hse-mcp -- node <путь-к-проекту>/dist/index.js`; перед первым запуском
   `cp .env.example .env`, заполнить `HSE_EMAIL`, пароль — `npm run credentials:set`.
 - `HSE_ENABLE_WRITES=true` в `.env` включает `lms_submit_assignment`, `lms_delete_submission`,
   `elk_order_certificate` (читается при старте; без него их нет в `tools/list`).

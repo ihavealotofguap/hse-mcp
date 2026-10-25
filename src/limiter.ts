@@ -93,7 +93,7 @@ export async function acquirePageSlot(
     lease = setTimeout(() => {
       if (released) return;
       console.error(
-        `hsemcp: слот страницы удерживался дольше ${leaseMs} мс — освобождаю принудительно`
+        `hse-mcp: слот страницы удерживался дольше ${leaseMs} мс — освобождаю принудительно`
       );
       release();
     }, leaseMs);

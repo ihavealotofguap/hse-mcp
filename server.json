@@ -1,17 +1,17 @@
 {
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
-  "name": "io.github.ihavealotofguap/hsemcp",
+  "name": "io.github.ihavealotofguap/hse-mcp",
   "title": "HSE SmartLMS and personal account",
   "description": "HSE University (NIU VShE) SmartLMS and personal account (lk.hse.ru) via browser SSO",
   "repository": {
-    "url": "https://github.com/ihavealotofguap/hsemcp",
+    "url": "https://github.com/ihavealotofguap/hse-mcp",
     "source": "github"
   },
   "version": "0.1.0",
   "packages": [
     {
       "registryType": "npm",
-      "identifier": "hsemcp",
+      "identifier": "hse-mcp",
       "version": "0.1.0",
       "transport": {
         "type": "stdio"
@@ -25,7 +25,7 @@
         },
         {
           "name": "HSE_PASSWORD",
-          "description": "HSE password; or store it in the system keychain: npx hsemcp credentials set",
+          "description": "HSE password; or store it in the system keychain: npx hse-mcp credentials set",
           "isSecret": true,
           "format": "string"
         },

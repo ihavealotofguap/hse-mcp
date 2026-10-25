@@ -6,7 +6,7 @@ import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 
 // Как в tools-gating: ключ записей во временном каталоге, браузер не запускается.
-const dir = fs.mkdtempSync(path.join(os.tmpdir(), "hsemcp-annotations-"));
+const dir = fs.mkdtempSync(path.join(os.tmpdir(), "hse-mcp-annotations-"));
 process.env.HSE_WRITES_DIR = dir;
 process.env.HSE_ENABLE_WRITES = "";
 const realConsoleError = console.error;

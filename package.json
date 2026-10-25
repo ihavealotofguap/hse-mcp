@@ -1,8 +1,8 @@
 {
-  "name": "hsemcp",
+  "name": "hse-mcp",
   "version": "0.1.0",
   "description": "MCP server for HSE University (NIU VShE) student services: SmartLMS (edu.hse.ru) and the personal account (lk.hse.ru)",
-  "mcpName": "io.github.ihavealotofguap/hsemcp",
+  "mcpName": "io.github.ihavealotofguap/hse-mcp",
   "keywords": [
     "mcp",
     "mcp-server",
@@ -12,13 +12,13 @@
     "moodle",
     "claude"
   ],
-  "homepage": "https://github.com/ihavealotofguap/hsemcp#readme",
+  "homepage": "https://github.com/ihavealotofguap/hse-mcp#readme",
   "bugs": {
-    "url": "https://github.com/ihavealotofguap/hsemcp/issues"
+    "url": "https://github.com/ihavealotofguap/hse-mcp/issues"
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/ihavealotofguap/hsemcp.git"
+    "url": "git+https://github.com/ihavealotofguap/hse-mcp.git"
   },
   "type": "module",
   "license": "MIT",
@@ -27,7 +27,7 @@
   },
   "main": "dist/index.js",
   "bin": {
-    "hsemcp": "dist/index.js"
+    "hse-mcp": "dist/index.js"
   },
   "files": [
     "dist"

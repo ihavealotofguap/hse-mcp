@@ -11,7 +11,7 @@ export interface KeyStore {
   deletePassword(account: string): boolean;
 }
 
-export const KEYCHAIN_SERVICE = "hsemcp";
+export const KEYCHAIN_SERVICE = "hse-mcp";
 
 /** Одно предупреждение при чтении пароля из `.env`; значения в тексте нет. */
 export const DOTENV_PASSWORD_WARNING = "пароль взят из .env; безопаснее: npm run credentials:set";

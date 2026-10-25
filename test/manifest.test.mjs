@@ -48,7 +48,7 @@ test("сервер запускается из dist/index.js пакета, па�
   const { server } = manifest;
   assert.equal(server.type, "node");
   assert.equal(server.entry_point, "dist/index.js");
-  assert.equal(pkg.bin.hsemcp, server.entry_point);
+  assert.equal(pkg.bin["hse-mcp"], server.entry_point);
   assert.deepEqual(server.mcp_config.args, [`${ph("__dirname")}/dist/index.js`]);
   assert.equal(server.mcp_config.env.HSE_PASSWORD, ph("user_config.password"));
   assert.equal(server.mcp_config.env.HSE_EMAIL, ph("user_config.email"));

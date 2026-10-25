@@ -38,7 +38,7 @@ function fakeStore(initial = {}) {
 }
 
 function tmpDir() {
-  return fs.mkdtempSync(path.join(os.tmpdir(), "hsemcp-cred-"));
+  return fs.mkdtempSync(path.join(os.tmpdir(), "hse-mcp-cred-"));
 }
 
 // --- lookupPassword -----------------------------------------------------------------------------
@@ -199,7 +199,7 @@ test("loadKeyStore: модуль без Entry — null", async () => {
   assert.equal(await loadKeyStore(async () => ({}), "win32", {}), null);
 });
 
-test("loadKeyStore: оборачивает Entry со службой hsemcp и учётной записью", async () => {
+test("loadKeyStore: оборачивает Entry со службой hse-mcp и учётной записью", async () => {
   const calls = [];
   class FakeEntry {
     constructor(service, account, options) {
@@ -220,7 +220,7 @@ test("loadKeyStore: оборачивает Entry со службой hsemcp и �
   assert.equal(store.getPassword("other"), null);
   assert.equal(store.deletePassword(EMAIL), true);
   assert.equal(calls[0].service, KEYCHAIN_SERVICE);
-  assert.equal(calls[0].service, "hsemcp");
+  assert.equal(calls[0].service, "hse-mcp");
   assert.equal(calls[0].options, undefined);
 });
 

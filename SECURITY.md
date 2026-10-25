@@ -5,8 +5,8 @@
 Не публикуйте подробности в открытом issue. Используйте приватное сообщение об уязвимости на GitHub
 (вкладка Security репозитория, «Report a vulnerability»). Если оно недоступно, откройте issue без
 технических деталей и попросите связаться в приватном порядке. В сообщении не присылайте свои пароли,
-файлы каталога данных (`storage/` в клоне; у `.mcpb` и npx — `%LOCALAPPDATA%\hsemcp`,
-`~/Library/Application Support/hsemcp`) и содержимое `.env`.
+файлы каталога данных (`storage/` в клоне; у `.mcpb` и npx — `%LOCALAPPDATA%\hse-mcp`,
+`~/Library/Application Support/hse-mcp`) и содержимое `.env`.
 
 ## Что считается секретом
 
@@ -23,7 +23,7 @@
 ## Как проект хранит секреты
 
 1. Пароль берётся по порядку: переменная окружения процесса `HSE_PASSWORD`, системное хранилище
-   (Windows Credential Manager, macOS Keychain, Linux Secret Service; служба `hsemcp`, учётная запись —
+   (Windows Credential Manager, macOS Keychain, Linux Secret Service; служба `hse-mcp`, учётная запись —
    `HSE_EMAIL`), `.env` как запасной путь. Заводится командой `npm run credentials:set`.
    Системное хранилище можно отключить целиком: `HSE_DISABLE_KEYCHAIN=true` (CI, серверы без графической
    сессии, Linux без Secret Service).

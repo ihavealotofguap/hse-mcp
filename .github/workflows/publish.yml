@@ -58,7 +58,7 @@ jobs:
         env:
           VERSION: ${{ steps.version.outputs.version }}
         run: |
-          if ! npm view "hsemcp@$VERSION" version >/dev/null 2>&1; then
+          if ! npm view "hse-mcp@$VERSION" version >/dev/null 2>&1; then
             echo "$VERSION ещё нет в npm, публикую без бампа"
             echo "release=true" >> "$GITHUB_OUTPUT"
           elif git rev-parse -q --verify "refs/tags/v$VERSION" >/dev/null &&
@@ -121,8 +121,8 @@ jobs:
         env:
           VERSION: ${{ steps.plan.outputs.version || steps.version.outputs.version }}
         run: |
-          if npm view "hsemcp@$VERSION" version >/dev/null 2>&1; then
-            echo "hsemcp@$VERSION уже в npm, пропускаю"
+          if npm view "hse-mcp@$VERSION" version >/dev/null 2>&1; then
+            echo "hse-mcp@$VERSION уже в npm, пропускаю"
           else
             npm publish --provenance --access public
           fi
@@ -134,10 +134,10 @@ jobs:
           VERSION: ${{ steps.plan.outputs.version || steps.version.outputs.version }}
         run: |
           for i in $(seq 1 30); do
-            npm view "hsemcp@$VERSION" version --prefer-online >/dev/null 2>&1 && exit 0
+            npm view "hse-mcp@$VERSION" version --prefer-online >/dev/null 2>&1 && exit 0
             sleep 10
           done
-          echo "hsemcp@$VERSION не появился в npm за 5 минут" >&2
+          echo "hse-mcp@$VERSION не появился в npm за 5 минут" >&2
           exit 1
 
       # Реестр не принимает версию повторно, а ручной запуск доходит сюда и без нового релиза.
@@ -197,4 +197,4 @@ jobs:
           VERSION: ${{ steps.plan.outputs.version || steps.version.outputs.version }}
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
-        run: gh release upload "v$VERSION" "build/hsemcp-$VERSION.mcpb" --clobber
+        run: gh release upload "v$VERSION" "build/hse-mcp-$VERSION.mcpb" --clobber

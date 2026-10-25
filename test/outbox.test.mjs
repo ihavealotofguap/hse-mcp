@@ -17,7 +17,7 @@ const BIG = Buffer.alloc(2048, 7);
 
 /** Папка «исходящих» + соседняя внешняя папка; возвращает пути и уборку. */
 function setup() {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "hsemcp-outbox-"));
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "hse-mcp-outbox-"));
   const dir = path.join(root, "outbox");
   const outside = path.join(root, "outbox-evil");
   fs.mkdirSync(dir);
@@ -528,7 +528,7 @@ test("config.outboxDir: по умолчанию storage/outbox, HSE_OUTBOX_DIR �
     // хост .mcpb не подставил значение пустого поля
     process.env.HSE_OUTBOX_DIR = `$${"{"}user_config.outbox_dir}`;
     assert.equal(config.outboxDir, path.join(projectRoot, "storage", "outbox"));
-    const abs = path.join(os.tmpdir(), "hsemcp-outbox-abs");
+    const abs = path.join(os.tmpdir(), "hse-mcp-outbox-abs");
     process.env.HSE_OUTBOX_DIR = abs;
     assert.equal(config.outboxDir, abs);
     process.env.HSE_OUTBOX_DIR = "my-outbox";

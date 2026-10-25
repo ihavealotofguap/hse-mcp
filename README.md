@@ -1,4 +1,4 @@
-# hsemcp
+# hse-mcp
 
 Локальный MCP-сервер (stdio) для инфраструктуры НИУ ВШЭ: SmartLMS (edu.hse.ru) и Единый личный
 кабинет (lk.hse.ru). Расписание RUZ (`ruz.hse.ru`) вынесено в отдельный сервер
@@ -21,7 +21,7 @@
 
 ### Claude Desktop — без терминала
 
-1. Скачайте `hsemcp-<версия>.mcpb` из последнего [релиза](https://github.com/ihavealotofguap/hsemcp/releases/latest).
+1. Скачайте `hse-mcp-<версия>.mcpb` из последнего [релиза](https://github.com/ihavealotofguap/hse-mcp/releases/latest).
 2. Откройте файл двойным щелчком (или перетащите в окно Claude Desktop, или **Настройки → Расширения →
    Дополнительно → Установить расширение…**).
 3. Введите email и пароль ВШЭ и нажмите «Установить». Пароль Claude Desktop хранит в системной связке
@@ -32,13 +32,13 @@ Node.js ставить не нужно: он входит в Claude Desktop дл
 сам скачивает Chromium (около 100 МБ, один раз) — тогда первый запрос попросит повторить его через
 пару минут. Галочка «Разрешить отправку данных» включает тулы записи (см. «Тулы записи»); по
 умолчанию она выключена. Файлы для сдачи заданий кладутся в папку из настроек расширения (по умолчанию
-`Документы/hsemcp-outbox`, создаётся сама).
+`Документы/hse-mcp-outbox`, создаётся сама).
 
 ### Через npx (нужен Node.js 22+)
 
 ```bash
-npx -y hsemcp credentials set   # email и пароль ВШЭ → системное хранилище
-claude mcp add hsemcp -e HSE_EMAIL=login@edu.hse.ru -- npx -y hsemcp
+npx -y hse-mcp credentials set   # email и пароль ВШЭ → системное хранилище
+claude mcp add hse-mcp -e HSE_EMAIL=login@edu.hse.ru -- npx -y hse-mcp
 ```
 
 Для Claude Desktop, Cursor и других клиентов — в их конфигурацию MCP:
@@ -46,16 +46,16 @@ claude mcp add hsemcp -e HSE_EMAIL=login@edu.hse.ru -- npx -y hsemcp
 ```json
 {
   "mcpServers": {
-    "hsemcp": {
+    "hse-mcp": {
       "command": "npx",
-      "args": ["-y", "hsemcp"],
+      "args": ["-y", "hse-mcp"],
       "env": { "HSE_EMAIL": "login@edu.hse.ru" }
     }
   }
 }
 ```
 
-Пароль в этот файл не пишите: он хранится открытым текстом. `npx -y hsemcp install-browser` скачивает
+Пароль в этот файл не пишите: он хранится открытым текстом. `npx -y hse-mcp install-browser` скачивает
 Chromium заранее (иначе — как выше: Edge, Chrome или скачивание при первом запросе).
 
 ### Из исходников (для разработки)
@@ -68,7 +68,7 @@ npx playwright install chromium
 cp .env.example .env      # заполнить HSE_EMAIL
 npm run credentials:set   # пароль в системное хранилище (рекомендуется)
 npm run build
-claude mcp add hsemcp -- node <путь-к-проекту>/dist/index.js
+claude mcp add hse-mcp -- node <путь-к-проекту>/dist/index.js
 ```
 
 `HSE_PASSWORD` в `.env` необязателен: это запасной путь, если системное хранилище недоступно (см.
@@ -81,8 +81,8 @@ claude mcp add hsemcp -- node <путь-к-проекту>/dist/index.js
 каталоге данных:
 
 - в клоне репозитория (есть `.git`) или если `storage/` уже есть — `storage/` в корне проекта;
-- иначе (`.mcpb`, npx) — `%LOCALAPPDATA%\hsemcp` на Windows, `~/Library/Application Support/hsemcp` на
-  macOS, `~/.local/share/hsemcp` на Linux: папку установки хост может пересоздать при обновлении;
+- иначе (`.mcpb`, npx) — `%LOCALAPPDATA%\hse-mcp` на Windows, `~/Library/Application Support/hse-mcp` на
+  macOS, `~/.local/share/hse-mcp` на Linux: папку установки хост может пересоздать при обновлении;
 - `HSE_DATA_DIR` задаёт каталог явно (абсолютный путь или относительно корня проекта).
 
 Необязательные переменные (`.env` или окружение): `HSE_ENABLE_WRITES=true` включает тулы записи (по
@@ -97,21 +97,21 @@ claude mcp add hsemcp -- node <путь-к-проекту>/dist/index.js
 
 1. переменная окружения процесса `HSE_PASSWORD` (в том числе заданная клиентом MCP);
 2. системное хранилище: Windows Credential Manager, macOS Keychain, Linux Secret Service (служба
-   `hsemcp`, учётная запись — значение `HSE_EMAIL`), через необязательную зависимость `@napi-rs/keyring`;
+   `hse-mcp`, учётная запись — значение `HSE_EMAIL`), через необязательную зависимость `@napi-rs/keyring`;
 3. `HSE_PASSWORD` в `.env` — запасной путь.
 
 `HSE_EMAIL` не секрет и берётся из окружения или `.env`.
 
 Команды:
 
-- `npm run credentials:set` (или `npx hsemcp credentials set`) — спрашивает пароль без вывода на экран и
+- `npm run credentials:set` (или `npx hse-mcp credentials set`) — спрашивает пароль без вывода на экран и
   пишет в системное хранилище;
-- `npm run credentials:status` (`npx hsemcp credentials status`) — печатает только источник пароля
+- `npm run credentials:status` (`npx hse-mcp credentials status`) — печатает только источник пароля
   (`env`, `keychain`, `dotenv`, `none`), без значений и без email;
-- `npm run credentials:clear` (`npx hsemcp credentials clear`) — удаляет запись из хранилища.
+- `npm run credentials:clear` (`npx hse-mcp credentials clear`) — удаляет запись из хранилища.
 
 В пакете `.mcpb` пароль приходит из настроек расширения через окружение (`HSE_PASSWORD`), системное
-хранилище hsemcp там не используется.
+хранилище hse-mcp там не используется.
 
 Если пароль взят из `.env`, сервер один раз пишет в stderr предупреждение (без значения); на Linux и macOS
 он же предупреждает, если права `.env` допускают чтение группой или другими (исправление: `chmod 600 .env`).
@@ -314,7 +314,7 @@ icacls .env /inheritance:r /grant:r "$($env:USERNAME):(F)"
 - `npm run build` собирает проект в `dist/`, `npm run dev` — в режиме watch.
 - `npm run lint` проверяет код линтером и форматтером [Biome](https://biomejs.dev), `npm run format`
   исправляет то, что можно исправить автоматически.
-- `npm run pack:mcpb` собирает пакет Claude Desktop в `build/hsemcp-<версия>.mcpb` (CI делает то же и
+- `npm run pack:mcpb` собирает пакет Claude Desktop в `build/hse-mcp-<версия>.mcpb` (CI делает то же и
   прикрепляет пакет к релизу).
 - `npm test` собирает проект и запускает тесты `node:test` (`test/*.test.mjs`): сеть, браузер и учётные
   данные им не нужны. Среди них архитектурный тест: импорты должны соблюдать слои.

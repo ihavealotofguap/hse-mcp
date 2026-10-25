@@ -24,11 +24,17 @@ export function resolveDataDir(args: {
   if (args.exists(path.join(args.root, ".git")) || args.exists(local)) return local;
   switch (args.platform) {
     case "win32":
-      return path.join(args.env.LOCALAPPDATA || path.join(args.home, "AppData", "Local"), "hsemcp");
+      return path.join(
+        args.env.LOCALAPPDATA || path.join(args.home, "AppData", "Local"),
+        "hse-mcp"
+      );
     case "darwin":
-      return path.join(args.home, "Library", "Application Support", "hsemcp");
+      return path.join(args.home, "Library", "Application Support", "hse-mcp");
     default:
-      return path.join(args.env.XDG_DATA_HOME || path.join(args.home, ".local", "share"), "hsemcp");
+      return path.join(
+        args.env.XDG_DATA_HOME || path.join(args.home, ".local", "share"),
+        "hse-mcp"
+      );
   }
 }
 

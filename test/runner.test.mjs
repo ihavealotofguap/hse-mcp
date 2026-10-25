@@ -6,7 +6,7 @@ import path from "node:path";
 import { test } from "node:test";
 
 // Ключ и журнал — во временном каталоге; задаётся до импорта модулей.
-const dir = fs.mkdtempSync(path.join(os.tmpdir(), "hsemcp-runner-"));
+const dir = fs.mkdtempSync(path.join(os.tmpdir(), "hse-mcp-runner-"));
 process.env.HSE_WRITES_DIR = dir;
 
 const { defineWrite, classifyError, testSeams } = await import(
@@ -786,7 +786,7 @@ test("r. commitDeadlineMs шва ограничен конечным полож�
 /** Временный каталог записей: HSE_WRITES_DIR читается при каждом вызове, поэтому подмена локальна для теста. */
 async function withWritesDir(fn) {
   const saved = process.env.HSE_WRITES_DIR;
-  const d = fs.mkdtempSync(path.join(os.tmpdir(), "hsemcp-runner-m-"));
+  const d = fs.mkdtempSync(path.join(os.tmpdir(), "hse-mcp-runner-m-"));
   process.env.HSE_WRITES_DIR = d;
   try {
     return await fn(d);
