@@ -1,4 +1,4 @@
-// Сборка пакета Claude Desktop: build/hsemcp-<версия>.mcpb. Перед запуском — npm run build.
+// Сборка пакета Claude Desktop: build/hse-mcp-<версия>.mcpb. Перед запуском — npm run build.
 // В пакет идут manifest.json, dist/ и production-зависимости без необязательных: пароль приходит из
 // настроек расширения, системное хранилище (@napi-rs/keyring, платформенный бинарник) там не нужно.
 import { execFileSync } from "node:child_process";
@@ -40,7 +40,7 @@ for (const forbidden of [".env", "storage", path.join("node_modules", "@napi-rs"
   }
 }
 
-const out = path.join(root, "build", `hsemcp-${version}.mcpb`);
+const out = path.join(root, "build", `hse-mcp-${version}.mcpb`);
 fs.rmSync(out, { force: true });
 // CLI mcpb — из devDependencies (версия закреплена в package-lock.json), не из сети.
 const mcpbCli = path.join(root, "node_modules", "@anthropic-ai", "mcpb", "dist", "cli", "cli.js");

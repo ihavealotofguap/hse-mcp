@@ -1,7 +1,7 @@
 {
   "$schema": "https://raw.githubusercontent.com/modelcontextprotocol/mcpb/main/schemas/mcpb-manifest-v0.3.schema.json",
   "manifest_version": "0.3",
-  "name": "hsemcp",
+  "name": "hse-mcp",
   "display_name": "ВШЭ: SmartLMS и ЕЛК",
   "version": "0.1.0",
   "description": "Курсы, задания, оценки и почта SmartLMS (edu.hse.ru), расписание, заявки и данные ЕЛК (lk.hse.ru) — через единый вход ВШЭ.",
@@ -12,10 +12,10 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/ihavealotofguap/hsemcp"
+    "url": "https://github.com/ihavealotofguap/hse-mcp"
   },
-  "homepage": "https://github.com/ihavealotofguap/hsemcp#readme",
-  "support": "https://github.com/ihavealotofguap/hsemcp/issues",
+  "homepage": "https://github.com/ihavealotofguap/hse-mcp#readme",
+  "support": "https://github.com/ihavealotofguap/hse-mcp/issues",
   "license": "MIT",
   "keywords": ["hse", "вшэ", "smartlms", "moodle", "лк"],
   "server": {
@@ -57,7 +57,7 @@
       "type": "directory",
       "title": "Папка для сдачи заданий",
       "description": "Только из этой папки берутся файлы для сдачи заданий. Создаётся сама.",
-      "default": "${DOCUMENTS}/hsemcp-outbox"
+      "default": "${DOCUMENTS}/hse-mcp-outbox"
     }
   },
   "tools_generated": true,
