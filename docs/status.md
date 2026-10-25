@@ -15,12 +15,17 @@
 | Запись в SmartLMS | `lms_submit_assignment`, `lms_delete_submission` | `services/lms/submissions.ts` | `submissions-pure` | да, один аккаунт, один семестр |
 | Заказ справки в ЕЛК | `elk_order_certificate` | `services/elk/certificate.ts` | `certificate-pure` | один заказ; тул всегда отвечает `unknown`, исход проверяется вручную |
 | Архитектура | — | — | `architecture`: импорты соблюдают слои | — |
+| Оформление тулов | все | `src/mcp-utils.ts`, `*/tools.ts` | `tools-annotations`: аннотации у каждого тула, `runTool`, `outputSchema` на типичных ответах, `tools/list` через stdio | — |
 
 Тулы записи появляются только при `HSE_ENABLE_WRITES=true`: без него у сервера 21 тул, с ним 24.
+У каждого тула есть аннотации: чтение — `readOnlyHint: true`, запись — `destructiveHint: true`;
+`hse_changes_reset` — `destructiveHint: true` (стирает локальную базу), `hse_clear_cache` — не
+`readOnly`, но `idempotent`.
 
 ## Пробелы
 
 - Нет тестов чистой логики сводок и изменений: `services/changes/diff.ts`, `normalize.ts`,
   `extractors.ts`, `services/digest/parse.ts`.
 - Нет тестов разбора страниц LMS и ЕЛК на сохранённых HTML-образцах.
-- Аннотации `readOnlyHint` есть только у тулов записи; `outputSchema` нет ни у одного тула.
+- `outputSchema` есть только у основных тулов (`elk_get_schedule`, `my_today`, `my_week`,
+  `my_deadlines`, `lms_list_assignments`, `lms_list_courses`); у остальных ответ описан только текстом.
