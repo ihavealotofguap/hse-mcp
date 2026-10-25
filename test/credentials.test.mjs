@@ -521,7 +521,9 @@ test("restrictDir: на Windows новые файлы наследуют еди�
   const file = path.join(dir, "new");
   fs.writeFileSync(file, "x");
   const acl = execFileSync("icacls", [file], { encoding: "latin1" });
-  const dirAcl = execFileSync("icacls", [parent, dir], { encoding: "latin1" });
+  const dirAcl = [parent, dir]
+    .map((d) => execFileSync("icacls", [d], { encoding: "latin1" }))
+    .join("");
   assert.equal(
     (acl.match(/:\(/g) ?? []).length,
     1,
