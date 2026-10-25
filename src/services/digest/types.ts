@@ -2,17 +2,21 @@ import type { SourceStatus } from "../../run-source.js";
 
 export type { SourceStatus };
 
+/** Типы элементов сводки (перечень нужен и схеме ответа тулов). */
+export const ITEM_KINDS = [
+  "lesson",
+  "exam",
+  "assignment",
+  "lms_activity",
+  "elk_window",
+  "elk_task",
+  "elk_claim",
+  "lms_message",
+  "notification",
+] as const;
+
 /** Тип элемента сводки. */
-export type ItemKind =
-  | "lesson"
-  | "exam"
-  | "assignment"
-  | "lms_activity"
-  | "elk_window"
-  | "elk_task"
-  | "elk_claim"
-  | "lms_message"
-  | "notification";
+export type ItemKind = (typeof ITEM_KINDS)[number];
 
 export interface DigestItem {
   kind: ItemKind;

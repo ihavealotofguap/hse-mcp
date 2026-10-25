@@ -2,6 +2,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { READ_ANNOTATIONS, runTool } from "../../mcp-utils.js";
 import * as digest from "./client.js";
+import { ITEM_KINDS } from "./types.js";
 
 const RESULT_NOTE =
   "Возвращает JSON: items — единый список элементов (kind, when, title, course, place, " +
@@ -9,6 +10,39 @@ const RESULT_NOTE =
   "времени, затем без даты; sources — статус каждого источника (ok/error/skipped, текст " +
   "ошибки, warnings). Если источник недоступен (например, ЕЛК не ответил), сводка всё " +
   "равно возвращается — смотрите sources.";
+
+// Схема ответа по DigestResult (types.ts). SDK превращает весь ответ в ошибку при любом несовпадении
+// со схемой, поэтому поля, которые приходят из ЕЛК и LMS без проверки (title, important), допускают
+// null, а всё, чего у элемента может не быть, необязательно.
+const DIGEST_ITEM = z.object({
+  kind: z.enum(ITEM_KINDS),
+  when: z.string().nullable().describe("Срок или начало, ISO 8601; null — не распознан"),
+  until: z.string().optional(),
+  received: z.string().optional(),
+  title: z.string().nullish(),
+  course: z.string().optional(),
+  place: z.string().optional(),
+  source: z.string().describe("Коллектор: elk_schedule, lms_deadlines, ..."),
+  overdue: z.boolean().optional(),
+  unread: z.boolean().optional(),
+  important: z.boolean().nullish(),
+  url: z.string().optional(),
+  raw: z.record(z.unknown()).optional(),
+});
+
+const SOURCE_STATUS = z.object({
+  status: z.enum(["ok", "error", "skipped"]),
+  error: z.string().optional(),
+  warnings: z.array(z.string()).optional(),
+  ms: z.number().optional(),
+});
+
+const DIGEST_OUTPUT = {
+  generatedAt: z.string(),
+  window: z.object({ from: z.string(), to: z.string() }),
+  items: z.array(DIGEST_ITEM),
+  sources: z.record(SOURCE_STATUS),
+};
 
 export function registerDigestTools(server: McpServer): void {
   server.registerTool(
@@ -22,6 +56,7 @@ export function registerDigestTools(server: McpServer): void {
         "ЕЛК. " +
         RESULT_NOTE,
       inputSchema: {},
+      outputSchema: DIGEST_OUTPUT,
       annotations: READ_ANNOTATIONS,
     },
     async () => runTool(() => digest.getToday())
@@ -37,6 +72,7 @@ export function registerDigestTools(server: McpServer): void {
         "my_today. " +
         RESULT_NOTE,
       inputSchema: {},
+      outputSchema: DIGEST_OUTPUT,
       annotations: READ_ANNOTATIONS,
     },
     async () => runTool(() => digest.getWeek())
@@ -64,6 +100,7 @@ export function registerDigestTools(server: McpServer): void {
               "источники фильтром не ограничиваются."
           ),
       },
+      outputSchema: DIGEST_OUTPUT,
       annotations: READ_ANNOTATIONS,
     },
     async ({ days, courses }) => runTool(() => digest.getDeadlines({ days, courses }))

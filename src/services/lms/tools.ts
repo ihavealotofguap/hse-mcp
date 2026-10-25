@@ -10,6 +10,22 @@ import { deleteAdapter, submitAdapter } from "./submissions.js";
 const submitAssignment = defineWrite(submitAdapter);
 const deleteSubmission = defineWrite(deleteAdapter);
 
+// Поля курса по CourseOverview (client.ts); всё, кроме id и названия, необязательно: несовпадение
+// со схемой SDK превращает весь ответ в ошибку.
+const COURSE = z.object({
+  id: z.number(),
+  fullname: z.string(),
+  shortname: z.string().nullish(),
+  category: z.string().nullish(),
+  startdate: z.string().nullish(),
+  enddate: z.string().nullish(),
+  progress: z.number().nullish(),
+  isFavourite: z.boolean().nullish(),
+  hidden: z.boolean().nullish(),
+  visible: z.boolean().nullish(),
+  viewUrl: z.string().nullish(),
+});
+
 export function registerLmsTools(server: McpServer): void {
   server.registerTool(
     "lms_list_courses",
@@ -20,9 +36,10 @@ export function registerLmsTools(server: McpServer): void {
         "категория, даты начала/окончания, процент прохождения, избранное/скрытое. Требует " +
         "входа через единый SSO ВШЭ (выполняется автоматически, credentials из .env).",
       inputSchema: {},
+      outputSchema: { courses: z.array(COURSE) },
       annotations: READ_ANNOTATIONS,
     },
-    async () => runTool(() => lms.listCourses())
+    async () => runTool(async () => ({ courses: await lms.listCourses() }))
   );
 
   server.registerTool(
@@ -84,9 +101,15 @@ export function registerLmsTools(server: McpServer): void {
       inputSchema: {
         courseId: z.number().int().positive().describe("id курса на edu.hse.ru"),
       },
+      outputSchema: {
+        assignments: z
+          .array(z.record(z.string()))
+          .describe("Строки таблицы заданий курса: заголовок колонки → текст ячейки"),
+      },
       annotations: READ_ANNOTATIONS,
     },
-    async ({ courseId }) => runTool(() => lms.listAssignments(courseId))
+    async ({ courseId }) =>
+      runTool(async () => ({ assignments: await lms.listAssignments(courseId) }))
   );
 
   server.registerTool(
