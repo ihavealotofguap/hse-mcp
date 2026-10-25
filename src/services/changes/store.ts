@@ -1,14 +1,14 @@
 import fs from "node:fs";
 import path from "node:path";
+import { dataDir } from "../../data-dir.js";
 import { errCode, retryIo, withFileLock } from "../../fs-lock.js";
-import { projectRoot } from "../../project-root.js";
 import { type Scope, STATE_VERSION, type State } from "./types.js";
 
 export const JOURNAL_MAX_EVENTS = 500;
 export const JOURNAL_MAX_AGE_MS = 30 * 86_400_000;
 export const GRADES_BASELINE_MAX_AGE_MS = 90 * 86_400_000;
 
-export const defaultStateDir = (): string => path.join(projectRoot, "storage", "changes");
+export const defaultStateDir = (): string => path.join(dataDir(), "changes");
 const stateFile = (dir: string): string => path.join(dir, "state.json");
 const lockFile = (dir: string): string => path.join(dir, "state.json.lock");
 

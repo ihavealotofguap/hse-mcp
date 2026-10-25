@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { promisify } from "node:util";
 import { config } from "../../config.js";
+import { dataDir } from "../../data-dir.js";
 import { errCode } from "../../fs-lock.js";
 import { projectRoot as realProjectRoot } from "../../project-root.js";
 
@@ -49,11 +50,11 @@ export function isInsideDir(dir: string, file: string): boolean {
 }
 
 /**
- * Папка «исходящих» не должна быть корнем проекта или его `storage`, содержать их или быть корнем
- * диска: иначе `.env` и `storage/hse-session.json` адресовались бы обычным именем файла. Внутри
- * `storage` допустима только `storage/outbox` (по умолчанию) и её подпапки: ключ HMAC и журнал лежат в
- * `storage/writes`, сессия и снимки — в других папках `storage`, и становиться «исходящими» им нельзя.
- * Все пути должны быть канонизированы `realpath` (в том числе `storage`: junction не должен обходить сравнение).
+ * Папка «исходящих» не должна быть корнем проекта или каталогом данных (`storage`), содержать их или
+ * быть корнем диска: иначе `.env` и `hse-session.json` адресовались бы обычным именем файла. Внутри
+ * каталога данных допустима только его `outbox` (по умолчанию) и её подпапки: ключ HMAC и журнал лежат в
+ * `writes`, сессия и снимки — рядом, и становиться «исходящими» им нельзя. Все пути должны быть
+ * канонизированы `realpath` (в том числе каталог данных: junction не должен обходить сравнение).
  */
 function misplacedOutbox(dirReal: string, root: string, storage: string): boolean {
   const dir = comparable(dirReal);
@@ -103,15 +104,25 @@ async function hashFile(
  */
 export async function resolveOutboxFiles(
   names: string[],
-  opts: { dir?: string; maxFiles?: number; maxBytes?: number; projectRoot?: string } = {}
+  opts: {
+    dir?: string;
+    maxFiles?: number;
+    maxBytes?: number;
+    projectRoot?: string;
+    dataDir?: string;
+  } = {}
 ): Promise<OutboxFile[]> {
   const maxFiles = opts.maxFiles ?? DEFAULT_MAX_FILES;
   if (!Array.isArray(names) || names.length === 0) throw new Error("Не указано ни одного файла");
   if (names.length > maxFiles) throw new Error(`Слишком много файлов: не более ${maxFiles}`);
 
+  const dirRaw = opts.dir ?? config.outboxDir;
+  // Папку создаём сами (без родителей): в пакете `.mcpb` она по умолчанию в «Документах», и
+  // пользователь без терминала не должен готовить её заранее. Проверки ниже идут уже по созданной.
+  await fs.promises.mkdir(dirRaw).catch(() => {});
   let dirReal: string;
   try {
-    dirReal = await realpath(opts.dir ?? config.outboxDir);
+    dirReal = await realpath(dirRaw);
     if (!(await fs.promises.stat(dirReal)).isDirectory()) throw new Error("не папка");
   } catch {
     throw new Error(
@@ -122,13 +133,14 @@ export async function resolveOutboxFiles(
   const root = await realpath(opts.projectRoot ?? realProjectRoot).catch(() =>
     path.resolve(opts.projectRoot ?? realProjectRoot)
   );
-  // `storage` канонизируем так же (если его нет — берём путь как есть): иначе junction на storage обходит сравнение.
-  const storageRaw = path.join(root, "storage");
+  // Каталог данных канонизируем так же (если его нет — берём путь как есть): иначе junction обходит
+  // сравнение. С `projectRoot` в opts (проверки) это его `storage`, как у клона репозитория.
+  const storageRaw = opts.dataDir ?? (opts.projectRoot ? path.join(root, "storage") : dataDir());
   const storage = await realpath(storageRaw).catch(() => storageRaw);
   if (misplacedOutbox(dirReal, root, storage)) {
     throw new Error(
-      "Папка «исходящих» настроена неверно: она не должна совпадать с каталогом проекта или его storage, " +
-        "содержать их, быть корнем диска или лежать в storage кроме storage/outbox (проверьте HSE_OUTBOX_DIR)"
+      "Папка «исходящих» настроена неверно: она не должна совпадать с каталогом проекта или каталогом данных, " +
+        "содержать их, быть корнем диска или лежать в каталоге данных кроме его outbox (проверьте HSE_OUTBOX_DIR)"
     );
   }
 

@@ -33,13 +33,18 @@ hsemcp — локальный MCP-сервер (stdio) для инфрастру
 - `npm run build` — TypeScript в `dist/`; `npm run dev` — то же в режиме watch; `npm start` — запуск.
 - `npm test` — сборка и тесты `node:test` (`test/*.test.mjs`, без сети, браузера и учётных данных).
 - `npm run lint` — Biome (линтер и формат); `npm run format` — автоисправление.
-- `npx playwright install chromium` — один раз для живой работы LMS/ЕЛК.
+- `npx playwright install chromium` — один раз для живой работы LMS/ЕЛК (без него сервер берёт
+  системный Edge или Chrome, иначе скачивает Chromium сам).
+- `npm run pack:mcpb` — пакет Claude Desktop в `build/hsemcp-<версия>.mcpb` (`manifest.json`).
 - Подключение: `claude mcp add hsemcp -- node <путь-к-проекту>/dist/index.js`; перед первым запуском
   `cp .env.example .env`, заполнить `HSE_EMAIL`, пароль — `npm run credentials:set`.
 - `HSE_ENABLE_WRITES=true` в `.env` включает `lms_submit_assignment`, `lms_delete_submission`,
   `elk_order_certificate` (читается при старте; без него их нет в `tools/list`).
 
-CI (`.github/workflows/ci.yml`) гоняет lint и тесты на Ubuntu и Windows, Node 22 и 24.
+CI (`.github/workflows/ci.yml`) гоняет lint и тесты на Ubuntu и Windows, Node 22 и 24, и собирает
+`.mcpb`. Релиз (`publish.yml`, как в hse-ruz-mcp): push в master с изменениями `src/` или
+`manifest.json` → patch-бамп, npm, реестр MCP, GitHub Release с `.mcpb`. Версия — одна в
+`package.json`, `server.json` и `manifest.json`.
 
 ## Слои
 
@@ -48,7 +53,8 @@ src/index.ts → */tools.ts → digest, changes → адаптеры запис�
 ```
 
 - core — `src/*.ts`, `src/auth`, `src/cli`: SSO и браузер (`withPage` — единственный способ открыть
-  страницу), лимитер, `defineResource` и кэш, выключатель, блокировки файлов, учётные данные, `runTool`.
+  страницу), лимитер, `defineResource` и кэш, выключатель, блокировки файлов, учётные данные, `runTool`,
+  каталог данных (`data-dir.ts`: файлы состояния — только через него, не от корня проекта).
 - Сервис — `src/services/<name>/`: `client.ts` (логика, без MCP SDK) и `tools.ts`
   (`registerXTools(server)`: zod-схема и вызов клиента через `runTool()`, без логики).
 - Адаптеры записи — папки `services/lms/submissions/`, `services/elk/certificate/` (модули по этапам:

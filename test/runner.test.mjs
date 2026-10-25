@@ -838,7 +838,7 @@ test("M1b. повреждённый журнал: запись отказыва�
     const observeBefore = fake.calls.observe;
     await assert.rejects(
       fake.write({ ...args, confirm: true, previewToken: dry.previewToken }),
-      /^Error: журнал записей повреждён; запись не выполнена — восстановите или удалите storage\/writes\/journal\.json вручную после проверки сайта$/
+      /^Error: журнал записей повреждён; запись не выполнена — восстановите или удалите writes\/journal\.json в каталоге данных вручную после проверки сайта$/
     );
     assert.equal(fake.calls.execute, 0);
     assert.equal(fake.calls.observe, observeBefore, "до наблюдения страницы дело не дошло");
