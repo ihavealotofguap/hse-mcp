@@ -27,7 +27,7 @@ const DIGEST_ITEM = z.object({
   unread: z.boolean().optional(),
   important: z.boolean().nullish(),
   url: z.string().optional(),
-  raw: z.record(z.unknown()).optional(),
+  raw: z.record(z.string(), z.unknown()).optional(),
 });
 
 const SOURCE_STATUS = z.object({
@@ -41,7 +41,7 @@ const DIGEST_OUTPUT = {
   generatedAt: z.string(),
   window: z.object({ from: z.string(), to: z.string() }),
   items: z.array(DIGEST_ITEM),
-  sources: z.record(SOURCE_STATUS),
+  sources: z.record(z.string(), SOURCE_STATUS),
 };
 
 export function registerDigestTools(server: McpServer): void {

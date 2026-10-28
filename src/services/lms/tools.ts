@@ -103,7 +103,7 @@ export function registerLmsTools(server: McpServer): void {
       },
       outputSchema: {
         assignments: z
-          .array(z.record(z.string()))
+          .array(z.record(z.string(), z.string()))
           .describe("Строки таблицы заданий курса: заголовок колонки → текст ячейки"),
       },
       annotations: READ_ANNOTATIONS,

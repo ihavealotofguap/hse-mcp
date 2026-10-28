@@ -132,6 +132,6 @@ export function captureCredentialInputs(
   } catch {
     /* .env нет или он нечитаем — остаётся окружение и хранилище */
   }
-  loadDotenv({ path: dotenvFile, processEnv: env as Record<string, string> });
+  loadDotenv({ path: dotenvFile, processEnv: env as Record<string, string>, quiet: true });
   return { envAtStart, dotenv };
 }
