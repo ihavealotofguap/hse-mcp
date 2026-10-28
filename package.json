@@ -1,6 +1,6 @@
 {
   "name": "hse-mcp",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "MCP server for HSE University (NIU VShE) student services: SmartLMS (edu.hse.ru) and the personal account (lk.hse.ru)",
   "mcpName": "io.github.ihavealotofguap/hse-mcp",
   "keywords": [
