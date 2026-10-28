@@ -174,9 +174,11 @@ jobs:
 
       # Релиз на GitHub для каждого тега, у которого его ещё нет: заодно дотягивает старые теги.
       # Список изменений GitHub собирает сам из PR с прошлого тега; Latest — только у старшей версии.
+      # Релизы неизменяемые: пакет текущей версии прикрепляется при создании, позже его не добавить.
       - name: Create GitHub releases
         if: steps.plan.outputs.release != 'false' || github.event_name == 'workflow_dispatch'
         env:
+          VERSION: ${{ steps.plan.outputs.version || steps.version.outputs.version }}
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
         run: |
@@ -187,14 +189,7 @@ jobs:
             if echo "$HAVE" | grep -qxF "$TAG"; then continue; fi
             LATEST=false
             if [ "$TAG" = "$NEWEST" ]; then LATEST=true; fi
-            gh release create "$TAG" --verify-tag --generate-notes --title "$TAG" --latest="$LATEST"
+            ASSETS=()
+            if [ "$TAG" = "v$VERSION" ]; then ASSETS=("build/hse-mcp-$VERSION.mcpb"); fi
+            gh release create "$TAG" "${ASSETS[@]}" --verify-tag --generate-notes --title "$TAG" --latest="$LATEST"
           done
-
-      # Пакет текущей версии — к её релизу; повторный запуск заменяет файл тем же содержимым.
-      - name: Attach mcpb to the release
-        if: steps.plan.outputs.release != 'false' || github.event_name == 'workflow_dispatch'
-        env:
-          VERSION: ${{ steps.plan.outputs.version || steps.version.outputs.version }}
-          GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
-        run: gh release upload "v$VERSION" "build/hse-mcp-$VERSION.mcpb" --clobber
