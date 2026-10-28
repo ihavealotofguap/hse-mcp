@@ -13,22 +13,20 @@ const orderCertificate = defineWrite(certificateAdapter);
 // Поля занятия приходят из API ЕЛК как есть (ElkLesson в client.ts): любое может отсутствовать или
 // быть null, а лишние поля сохраняются — несовпадение со схемой SDK превращает весь ответ в ошибку.
 const ELK_LESSON_FIELD = z.string().nullish();
-const ELK_LESSON = z
-  .object({
-    name: ELK_LESSON_FIELD,
-    lesson_type: ELK_LESSON_FIELD,
-    begin_time: ELK_LESSON_FIELD,
-    end_time: ELK_LESSON_FIELD,
-    auditorium: ELK_LESSON_FIELD,
-    building: ELK_LESSON_FIELD,
-    lecturer: ELK_LESSON_FIELD,
-    parent_schedule: ELK_LESSON_FIELD,
-    url1: ELK_LESSON_FIELD,
-    url1_description: ELK_LESSON_FIELD,
-    url2: ELK_LESSON_FIELD,
-    url2_description: ELK_LESSON_FIELD,
-  })
-  .passthrough();
+const ELK_LESSON = z.looseObject({
+  name: ELK_LESSON_FIELD,
+  lesson_type: ELK_LESSON_FIELD,
+  begin_time: ELK_LESSON_FIELD,
+  end_time: ELK_LESSON_FIELD,
+  auditorium: ELK_LESSON_FIELD,
+  building: ELK_LESSON_FIELD,
+  lecturer: ELK_LESSON_FIELD,
+  parent_schedule: ELK_LESSON_FIELD,
+  url1: ELK_LESSON_FIELD,
+  url1_description: ELK_LESSON_FIELD,
+  url2: ELK_LESSON_FIELD,
+  url2_description: ELK_LESSON_FIELD,
+});
 
 export function registerElkTools(server: McpServer): void {
   server.registerTool(
